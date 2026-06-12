@@ -25,9 +25,11 @@ The short version:
 - **Behavior is data**: agents, pipelines, tool grants, covenant, and intent
   are rows and YAML. Extending the substrate means an overlay directory of
   migrations and your own MCP servers — not a fork.
-- First doc to land: **"Anatomy of a Turn"** — exactly what happens between
-  a message arriving and a model answering (system-prompt composition,
-  context engine, tool routing, auto-fire verification).
+- First doc, landed: [**"Anatomy of a Turn"**](docs/anatomy-of-a-turn.md) —
+  exactly what happens between a message arriving and a model answering
+  (system-prompt composition, context engine, tool routing, auto-fire
+  verification). Start there; everything else in the substrate is built
+  out of turns.
 
 ## License
 
