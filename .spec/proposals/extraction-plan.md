@@ -141,6 +141,52 @@ holding the copyright — outside contributions need a **CLA**. Interim state:
 the repo carries no LICENSE (all rights reserved by default) until the pick
 is final; nothing is lost by deciding within the week.
 
+## Overlay design: the downstream is its own repo (ratified 2026-06-12)
+
+The workspace's private material gets a **dedicated private repo** —
+`github.com/cpuchip/pg-ai-stewards-workspace` at
+`projects/pg-ai-stewards-workspace/` — rather than living loose inside the
+monorepo. Reasons, in order of force:
+
+1. **The playground machine (P4) and any deploy target clone OSS + overlay
+   and nothing else.** The scripture-study monorepo is private, enormous,
+   and full of unrelated personal material; a machine that runs the
+   substrate should not need it.
+2. **Version pinning.** The overlay repo declares which OSS release it
+   overlays (an `OSS_VERSION` pin / image tag). Upgrades become explicit
+   and testable instead of ambient.
+3. **The parity gate becomes CI-able.** Gate §5 (overlay replay proof) is
+   literally "scratch container + OSS + this repo" — a one-command check
+   the overlay repo can run on every change.
+4. It matches the workspace's established pattern: every real project
+   under `projects/` carries its own repo.
+
+Shape (first cut — refine when P1 creates it):
+
+```
+pg-ai-stewards-workspace/        (PRIVATE)
+  OSS_VERSION                    # the release this overlay targets
+  overlays/                      # SQL migrations applied AFTER core,
+                                 #   own manifest + ledger namespace
+  covenant.yaml / intent.yaml    # the personalized texts (seeded in)
+  compose.override.yml           # private MCP servers (gospel-engine,
+                                 #   strongs, webster, …), env wiring
+  mcp-servers/                   # server configs; $env: placeholders only
+  .env.example                   # names of required secrets, never values
+```
+
+Mechanism on the OSS side (P1 work): the compose mounts an overlay
+directory; the migration runner applies `overlays/*` after core in
+manifest order; the ledger records core and overlay in **two tiers** —
+which folds into the existing migrate-manifest design call (now doubly
+motivated; the suffix-naming wart gets fixed in the same pass). Secrets
+keep the established rule: `$env:NAME` placeholders in data, values only
+in the runtime environment.
+
+**Timing:** create the repo at P1 kickoff, not before — P1's first task
+(classifying the ~239 live migrations into core vs overlay) is what fills
+it, and an empty shell created early just drifts.
+
 ## Cutover parity gate (ratified 2026-06-12)
 
 Parity is measured at the **recomposed stack**, not the OSS repo: the gate
