@@ -77,7 +77,14 @@ storyboard for the docs site, and the steward's recovered mental model.
 2. **Covenant and intent stay first-class.** They are the substrate's
    identity, not workspace quirks. OSS ships *generic templates* (a covenant
    of mutual commitments, an intent document) that installers personalize —
-   the same way the workspace did.
+   the same way the workspace did. **Extraction snapshot note (2026-06-12):**
+   take the POST-PR.1 covenant machinery — `covenants.extensions` jsonb
+   catch-all + the pass-through parser + the presiding render and Watch echo
+   in `compose_system_prompt`. The pre-PR.1 shape silently dropped unknown
+   covenant sections (the ratified `presiding:` extension never reached
+   dispatches); a covenant store that can't grow sections without a schema
+   change is a form-without-power bug, and the OSS template covenant should
+   ship with the presiding extension included.
 3. **The human is the Hinge.** No GOD agent. Merge/deploy/spend authority
    stays human; the substrate proposes, verifies, and accounts.
 4. **Boots on a virgin machine or it isn't done.** `git clone && docker
