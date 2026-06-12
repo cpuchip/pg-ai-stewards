@@ -1,10 +1,12 @@
 # pg-ai-stewards — OSS extraction plan
 
-**Status:** RATIFIED 2026-06-11 (license model pending final pick — see §Licensing)
+**Status:** RATIFIED 2026-06-11
 **Decisions:** v0.1 = core + persona-host · clean-room re-assembly (fresh
 history; the private workspace keeps the lived history) · cutover after v0.1
-boots virgin · license = source-available, individuals free / companies pay
-(mechanism below).
+boots virgin · **license = Apache-2.0** ("someone will live better for it" —
+the source-available analysis below is kept for the record of the road not
+taken) · dev deployment = side-by-side on the SAME machine as the private
+substrate until feature-complete (see §Side-by-side).
 **Binding question:** How do we take the substrate that grew inside a private
 workspace and make it a public project a stranger can `docker compose up`,
 understand from its docs, and extend without forking — while the original
@@ -127,6 +129,27 @@ source" (marketing must say so), and selling commercial licenses requires
 holding the copyright — outside contributions need a **CLA**. Interim state:
 the repo carries no LICENSE (all rights reserved by default) until the pick
 is final; nothing is lost by deciding within the week.
+
+## Side-by-side: OSS dev on the same machine as the private substrate
+
+Until the playground machine exists, the OSS stack runs in Docker NEXT TO
+the live private substrate. The Postgres **extension name does not change**
+(`pg_ai_stewards`) — each stack has its own Postgres container, so the
+twins never meet. Only host-level names can collide; the OSS compose
+namespaces everything:
+
+| Surface | Private (live) | OSS dev |
+|---|---|---|
+| compose project / container prefix | `pg-ai-stewards-*` | `stewards-oss-*` |
+| Postgres host port | 55433 | **55434** |
+| UI host port | 8080 | **8081** |
+| persona-host HTTP | 8090 (container) | **8091** |
+| volumes | `pgdata`, `coder-worktrees` (fixed name!) | compose-prefixed; no fixed `name:` keys |
+| chat personas | the real keys → chat.ibeco.me | **own keys + own test rooms** (or a local chattermax) — never the live personas, or every turn double-fires |
+
+The last row is the landmine (learned live, 2026-06-11: two hosts on one
+persona key = every turn fires twice). OSS dev personas get their own
+identities from day one.
 
 ## Ratified decisions (2026-06-11)
 
