@@ -1,1 +1,4 @@
 .claude/cache/
+*.exe
+*.log
+bin/
