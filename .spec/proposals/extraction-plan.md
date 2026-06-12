@@ -273,6 +273,15 @@ adoption) stay held — "the rest need experiments and more research."
   props) + recursive CTEs; CITES edges REGENERATE from documents at
   import (no edge-data migration needed). OSS v0.1 born AGE-free;
   ~1–2 sessions inside the rename leg.
+  **Design inputs (Michael, 2026-06-12 late):** N-depth walks are a
+  requirement, not a nice-to-have — studies/docs CHAIN off each other
+  (a `BUILDS_ON` edge kind for doc lineage; ancestor + descendant
+  walks). Edge kinds are open data. Cycles are safe in the DATA graph
+  (UNION/visited-path termination) while the WORK graph keeps its
+  depth caps (l9) — cyclic citations fine, runaway generation loops
+  still fenced. Boundary accepted: no Cypher syntax / in-DB graph
+  algorithms; component-extract + app-level (NetworkX-style) if ever
+  needed.
   **Michael's conditions:** (a) must stay FAST as data grows — work
   use case is gigabytes of ingested data. Design: bytes live in
   corpus/chunk tables (already relational); edges scale with LINKS,
