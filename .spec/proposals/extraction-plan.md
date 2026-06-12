@@ -314,6 +314,40 @@ adoption) stay held — "the rest need experiments and more research."
   wins" — the lived history stays in the private repo, the public
   chain is authored.)
 
+## Stewardship grant (Michael, 2026-06-12 night)
+
+> "what do you need from me (if anything) so that you can complete the
+> full build and migration? anything left to ratify? I think letting you
+> lose with this as your stewardship I think is about where we are at."
+
+**The full P1–P2 build and migration proceeds under agent stewardship**
+(act / act+report bins): authoring leg, runner, compose, seed pack,
+compact_context leg (defaults from Michael's own sketch: between-turn
+trigger inside a work item, judge-pattern side quest, cheap compactor
+model, <50% instruction — act+report), CI, backups doc, verify-suite
+runs, mismatch classification + back-ports, side-by-side stack
+operation, P2 extraction work. Persona keys for the OSS dev stack:
+agent attempts self-service mint in ai-chattermax; pings Michael only
+if admin-gated. Data-import default at cutover: corpus + covenant +
+intent + yt re-import; histories (work items, messages, engrams, cost)
+ARCHIVE — presented for confirmation at cut time, not re-decided.
+
+**Still Michael's (the Hinge list, unchanged by the grant):**
+
+1. **The cut itself** — stopping the live stack, moving the live
+   persona identities (his rooms, his table). Agent presents the
+   gate-complete checklist; Michael says "cut."
+2. **coder-mcp public-ship nod** — the hardening review happens under
+   stewardship; the findings summary gets his nod before that daemon
+   lands in public history (it executes code and holds a GitHub token).
+3. **Cutover data-import confirmation** — thirty seconds over the
+   archive-vs-import defaults above.
+
+Everything else previously marked "Michael's call" that the evening
+council resolved (ct2 retire, leave-and-map, doc_*, values_anchor,
+AGE-out, consolidation, fresh-rebuild) is settled; nothing else awaits
+ratification.
+
 ## Licensing (the "individuals free, companies pay" model)
 
 The want: any single developer — hobbyist or employed — uses it freely;
