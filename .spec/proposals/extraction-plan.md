@@ -263,7 +263,7 @@ discipline) get settled in a quick ratification when the leg starts.
 The OTHER held items (trailing-reminder, broader 2026-research
 adoption) stay held — "the rest need experiments and more research."
 
-**PROPOSED, pending Michael's nod (both unlocked by fresh-rebuild):**
+**RATIFIED (Michael, same evening: "yes to both"):**
 
 - **Drop Apache AGE; replace with relational edges in core.** We use a
   fraction of AGE (workstream vertices, DECLARED/CITES edges, a couple
@@ -273,6 +273,27 @@ adoption) stay held — "the rest need experiments and more research."
   props) + recursive CTEs; CITES edges REGENERATE from documents at
   import (no edge-data migration needed). OSS v0.1 born AGE-free;
   ~1–2 sessions inside the rename leg.
+  **Michael's conditions:** (a) must stay FAST as data grows — work
+  use case is gigabytes of ingested data. Design: bytes live in
+  corpus/chunk tables (already relational); edges scale with LINKS,
+  not bytes; indexes on (src,kind)+(dst,kind); our walks are shallow
+  (citations 1-hop, context_for depth-bounded) + depth caps and
+  statement timeouts; if a deep-walk hot path ever emerges, a closure
+  table is an additive optimization, not a rewrite. (b) Multi-tenancy:
+  plain tables get the full Postgres toolbox (RLS by tenant_id,
+  partitioning, schema-per-tenant) that AGE's ag_catalog resisted —
+  removes the worst tenancy blocker; full multi-tenant substrate
+  remains P5-era work (pgEdge per-session pool pattern noted).
+  **Prior art (verified 2026-06-12):** our own gospel-engine-v2
+  already runs this pattern (SQLite, typed weighted edges:
+  cross_reference/thematic/semantic/typological — the "Opus did this
+  in sqlite3" memory); ctxgraph/sqlite-graph "We replaced Neo4j with
+  45 SQL statements" (2026-03, explicitly: multi-user → "PostgreSQL
+  with a graph schema"); Sheshbabu 2024 — Postgres recursive CTEs
+  "graphs with millions of edges, works great"; Richard Towers 2025 —
+  parameterized recursive CTEs over nodes/edges+jsonb (≈ our exact
+  schema); SQL:2023 SQL/PGQ standardizes property graphs OVER
+  relational tables; Facebook TAO = the social graph on MySQL.
 - **Author the OSS chain consolidated by subsystem** (~15–25 logical
   migrations: schema-core, watchman, pipelines, mcp-bridge, cost,
   gates, intents-covenants, sabbath-atonement, trust, council,
@@ -280,10 +301,9 @@ adoption) stay held — "the rest need experiments and more research."
   historical micro-files. Each consolidated file's header credits its
   source files; classification.tsv + a consolidation map preserve
   provenance; parity stays a BEHAVIOR diff (function defs via
-  rename-map), which consolidation does not disturb. Supersedes the
-  earlier keep-the-names lean — fresh-rebuild already moved the chain
-  from "copied" to "authored," and doc_* + AGE-removal are cheaper
-  done once in consolidated files than patched across 193.
+  rename-map), which consolidation does not disturb. (Michael: "dave
+  wins" — the lived history stays in the private repo, the public
+  chain is authored.)
 
 ## Licensing (the "individuals free, companies pay" model)
 
