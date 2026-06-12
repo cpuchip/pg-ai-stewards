@@ -1,10 +1,12 @@
 # pg-ai-stewards — OSS extraction plan
 
-**Status:** RATIFIED 2026-06-11
+**Status:** RATIFIED 2026-06-11 · **cutover gate AMENDED 2026-06-12**
 **Decisions:** v0.1 = core + persona-host · clean-room re-assembly (fresh
-history; the private workspace keeps the lived history) · cutover after v0.1
-boots virgin · **license = Apache-2.0** ("someone will live better for it" —
-the source-available analysis below is kept for the record of the road not
+history; the private workspace keeps the lived history) · **cutover at FULL
+PARITY, not v0.1** (amended 2026-06-12 — "I want it to be a good clean
+cutover": one cut, no hybrid period; see §Cutover parity gate) ·
+**license = Apache-2.0** ("someone will live better for it" — the
+source-available analysis below is kept for the record of the road not
 taken) · dev deployment = side-by-side on the SAME machine as the private
 substrate until feature-complete (see §Side-by-side).
 **Binding question:** How do we take the substrate that grew inside a private
@@ -104,7 +106,9 @@ storyboard for the docs site, and the steward's recovered mental model.
   virgin-machine boot proven by the verify-suite. README quickstart.
 - **P2 — the floor:** persona-host + ai-chattermax pairing docs, example
   persona configs, dnd-tools as the model third-party MCP; coder-mcp after a
-  security review pass.
+  security review pass; stewards-ui. P2 completes BEFORE cutover — the
+  parity-gate amendment makes coder-mcp + stewards-ui pre-cutover work,
+  not post-cutover follow-ons.
 - **P3 — docs site:** cpuchip.net/projects/pg-ai-stewards — narrative docs
   with animations (Remotion, per munder-difflin's landing-remotion pattern).
 - **P4 — the playground:** install on a dedicated machine under agent
@@ -137,6 +141,42 @@ holding the copyright — outside contributions need a **CLA**. Interim state:
 the repo carries no LICENSE (all rights reserved by default) until the pick
 is final; nothing is lost by deciding within the week.
 
+## Cutover parity gate (ratified 2026-06-12)
+
+Parity is measured at the **recomposed stack**, not the OSS repo: the gate
+is `OSS core + private overlay == today's live substrate behavior`. The
+workspace-specific material (gospel tools, study pipelines, live personas,
+personal covenant/intent text) belongs in the overlay — its absence from
+GitHub is not a parity failure. The cut happens ONCE, with no hybrid
+period where some daemons run private builds and others run OSS.
+
+The live substrate cuts over only when ALL of the following hold:
+
+1. **v0.1 boots virgin** — `git clone && docker compose up` on a clean
+   machine, verify-suite green.
+2. **coder-mcp and stewards-ui extracted** (each after its hardening
+   review) — i.e. the cut lands at ~v0.2, with every daemon the live
+   stack runs available from the OSS tree.
+3. **The 20 unclassified live↔repo function-definition mismatches are
+   classified** (pre-existing verify-suite debt). Until live behavior is
+   proven reproducible from files, no rebuild — OSS or otherwise — can be
+   called clean.
+4. **Migration ledger normalized** — the suffix vs suffix-less
+   double-entry wart resolved as part of the migrate-manifest design
+   call; the cutover replay leans on this bookkeeping.
+5. **Overlay replay proof** — scratch container, OSS core + overlay
+   migrations, full replay; function-def parity diff against the live
+   substrate comes back clean. (The verify-suite is the instrument; it
+   was built for exactly this.)
+6. **Side-by-side soak passes a feature-exercise checklist** on the
+   `stewards-oss-*` stack with its own keys: a persona turn (wake,
+   tools, SILENCE, outbox), a multi-stage pipeline with gates and a
+   council, cost events + caps, a watchman pass, a remote-MCP tool via
+   the bridge, a coder-mcp PR run, and a stewards-ui walk.
+7. **Cut-then-retire sequencing** — persona identities move to the new
+   stack and the old stack is stopped in an order that can never leave
+   two hosts on one key (the double-fire lesson).
+
 ## Side-by-side: OSS dev on the same machine as the private substrate
 
 Until the playground machine exists, the OSS stack runs in Docker NEXT TO
@@ -164,8 +204,12 @@ identities from day one.
    ships day one; coder-mcp/UI follow in 0.2 after a hardening pass.
 2. **Clean-room re-assembly** — fresh public history, every file audited as
    it lands; the workspace keeps the lived history.
-3. **Cutover after v0.1 boots virgin** (verify-suite green on a clean
-   machine); then upstream-first development, workspace consumes releases +
-   overlay dir. The playground machine is the proving ground.
+3. **Cutover at full parity** (AMENDED 2026-06-12; originally "after v0.1
+   boots virgin"). v0.1 virgin boot remains the first gate, but the live
+   stack cuts over only when every condition in §Cutover parity gate
+   holds — coder-mcp + stewards-ui extracted, mismatches classified,
+   overlay replay proven, side-by-side soak green. Then upstream-first
+   development, workspace consumes releases + overlay dir. The playground
+   machine is the proving ground.
 4. **License**: source-available / individuals-free model; mechanism (BUSL
    vs PolyForm SB) pending Michael's pick.
