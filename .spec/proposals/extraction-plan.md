@@ -190,11 +190,37 @@ storyboard for the docs site, and the steward's recovered mental model.
    field-tested across five models); the workspace layers its
    specifics in the overlay. Settles the jumpstart-crossover §2
    question.
-4. **Heritage-names council OPEN:** Michael leans normalize (this is
-   the chance) and proposes `data_*` over `study_*`; naming brief in
-   flight (candidates: data_* / corpus_* / doc_*; plus the
-   scripture_anchor column). Rename mechanics are not the concern —
-   the shim/migration path is established.
+4. **Heritage names RATIFIED: `doc_*`** (Michael, same day: "lets
+   migrate to doc. doc."): the corpus surface normalizes — tools
+   `study_search/study_get/study_similar/study_citations/…` →
+   `doc_*`, tables `studies` → `docs` (kind column already carries
+   study/doc/proposal/journal/phase-doc). `intents.scripture_anchor`
+   → **`values_anchor`** (agent recommendation, pairs with
+   values_hierarchy; proceeding unless Michael flags). The rename
+   lands as its own P1 leg in the OSS chain BEFORE the runtime replay
+   proof, so the replay validates the renamed chain.
+5. **Cutover mechanism AMENDED: fresh rebuild, not in-place rename**
+   (Michael: "im totally okay with rebuilding pg-ai-stewards
+   data/tools into the new oss version if it means its all clean").
+   The OSS stack is born clean — `doc_*` names native, two-tier
+   ledger suffix-less from day one, NO compatibility shims anywhere.
+   The live stack never renames; it retires at cutover and its volume
+   is kept as a read-only archive. Consequences:
+   - **Behavior parity** still proven per §Cutover parity gate
+     (replay + soak), but the parity diff needs a **rename map**
+     (old→new function/table/tool names) — lives at
+     `pg-ai-stewards-workspace/parity/rename-map.tsv`.
+   - **Data carries by selective import, not dump/restore.** Re-imports
+     cleanly via existing machinery: studies corpus (import-studies),
+     yt transcripts (import_yt_transcript), covenant/intent (seeders),
+     agents/pipelines/tools (migrations + overlay). Does NOT carry
+     automatically — work-item/session/message history, engrams, cost
+     ledger, trust-ladder state: import vs. archive call per category
+     belongs to Michael at cutover planning (default: archive).
+   - Overlay migrations get AUTHORED against the new names (the
+     workspace overlays/ copies update in the rename leg).
+   - leave-and-map (ratification 2) now only governs the OLD stack's
+     remaining lifetime; the new ledger never has the wart.
 
 ## Licensing (the "individuals free, companies pay" model)
 
