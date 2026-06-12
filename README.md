@@ -31,7 +31,7 @@ The short version:
 
 ## License
 
-Not yet chosen — the repo is **all rights reserved** until then. The intent
-is a source-available model: free for individuals (employed or not) and
-noncommercial use; organizations deploying it in production purchase a
-commercial license. See the extraction plan's Licensing section.
+[Apache-2.0](LICENSE). Use it, deploy it, build on it — someone will live
+better for it. The patent clause cuts both ways on purpose: contributors
+grant users a patent license for their contributions, and suing the project
+over patents terminates yours.
