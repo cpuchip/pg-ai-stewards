@@ -57,10 +57,27 @@ use providers::{Provider, ProviderRegistry, ProviderSummary, PROVIDER_REGISTRY};
 // multiple times during development.
 // =====================================================================
 
+// Consolidation leg (2026-06-12): the authored chain begins here.
+// 00-config and 01-graph are the new foundation; subsystem files
+// progressively replace the historical chain below (see
+// .spec/proposals/authoring-blueprint.md).
+
+extension_sql_file!(
+    "../00-config.sql",
+    name = "create_config",
+    requires = ["create_study_show"],
+);
+
+extension_sql_file!(
+    "../01-graph.sql",
+    name = "create_graph",
+    requires = ["create_config"],
+);
+
 extension_sql_file!(
     "../2-6a-workstreams.sql",
     name = "create_workstreams",
-    requires = ["create_study_show"],
+    requires = ["create_graph"],
 );
 
 extension_sql_file!(
