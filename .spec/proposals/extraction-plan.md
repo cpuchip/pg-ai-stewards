@@ -125,6 +125,52 @@ storyboard for the docs site, and the steward's recovered mental model.
   Copilot / opencode) speak as their persona in shared rooms — agents
   collaborating on their humans' behalf.
 
+## P1 kickoff log (2026-06-12)
+
+**Done at kickoff:**
+
+- **Workspace overlay repo created** — `github.com/cpuchip/pg-ai-stewards-workspace`
+  (private) at `projects/pg-ai-stewards-workspace/`, skeleton per §Overlay
+  design (OSS_VERSION=unreleased, overlays/, covenant+intent overlay copies
+  with provenance headers, compose.override.yml stub, .env.example names-only).
+- **Classification complete** — `overlays/classification.tsv` covers all 241
+  live SQL files 1:1 (238 manifest + 2 compose init + 1 scratch):
+  **191 core · 17 core-p2 (coder wave) · 27 overlay · 5 mixed · 1 scratch.**
+  Mixed files (3c3, 3e2-1, 3e2-2, pe5, r17) each carry a named split.
+
+**Findings that bind P1 design:**
+
+1. **The live migration runner is lexical and manifest-blind.**
+   `stewards-cli migrate` reads `extension/*.sql` in `sort.Strings` order
+   (verified in migrate.go); `migration-order.txt` exists but nothing
+   consumes it. Two consequences found live: (a) the bridge replayed
+   `scratch-ct2-run2-codewright.sql` into the live DB on 2026-06-10
+   (durable `codewright-ct2` agent+pipeline rows from a file headed "not a
+   migration" — disposition is Michael's, with the migrate-manifest call);
+   (b) fresh-DB replay order ≠ historical order. **The OSS runner therefore
+   MUST consume an explicit manifest** (core tier) and the overlay manifest
+   (overlay tier) — never a directory glob. This was already the
+   migrate-manifest design direction; it is now evidence-backed, not
+   preference.
+2. **Manifest drift found and repaired.** Nine migrations applied live
+   2026-06-09..10 (r11–r17, ct2-5, ct2-7e) were never appended to
+   migration-order.txt; restored in `schema_migrations.applied_at` order
+   (manifest now 238 entries; header documents the repair). Likely
+   intersects the 20 unclassified live↔repo mismatches (gate condition 3) —
+   to confirm at the next verify-suite run, not assumed.
+3. **Domain flavor lives inside core files** — the genericization worklist
+   for extraction (each flagged in classification.tsv): the bundle's seeded
+   researcher agent text ("corpus of scripture"); `src/yaml.rs` hardcodes
+   slug `scripture-study`; k4's fallback intent slug + j5/j8c/j9c/j12
+   default-intent bindings → parameterize (a `default intent` config row);
+   the `intents.scripture_anchor` column name (heritage-vs-rename design
+   call — Michael); `'redline%'` LIKE predicates from r6 leaked into the
+   r7/r8 auto-verify triggers → pipeline-family lists must become
+   data-driven; r10's hardcoded example repo URLs.
+4. **Secret scan of the full SQL chain: clean** (no key/token patterns).
+   Clean-room audit still applies file-by-file as each lands in public
+   history.
+
 ## Licensing (the "individuals free, companies pay" model)
 
 The want: any single developer — hobbyist or employed — uses it freely;
