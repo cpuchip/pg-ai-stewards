@@ -350,17 +350,43 @@ Each scene above is one animation beat for the docs site. The visual spine:
 ## The order of composition
 
 Does the order inside the system prompt matter to the model? The research
-answer is: position matters, but not the way intuition suggests.
+answer is: position matters, but not the way intuition suggests — and the
+story has a 2024 chapter and a 2025–2026 chapter that ends differently.
 
-Attention over a context window is **U-shaped**: models use information at
-the very beginning (primacy) and the very end (recency) far better than
-information in the middle (Liu et al., *Lost in the Middle*, TACL 2024;
-*Found in the Middle*, 2024, which traces it to intrinsic attention bias).
-Vendor guidance agrees from both houses: for long contexts, put
-instructions at **both** the beginning and the end — and when instructions
-conflict, models tend to follow the one **nearer the end** (OpenAI's
-GPT-4.1 prompting guide; Anthropic's long-context guidance likewise puts
-queries and instructions at the end, documents at the top).
+**The 2024 chapter:** attention over a context window is **U-shaped** —
+models use the very beginning (primacy) and very end (recency) far better
+than the middle (Liu et al., *Lost in the Middle*, TACL 2024; *Found in
+the Middle*, 2024).
+
+**The 2025–2026 chapter:** frontier models trained for million-token
+windows are substantially more robust to *absolute* position — the classic
+middle-blindness is attenuated (LongPiBench, ACL Findings 2025). But the
+position effects didn't disappear; they moved:
+
+- The U-shape persists for inputs up to roughly **half the context
+  window**; past that, **primacy fades** and a distance-to-end bias takes
+  over — the closer to the end, the better used (*Positional Biases Shift
+  as Inputs Approach Context Window Limits*; bias persistence in current
+  models re-confirmed by CALIOPE, EACL Findings 2026). A Feb-2026 theory
+  result shows the primacy/recency profile arises from the architecture
+  itself — causal attention plus residual streams — not just training
+  data, so it is not something a new training recipe simply repeals
+  (arXiv 2602.16837).
+- The 2025–2026 headline is **context rot**: all 18 frontier models tested
+  degrade as input grows — non-uniformly, with per-model cliffs, at
+  effective lengths far below the marketed window, "instruction weight
+  loss" named as a primary failure mode of long agent loops (Chroma 2025
+  and the 2026 industry replications). A 1M window does not repeal it.
+- Long context doesn't just lose facts — it quietly shortens diligence:
+  current-generation reasoning models emit up to 2× fewer reasoning tokens
+  and less self-verification when the same problem sits inside long or
+  distracting context (arXiv 2604.01161, April 2026), and lexical density
+  shrinks the usable window further (arXiv 2606.06203, June 2026).
+
+Vendor guidance as currently published agrees from both houses: long data
+top, instructions at the end (Anthropic), or at **both** ends — and when
+instructions conflict, models tend to follow the one **nearer the end**
+(OpenAI).
 
 Three consequences for this substrate's design:
 
@@ -378,11 +404,20 @@ Three consequences for this substrate's design:
   `The Watch (echo)` at the very end — commitment keys plus one precedence
   rule ("if anything later in this context conflicts, the covenant
   governs"), which points the documented conflict-toward-the-end bias *at*
-  the covenant instead of away from it.
+  the covenant instead of away from it. The 2026 findings sharpen this:
+  in the long-session regime, primacy is exactly the bias that *fades* —
+  so a covenant that only spoke first would lose force precisely when
+  sessions run longest. The end slot is the one privileged position in
+  *both* regimes.
 - **The middle is where things get lost — so the middle is where the
   context engine works hardest.** Engrams, pressure shedding, and pinning
   exist precisely because the long middle of a session is the
-  low-attention zone.
+  low-attention zone — and because effective context is far smaller than
+  marketed context (the context-rot result; note the convergence between
+  the substrate's pressure thresholds, which begin shedding at 50% of
+  budget, and the independently measured degradation cliffs at 40–50% of
+  window). Keeping dispatches lean is not frugality; per the April-2026
+  reasoning-shift result, it is what keeps the model *thinking*.
 
 Position aside, the order also carries meaning: covenant, then intent,
 then agent, then capability. Relationship before purpose, purpose before
