@@ -222,6 +222,69 @@ storyboard for the docs site, and the steward's recovered mental model.
    - leave-and-map (ratification 2) now only governs the OLD stack's
      remaining lifetime; the new ledger never has the wart.
 
+## Rebuild-stage lessons (council, 2026-06-12 evening)
+
+**RATIFIED (Michael: "1 through 6 are great ideas lets do them"):**
+
+1. **Classify the 20 live↔repo mismatches EARLY** — extraction copies
+   files; hand-patched live fixes that never landed in files would be
+   silently lost by the rebuild. Verify-suite run early in P1, not at
+   gate time.
+2. **Verify files out of the boot chain** — `verify-*.sql` move to a
+   `tests/` suite (verify-suite/CI); the boot manifest is pure machinery.
+3. **`payload._kind` enum refactor** — the seven stringly-typed
+   auto-fire markers become an enum in the bgworker (the long-tracked
+   "when the 8th lands" carry-forward; the rebuild is the moment).
+4. **`stewards.config` table** — default intent slug (today hardcoded
+   in yaml.rs), pressure tiers, provider-specific chars/token
+   estimators (the pgEdge lesson) become config rows.
+5. **CI from day one** — GitHub Actions: extension build + virgin
+   CREATE EXTENSION + manifest replay (the three proofs done by hand at
+   kickoff). Repo hygiene: .gitattributes (eol=lf), .dockerignore.
+6. **Backup story documented — INCLUDING offsite** (Michael: "should
+   look at offsite db mirrors"). Tiers: (a) nightly `pg_dump` to a
+   second disk — minimum; (b) **WAL archiving + base backups via
+   pgBackRest or wal-g to offsite storage** — continuous point-in-time
+   recovery; this is the "auto-ledge-out" Michael described; (c) a
+   streaming hot-standby replica — overkill today, natural later (the
+   P4 playground machine is the obvious standby target). Recommendation:
+   ship (a) in the compose docs, ship (b) as the documented production
+   posture, defer (c).
+
+**compact_context PULLED IN (Michael lifts the hold: "I think
+compact_context is a good one to do, and might as well pull that one
+in"):** graduates from seed to a P1-adjacent build leg in OSS core —
+the commissioned-curation side quest (indicator + keep-below-50%
+instruction + a `compact_context` tool that spawns a reviewable
+side-quest to mute/engram the gathered context, then resumes the
+original loop with a compaction entry). The seed's parked council
+questions (mid-turn vs between-turn; compactor model; trigger
+discipline) get settled in a quick ratification when the leg starts.
+The OTHER held items (trailing-reminder, broader 2026-research
+adoption) stay held — "the rest need experiments and more research."
+
+**PROPOSED, pending Michael's nod (both unlocked by fresh-rebuild):**
+
+- **Drop Apache AGE; replace with relational edges in core.** We use a
+  fraction of AGE (workstream vertices, DECLARED/CITES edges, a couple
+  of walks) and pay its full cost (heaviest dependency, PG-version
+  pinning, the init/01 search_path landmine, install friction for
+  strangers). Replacement = two tables (nodes, edges: kind + jsonb
+  props) + recursive CTEs; CITES edges REGENERATE from documents at
+  import (no edge-data migration needed). OSS v0.1 born AGE-free;
+  ~1–2 sessions inside the rename leg.
+- **Author the OSS chain consolidated by subsystem** (~15–25 logical
+  migrations: schema-core, watchman, pipelines, mcp-bridge, cost,
+  gates, intents-covenants, sabbath-atonement, trust, council,
+  context-engine, personas, scheduler …) instead of replaying 193
+  historical micro-files. Each consolidated file's header credits its
+  source files; classification.tsv + a consolidation map preserve
+  provenance; parity stays a BEHAVIOR diff (function defs via
+  rename-map), which consolidation does not disturb. Supersedes the
+  earlier keep-the-names lean — fresh-rebuild already moved the chain
+  from "copied" to "authored," and doc_* + AGE-removal are cheaper
+  done once in consolidated files than patched across 193.
+
 ## Licensing (the "individuals free, companies pay" model)
 
 The want: any single developer — hobbyist or employed — uses it freely;
