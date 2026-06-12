@@ -171,6 +171,31 @@ storyboard for the docs site, and the steward's recovered mental model.
    Clean-room audit still applies file-by-file as each lands in public
    history.
 
+**Council ratifications (2026-06-12, same day):**
+
+1. **codewright-ct2 rows RETIRED** (Michael: "lets retire them";
+   destructive-SQL ratification, executed same session): agent row +
+   13 tool grants deleted; the `persona-turn-code-ct2` pipeline row
+   could not be deleted (ON DELETE RESTRICT from 2 completed RUN-2
+   work items — the experiment record stays) so it is marked
+   `[RETIRED 2026-06-12 …]` with `metadata.ct2_run2='retired'`. The
+   scratch file's ledger row stays (history is never rewritten).
+2. **Ledger normalization = leave-and-map.** Ledger history is never
+   rewritten; the new manifest-consuming runner normalizes at lookup
+   (compare applied-set membership with the `.sql` suffix stripped) and
+   writes new entries suffix-less only. Cost: one normalization in one
+   query path.
+3. **Seed pack = one lineage, kit canonical.** The OSS generic
+   covenant/intent templates DERIVE from the ai-jumpstart kit (MIT;
+   field-tested across five models); the workspace layers its
+   specifics in the overlay. Settles the jumpstart-crossover §2
+   question.
+4. **Heritage-names council OPEN:** Michael leans normalize (this is
+   the chance) and proposes `data_*` over `study_*`; naming brief in
+   flight (candidates: data_* / corpus_* / doc_*; plus the
+   scripture_anchor column). Rename mechanics are not the concern —
+   the shim/migration path is established.
+
 ## Licensing (the "individuals free, companies pay" model)
 
 The want: any single developer — hobbyist or employed — uses it freely;
