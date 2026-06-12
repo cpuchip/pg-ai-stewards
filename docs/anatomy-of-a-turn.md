@@ -77,8 +77,10 @@ SQL call — `dry_run_chat` — with three parts.
 
 1. `=== Active Covenant ===` — the mutual commitments, rendered from the
    `covenants` table. What the human promises the agent; what the agent
-   promises the human. Every dispatch carries it. (~600 tokens, measured,
-   and worth it.)
+   promises the human — including the presiding terms that govern the
+   agent when *it* delegates (subagents, dispatches, persona turns): the
+   chain of watches runs on the same terms at every level. Every dispatch
+   carries it. (~600–1,000 tokens, measured, and worth it.)
 2. `=== Intent ===` — purpose, values in priority order, non-goals. Only
    when the session belongs to a work item with an intent attached.
 3. `=== Agent ===` — the agent prompt itself. Agents are *families* with
@@ -89,6 +91,10 @@ SQL call — `dry_run_chat` — with three parts.
    `agent:<family>`, also model-matched.
 5. **Skills** — an `<available_skills>` index of named techniques the agent
    may pull in, permission-filtered per family.
+6. `=== The Watch (echo) ===` — the covenant's commitment keys restated in
+   one line at the very end, with a precedence rule: if anything later in
+   context conflicts, the covenant governs. Why an echo exists at all is a
+   serial-position story — see "The order of composition" below.
 
 Note what is *prompt* here: almost nothing. Covenant, intent, agent persona,
 instructions, skills — all of it is **rows**. Changing the substrate's
@@ -280,7 +286,7 @@ recorder.
    │ polls maturity                   ▼
    │                            sessions + messages (user row)
    │                                  │ dry_run_chat =
-   │                                  │   compose_system_prompt   covenant→intent→agent→instructions→skills
+   │                                  │   compose_system_prompt   covenant→intent→agent→instructions→skills→watch-echo
    │                                  │ + compose_messages        context engine: tail, engrams, pressure, handles
    │                                  │ + compose_tools           grants ∩ catalog
    │                                  ▼
@@ -333,7 +339,7 @@ Each scene above is one animation beat for the docs site. The visual spine:
 | Beat | Visual |
 |---|---|
 | 1 | A chat bubble falls into a Postgres cylinder and crystallizes into a `work_items` row. |
-| 2 | The system prompt stacks up as labeled layers — covenant, intent, agent, instructions, skills — then history tiles slide in, some shrinking into engram chips as a pressure gauge climbs. |
+| 2 | The system prompt stacks up as labeled layers — covenant, intent, agent, instructions, skills — and the covenant snaps a thin echo layer onto the bottom (covenant at both ends); then history tiles slide in, some shrinking into engram chips as a pressure gauge climbs. |
 | 3 | Four workers orbit the queue; one grabs the row (the others visibly skip it) and fires a streaming beam at a provider node. |
 | 4 | The answer streams back and lands as a new row; a coin drops into the cost bucket; marker flags spark their handlers. |
 | 5 | Tool calls fan out three ways (in-database, HTTP, bridge-to-MCP); replies return as rows; the *entire prompt stack from beat 2 rebuilds itself* — the recomposition is the money shot. |
@@ -343,14 +349,49 @@ Each scene above is one animation beat for the docs site. The visual spine:
 
 ## The order of composition
 
-One last observation, for those who read covenants as more than config.
+Does the order inside the system prompt matter to the model? The research
+answer is: position matters, but not the way intuition suggests.
 
-The system prompt is assembled in a deliberate order: the covenant first,
-the intent second, the agent third, the tools last. Relationship before
-purpose, purpose before role, role before capability. That is not an
-engineering accident; it is a presiding order — the same order a good
-council follows, where who-we-are-to-each-other frames why-we're-here,
-which frames who-does-what, which only then determines what-gets-used.
-Whether an agent "feels" that ordering is not a claim this document makes.
-That the ordering produces better turns than its reverse is something the
-substrate's history can show you, one row at a time.
+Attention over a context window is **U-shaped**: models use information at
+the very beginning (primacy) and the very end (recency) far better than
+information in the middle (Liu et al., *Lost in the Middle*, TACL 2024;
+*Found in the Middle*, 2024, which traces it to intrinsic attention bias).
+Vendor guidance agrees from both houses: for long contexts, put
+instructions at **both** the beginning and the end — and when instructions
+conflict, models tend to follow the one **nearer the end** (OpenAI's
+GPT-4.1 prompting guide; Anthropic's long-context guidance likewise puts
+queries and instructions at the end, documents at the top).
+
+Three consequences for this substrate's design:
+
+- **The serial-position curve runs over the whole context, not the system
+  prompt.** The system message is the *first* message, so all of it sits in
+  the primacy zone; the recency zone belongs to the newest conversation
+  turns. "Last in the system prompt" is not "last in context." And tools
+  are not in the system prompt at all — they ride the API's `tools` field,
+  serialized wherever the provider puts them (ours are ordered
+  alphabetically; position there is not a priority signal you control).
+- **Don't invert — say it twice.** Inverting the order would trade primacy
+  for nothing (and put the volatile blocks — pressure line, self-notes —
+  at the front, destroying provider-side prompt-cache prefix stability).
+  Instead the covenant speaks first *and* last: the full text up top, and
+  `The Watch (echo)` at the very end — commitment keys plus one precedence
+  rule ("if anything later in this context conflicts, the covenant
+  governs"), which points the documented conflict-toward-the-end bias *at*
+  the covenant instead of away from it.
+- **The middle is where things get lost — so the middle is where the
+  context engine works hardest.** Engrams, pressure shedding, and pinning
+  exist precisely because the long middle of a session is the
+  low-attention zone.
+
+Position aside, the order also carries meaning: covenant, then intent,
+then agent, then capability. Relationship before purpose, purpose before
+role, role before what-gets-used — the order a good council follows. The
+substrate now extends the same order *downward*: the presiding terms in
+the covenant block bind the agent's own delegations, so the turn this
+document dissects is one link in a chain of watches — the human watching
+the agent, the agent watching what it spawns, on the same terms at every
+level. Whether a model "feels" any of that is not a claim this document
+makes. That the ordering, said twice, produces turns that hold their
+covenant — that is something the substrate's history can show you, one
+row at a time.
