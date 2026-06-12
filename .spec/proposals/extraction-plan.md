@@ -111,6 +111,14 @@ storyboard for the docs site, and the steward's recovered mental model.
   not post-cutover follow-ons.
 - **P3 — docs site:** cpuchip.net/projects/pg-ai-stewards — narrative docs
   with animations (Remotion, per munder-difflin's landing-remotion pattern).
+- **P1/P3 inputs from the pgEdge survey (2026-06-12):** their
+  postgres-mcp + postgres-images repos set the packaging bar — prebuilt
+  ghcr images with explicit per-flavor manifests, a per-client onboarding
+  grid (Claude Code/Desktop/Cursor/Copilot), a consolidated security
+  checklist page, and provider-specific token estimators. Different
+  category (their arrow points INTO Postgres — query surface; ours points
+  OUT — the DB is the agent), so no architectural threat; adopt the
+  polish, keep the cognition.
 - **P4 — the playground:** install on a dedicated machine under agent
   stewardship; the substrate gets standing general tasks of its own.
 - **P5 — the office:** an MCP that lets anyone's coding agent (Claude Code /
