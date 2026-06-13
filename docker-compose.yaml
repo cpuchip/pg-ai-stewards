@@ -1,0 +1,110 @@
+# pg-ai-stewards — local stack.
+#
+#   docker compose up -d                 # the substrate: Postgres+extension + MCP bridge
+#   docker compose --profile personas up # also start the persona-host sidecar
+#
+# Boots on a virgin machine: the pg service installs the extension on first
+# boot (extension/init/), the bridge connects and brokers tool calls. Copy
+# .env.example to .env to set credentials, provider keys, and (for the
+# personas profile) the ai-chattermax gateway. All defaults below let the
+# stack come up with no .env at all.
+services:
+  pg:
+    build:
+      context: ./extension
+    image: stewards-oss-pg:pg18
+    container_name: stewards-oss-pg
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-stewards}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stewards}
+      POSTGRES_DB: ${POSTGRES_DB:-stewards}
+    ports:
+      # Host port offset from the workspace dev stacks (55432/55433) so an
+      # OSS stack can run side by side. Internal port stays 5432.
+      - "${PG_PORT:-55434}:5432"
+    # Preload the extension so the bgworker registers in _PG_init — without
+    # this, CREATE EXTENSION still works but enqueued work_queue rows sit in
+    # 'pending' forever because no worker ever starts.
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=pg_ai_stewards
+    extra_hosts:
+      # Lets the in-database bgworker reach a model provider on the host
+      # (LM Studio / Ollama) on plain Linux Docker. Docker Desktop aliases
+      # this automatically.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      # First-boot init: CREATE EXTENSION vector + pg_ai_stewards (+ smoke).
+      - ./extension/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-stewards} -d ${POSTGRES_DB:-stewards}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+
+  bridge:
+    build:
+      context: .
+      dockerfile: extension/bridge.Dockerfile
+    image: stewards-oss-bridge:latest
+    container_name: stewards-oss-bridge
+    depends_on:
+      pg:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      # Internal network: reach pg by its service name on 5432 (the host
+      # port mapping above is only for external tools like psql).
+      STEWARDS_DSN: "postgres://${POSTGRES_USER:-stewards}:${POSTGRES_PASSWORD:-stewards}@pg:5432/${POSTGRES_DB:-stewards}?sslmode=disable"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # READ-ONLY workspace mount for fs-read-mcp's path-scoped reads. The
+      # core fs-read seed scopes to .spec/journal, .spec/proposals, .mind,
+      # docs — point WORKSPACE_DIR at a tree you want research agents to read.
+      # Empty by default (an empty ./workspace is created on first up).
+      #
+      # RO is deliberate: the substrate's autonomous file-write materializer
+      # stays OFF until you opt in. The bridge logs "materializer ... /workspace
+      # not writable — autonomous draining disabled" on boot — that warning is
+      # the safe default, not a misconfiguration. Change :ro to :rw only if you
+      # want the substrate to write files into your tree on its own.
+      - ${WORKSPACE_DIR:-./workspace}:/workspace:ro
+    restart: unless-stopped
+
+  persona-host:
+    profiles: ["personas"]
+    build:
+      context: .
+      dockerfile: extension/persona-host.Dockerfile
+    image: stewards-oss-persona-host:latest
+    container_name: stewards-oss-persona-host
+    depends_on:
+      pg:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      STEWARDS_DSN: "postgres://${POSTGRES_USER:-stewards}:${POSTGRES_PASSWORD:-stewards}@pg:5432/${POSTGRES_DB:-stewards}?sslmode=disable"
+      # Set these in .env to put a persona in an ai-chattermax room. Without
+      # them the sidecar starts its HTTP server and idles.
+      CHATTERMAX_GATEWAY: ${CHATTERMAX_GATEWAY:-}
+      CHATTERMAX_PERSONAS: ${CHATTERMAX_PERSONAS:-}
+    ports:
+      - "${PERSONA_HOST_PORT:-8091}:8090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
