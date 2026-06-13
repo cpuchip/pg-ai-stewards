@@ -20,7 +20,7 @@ ON CONFLICT (id) DO NOTHING;
 
 SELECT stewards.chat_enqueue(
     'stewards-explore', 'kimi-k2.6', 'loop-3',
-    'In one sentence, name two virtues from Moroni 7.', 'opencode_go'
+    'In one sentence, name two stages of the water cycle.', 'opencode_go'
 ) AS work_id_success;
 
 -- Then the inverse: ask kimi to call the broken tool
