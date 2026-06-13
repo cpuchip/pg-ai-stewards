@@ -16,12 +16,8 @@ verify-2-7b3-budget.sql
 verify-3c2-inverse.sql
 verify-3e2-2.sql
 verify-4a.sql
-4a-steward.sql
 verify-4a-steward.sql
-4b-dispatch-override.sql
 verify-4b.sql
-4c-steward-dispatch.sql
-4d-steward-realign.sql
 verify-4c.sql
 5a-maturity-gate.sql
 verify-5a.sql
@@ -46,8 +42,6 @@ test-gate-e2e.sql
 5g2-convene-council.sql
 5g3-synthesize-and-resolve.sql
 5g4-bishop-and-suggest.sql
-6b-steward-retry-lessons.sql
-6c-quarantine-fires-atonement.sql
 6d-pending-file-writes.sql
 6e-lesson-resolution-file-producers.sql
 h1-0-substrate-primitives.sql

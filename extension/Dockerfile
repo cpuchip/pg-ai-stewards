@@ -48,11 +48,7 @@ COPY src ./src
 # call in src/lib.rs and update this list.
 COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      03-watchman.sql 04-work-items.sql 05-mcp-bridge.sql \
-     06-cost.sql \
-     4a-steward.sql \
-     4b-dispatch-override.sql \
-     4c-steward-dispatch.sql \
-     4d-steward-realign.sql \
+     06-cost.sql 07-steward.sql \
      5a-maturity-gate.sql \
      5b-scenarios-verify.sql \
      5c-sessions-gate-kind.sql \
@@ -74,8 +70,6 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      5g2-convene-council.sql \
      5g3-synthesize-and-resolve.sql \
      5g4-bishop-and-suggest.sql \
-     6b-steward-retry-lessons.sql \
-     6c-quarantine-fires-atonement.sql \
      6d-pending-file-writes.sql \
      am1-pending-file-writes-notify.sql ./
 
