@@ -1002,14 +1002,18 @@ COMMENT ON FUNCTION stewards.render_file_destination(uuid) IS
 'H.3 followup: render the pipeline''s file_destination_template against a work_item''s slug/project/id. Returns NULL if no template. Used by on_maturity_verified to auto-render SQL-bypass work_items whose file_destination was never set by the UI.';
 
 -- ---------------------------------------------------------------------
--- on_maturity_verified (i3 final) — AFTER UPDATE OF maturity producer.
--- On transition TO verified: fire sabbath (if enabled + not done), auto-render
--- + auto-materialize the file (if enabled + not yet enqueued), and enqueue
--- proposed work_items for the planning family. Every cross-subsystem call is
--- wrapped in BEGIN/EXCEPTION → NOTICE so the parent transaction always
--- succeeds. The functions it calls (sabbath_dispatch, enqueue_work_item_file
--- in 10-sabbath; enqueue_proposed_work_items in 13-research-pipelines) resolve
--- at runtime; missing-function during early batches is swallowed.
+-- on_maturity_verified (j7 final) — AFTER UPDATE OF maturity producer.
+-- Single final form. On transition TO verified, in order:
+--   1. sabbath_dispatch (if enabled + not done)        [10-sabbath]
+--   2. agent-proposal apply (agent-proposal family)    [apply_agent_proposal, 13]
+--   3. decompose-fanout spawn (decompose-fanout family) [spawn_children, 14]
+--   4. auto-render + auto-materialize the file          [render_file_destination 08 / enqueue_work_item_file 10]
+--   5. planning proposed-work enqueue (planning family) [enqueue_proposed_work_items, 13]
+--   6. aggregator dispatch when a fanout child verifies  [check_and_dispatch_fanout_aggregator, 14]
+-- Every cross-subsystem call is wrapped in BEGIN/EXCEPTION → NOTICE so the
+-- parent transaction always succeeds. Callees born in 10/13/14 are forward
+-- refs — plpgsql function calls are late-bound and the bundle installs
+-- atomically, so all callees exist by the time the trigger ever fires.
 -- ---------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION stewards.on_maturity_verified()
@@ -1024,6 +1028,8 @@ DECLARE
     v_dispatch_id   bigint;
     v_proposed_n    int;
     v_rendered      text;
+    v_agent_ok      boolean;
+    v_spawn_n       int;
 BEGIN
     IF NEW.maturity <> 'verified' OR OLD.maturity = 'verified' THEN
         RETURN NEW;
@@ -1043,6 +1049,36 @@ BEGIN
                 v_dispatch_id, NEW.id;
         EXCEPTION WHEN OTHERS THEN
             RAISE NOTICE 'on_maturity_verified: sabbath_dispatch failed: %', SQLERRM;
+        END;
+    END IF;
+
+    -- i4: agent-proposal source_type routing. Runs BEFORE the enqueue path
+    -- so apply_agent_proposal can set file_destination dynamically.
+    IF NEW.pipeline_family = 'agent-proposal' AND NEW.agent_proposal_applied_at IS NULL THEN
+        BEGIN
+            v_agent_ok := stewards.apply_agent_proposal(NEW.id);
+            IF v_agent_ok THEN
+                SELECT file_destination INTO NEW.file_destination
+                  FROM stewards.work_items WHERE id = NEW.id;
+            ELSE
+                RAISE NOTICE 'on_maturity_verified: apply_agent_proposal returned false for work_item=%; skipping file enqueue',
+                    NEW.id;
+                RETURN NEW;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'on_maturity_verified: apply_agent_proposal raised: %', SQLERRM;
+            RETURN NEW;
+        END;
+    END IF;
+
+    -- j1/j7: decompose-fanout parent reached verified → spawn children.
+    IF NEW.pipeline_family = 'decompose-fanout' THEN
+        BEGIN
+            v_spawn_n := stewards.spawn_children(NEW.id);
+            RAISE NOTICE 'on_maturity_verified: spawn_children parent=% spawned=%',
+                NEW.id, v_spawn_n;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'on_maturity_verified: spawn_children failed: %', SQLERRM;
         END;
     END IF;
 
@@ -1085,12 +1121,23 @@ BEGIN
         END;
     END IF;
 
+    -- j7: child of a fan-out verified → check siblings; dispatch aggregator
+    -- if all terminal. (Failed siblings fire via on_child_status_terminal in 14.)
+    IF NEW.parent_work_item_id IS NOT NULL
+       AND NEW.pipeline_family <> 'aggregate-children' THEN
+        BEGIN
+            PERFORM stewards.check_and_dispatch_fanout_aggregator(NEW.parent_work_item_id);
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'on_maturity_verified: aggregator-dispatch-check failed: %', SQLERRM;
+        END;
+    END IF;
+
     RETURN NEW;
 END;
 $func$;
 
 COMMENT ON FUNCTION stewards.on_maturity_verified() IS
-'i3 (H.1.6 + H.3-followup-2 with the file_enqueued_at rename): AFTER UPDATE trigger fn. On maturity→verified, fire sabbath_dispatch (if enabled), auto-render + enqueue the work_item file (if auto_materialize + not yet enqueued), and enqueue proposed work_items for the planning family. All cross-subsystem calls wrapped → NOTICE.';
+'j7 final (single form): AFTER UPDATE trigger fn. On maturity→verified, in order: sabbath_dispatch (10), agent-proposal apply (13), decompose-fanout spawn (14), auto-render+enqueue the work_item file (08/10), planning proposed-work enqueue (13), and aggregator dispatch when a fanout child verifies (14). All cross-subsystem calls wrapped → NOTICE; forward refs to 10/13/14 are late-bound.';
 
 DROP TRIGGER IF EXISTS work_items_on_maturity_verified ON stewards.work_items;
 CREATE TRIGGER work_items_on_maturity_verified

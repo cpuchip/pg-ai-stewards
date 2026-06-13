@@ -157,7 +157,27 @@ wrapped in BEGIN/EXCEPTION→NOTICE (mirroring on_maturity_verified). Touches
 sabbath-discipline semantics → Michael's call.
 **B4** = 13–16 (incl. j8a+j11-dispatch+j12-brainstorm
 trimmed halves; es7's judge-gated tool_dispatch_complete_waiting;
-es1's cancel-cascade). **B5** = 17–19 +
+es1's cancel-cascade).
+- **B4/13 SHIPPED 2026-06-13** (OSS `97f42db`): research-write (4-stage
+  context_gather→gather→synthesize→review, h2 final) / planning (5-stage) /
+  agent-proposal / revise-proposal / research-summary pipeline seeds +
+  enqueue_proposed_work_items + apply_agent_proposal (i7 final incl. i6
+  claude_attested gate) + apply_revision. Virgin scratch smoke fully green;
+  GOWORK=off go build+vet green; 13 historical files retired, manifest
+  123→110. **Deviations:** h1-0 + h3-1 already consumed (dropped); h-ledger-1's
+  `schema_migrations` table relocated to **00-config** (bundle must birth it —
+  empty runtime manifest, overlay tier records into it); on_maturity_verified
+  NOT redefined here (08 owns the single final form, calls these as wrapped
+  forward refs — agent-proposal + fanout branches fold into 08 at B4 close);
+  apply_agent_proposal single i7 form; work_item_dispatch_stage tools_disabled
+  forward deferred to 19-models (final accretes through r3); genericized
+  "gospel" corpus text + neutralized personal project example names. NO
+  rename-map rows (consolidation, not renames). **on_maturity_verified true
+  final is j7** (j1/j7 add fanout-aggregator branches) → 08's update at B4
+  close must fold i4 agent-proposal + j1/j7 fanout branches, all wrapped.
+- **B4/14-16 NEXT:** 14-fanout (j1-j9c + trimmed halves + the 08
+  on_maturity_verified fold), 15-context-engine (k/l/es/ct2 — huge; may
+  split 15a/b), 16-subagents (k4/l9/es8/es10/r11/ct2-5/ct2-7e). **B5** = 17–19 +
 seed_harness genericize + bgworker `_kind` enum. **B6** = tests/ + CI
 workflow + rename-map.tsv finalization + overlay copies updated to new
 names (overlay note: init/01-seed-workstreams + any overlay migration

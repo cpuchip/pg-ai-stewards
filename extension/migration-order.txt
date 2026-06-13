@@ -21,13 +21,6 @@ verify-4b.sql
 verify-4c.sql
 verify-5a.sql
 test-gate-e2e.sql
-j1-fanout-machinery.sql
-j2-aggregate-auto-verify.sql
-j3-spawn-sets-aggregator-destination.sql
-j5-brainstorm-lenses.sql
-j6-brainstorm-lens-auto-verify.sql
-j4-spawn-supports-child-file-destination.sql
-j7-failed-sibling-also-triggers-aggregator.sql
 k1-engrams-schema-and-extractor.sql
 k2-compose-messages-with-engrams.sql
 k3-expand-message-tool.sql
@@ -79,13 +72,7 @@ es10-grant-consult-subagent.sql
 pe6-scheduled-pipelines-schema-and-cron.sql
 pe7-scheduled-pipelines-fire-and-tick.sql
 j8a-dispatch-fallback-chain.sql
-j8b-brainstorm-null-model.sql
-j8c-start-brainstorm-models.sql
-j9a-new-lens-agents.sql
-j9b-new-lens-pipelines.sql
-j9c-start-brainstorm-lenses.sql
 j11-provider-spend-caps.sql
-j12-error-classification.sql
 m1-model-capability.sql
 m2-capability-dispatch-gate.sql
 m4-model-autoprobe.sql
