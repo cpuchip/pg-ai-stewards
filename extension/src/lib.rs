@@ -102,37 +102,16 @@ extension_sql_file!(
 );
 
 extension_sql_file!(
-    "../4a-steward.sql",
-    name = "create_phase_4a_steward",
+    "../07-steward.sql",
+    name = "create_steward",
     requires = ["create_cost"],
-);
-
-extension_sql_file!(
-    "../4b-dispatch-override.sql",
-    name = "create_phase_4b_dispatch_override",
-    requires = [
-        "create_phase_4a_steward",
-        "create_work_items"
-    ],
-);
-
-extension_sql_file!(
-    "../4c-steward-dispatch.sql",
-    name = "create_phase_4c_steward_dispatch",
-    requires = ["create_phase_4b_dispatch_override"],
-);
-
-extension_sql_file!(
-    "../4d-steward-realign.sql",
-    name = "create_phase_4d_steward_realign",
-    requires = ["create_phase_4c_steward_dispatch"],
 );
 
 extension_sql_file!(
     "../5a-maturity-gate.sql",
     name = "create_phase_5a_maturity_gate",
     requires = [
-        "create_phase_4d_steward_realign",
+        "create_steward",
         "create_work_items"
     ],
 );
@@ -261,21 +240,9 @@ extension_sql_file!(
 // (6a's file_path-nullable migration was absorbed into the create_docs
 //  table definition at the 2026-06-12 consolidation.)
 extension_sql_file!(
-    "../6b-steward-retry-lessons.sql",
-    name = "create_batch_g2_steward_retry_lessons",
-    requires = ["create_phase_5g4_bishop_and_suggest"],
-);
-
-extension_sql_file!(
-    "../6c-quarantine-fires-atonement.sql",
-    name = "create_batch_g3_quarantine_fires_atonement",
-    requires = ["create_batch_g2_steward_retry_lessons"],
-);
-
-extension_sql_file!(
     "../6d-pending-file-writes.sql",
     name = "create_batch_g4_1_pending_file_writes",
-    requires = ["create_batch_g3_quarantine_fires_atonement"],
+    requires = ["create_phase_5g4_bishop_and_suggest"],
 );
 
 extension_sql_file!(

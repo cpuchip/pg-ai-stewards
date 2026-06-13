@@ -138,8 +138,16 @@ CREATE TABLE IF NOT EXISTS stewards.work_items (
     cost_micro_dollars  bigint NOT NULL DEFAULT 0,
     cost_cap_micro      bigint,
     cost_capped_at      timestamptz,
-    -- Model pin + human-mediated escalation queue (06-cost machinery)
+    -- Model/provider pins + human-mediated escalation queue (06-cost +
+    -- 07-steward machinery)
     model_override  text,
+    provider_override text,
+    -- Steward failure tracking (07-steward maintains these)
+    failure_count           int NOT NULL DEFAULT 0,
+    last_failure_reason     text,
+    last_failure_diagnosis  text,
+    quarantined_at          timestamptz,
+    quarantine_reason       text,
     escalation_state    text NOT NULL DEFAULT 'normal'
                     CONSTRAINT work_items_escalation_state_check
                     CHECK (escalation_state IN ('normal','queued',
@@ -391,22 +399,31 @@ COMMENT ON FUNCTION stewards.render_stage_input(uuid) IS
 'Render the current stage''s input_template against work_item state. Returns NULL if the stage has no template (caller falls back).';
 
 -- ---------------------------------------------------------------------
--- work_item_dispatch_stage(work_item_id, user_input?)
+-- work_item_dispatch_stage(work_item_id, user_input?, allow_failed?)
 --
 -- Composes input + payload + enqueues a chat work_queue row for the
 -- work_item's current_stage. Sets status='in_progress'. Builds the
 -- payload directly (not via chat_enqueue) so it can inject the
 -- _work_item_id / _stage_name markers the auto-advance trigger reads.
 --
+-- Honors work_items.model_override + provider_override (the steward's
+-- one-shot pins). p_allow_failed_status=true unlocks re-dispatch from
+-- status='failed' (steward retries pass true; other call sites stay
+-- safe by passing nothing). failure_count is NOT reset on dispatch —
+-- it tracks consecutive failures and resets only when a stage
+-- genuinely advances.
+--
 -- Input resolution priority:
---   1. Explicit p_user_input override (CLI dispatch w/ --user-input).
+--   1. Explicit p_user_input override (CLI --user-input, or the
+--      steward's retry guidance).
 --   2. Stage's input_template rendered against work_item state.
 --   3. work_item.input.user_input field (legacy fallback).
 --   4. Stringified work_item.input (last-resort fallback).
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION stewards.work_item_dispatch_stage(
-    p_work_item_id uuid,
-    p_user_input   text DEFAULT NULL
+    p_work_item_id           uuid,
+    p_user_input             text DEFAULT NULL,
+    p_allow_failed_status    boolean DEFAULT false
 ) RETURNS bigint
 LANGUAGE plpgsql AS $func$
 DECLARE
@@ -425,7 +442,9 @@ BEGIN
     IF v_wi.id IS NULL THEN
         RAISE EXCEPTION 'work_item % not found', p_work_item_id;
     END IF;
-    IF v_wi.status NOT IN ('pending', 'awaiting_review') THEN
+    IF v_wi.status NOT IN ('pending', 'awaiting_review')
+       AND NOT (p_allow_failed_status AND v_wi.status = 'failed')
+    THEN
         RAISE EXCEPTION 'work_item %: cannot dispatch from status %',
             p_work_item_id, v_wi.status;
     END IF;
@@ -437,8 +456,9 @@ BEGIN
     END IF;
 
     v_agent    := v_stage->>'agent_family';
-    v_model    := v_stage->>'model';
-    v_provider := v_stage->>'provider';
+    -- Model + provider honor the work_item's one-shot overrides.
+    v_model    := COALESCE(v_wi.model_override,    v_stage->>'model');
+    v_provider := COALESCE(v_wi.provider_override, v_stage->>'provider');
     IF v_agent IS NULL OR v_model IS NULL OR v_provider IS NULL THEN
         RAISE EXCEPTION 'work_item %: stage % missing agent_family/model/provider',
             p_work_item_id, v_wi.current_stage;
@@ -500,8 +520,8 @@ BEGIN
 END;
 $func$;
 
-COMMENT ON FUNCTION stewards.work_item_dispatch_stage(uuid, text) IS
-'Dispatch the current stage. Composes the chat body via dry_run_chat, enqueues a kind=chat work_queue row with _work_item_id/_stage_name markers, and sets status=in_progress. The auto-advance trigger (or the caller) advances after completion.';
+COMMENT ON FUNCTION stewards.work_item_dispatch_stage(uuid, text, boolean) IS
+'Dispatch the current stage. Honors work_items.model_override + provider_override; p_allow_failed_status=true unlocks steward re-dispatch from status=failed. Composes the chat body via dry_run_chat, enqueues a kind=chat work_queue row with _work_item_id/_stage_name markers, and sets status=in_progress.';
 
 -- ---------------------------------------------------------------------
 -- work_item_advance(work_item_id, stage_output)

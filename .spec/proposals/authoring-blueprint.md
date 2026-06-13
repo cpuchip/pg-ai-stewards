@@ -73,10 +73,10 @@ instrument).
 | 04 | `04-work-items.sql` | 3c1, 3c2, 3c2-5, 3c3(core half), 3c3-1, 3c3-3, 3c3-5 + 5e4§1(merged), i1, i2, i5(pulled forward), h3-1(work_items half) — **DONE B2** (promote_to_doc flag replaces 'study-write%' guard; promote via import_doc; chat_post_internal marker fix + tool_defs budget cols + perms source born in schema.rs; i3 + h3-followup-2 REASSIGNED to B3 — their substance lives in 6d/h1-6-2's subsystems: 10-sabbath births file_enqueued_at + enqueue_work_item_file final, 08-gates births on_maturity_verified final + render_file_destination) |
 | 05 | `05-mcp-bridge.sql` | 3e2-1(core), 3e2-2(core), 3e2-3(core), h1-5a, h1-7a |
 | 06 | `06-cost.sql` | 4a-cost-tracking, 4a-escalation-chain, 4g, es11, j10, j11§1-4, j12§1-2, an4, cv4 — **DONE B2** (machinery only; ALL seed rows → overlay seed-4a-cost-escalation-models.sql; record_cost_event single 11-arg form; work_items cost/escalation cols born in 04; j11's dispatch-gate + j12's start_brainstorm halves trimmed in place for B4's 14-fanout) |
-| 07 | `07-steward.sql` | 4a-steward, 4b, 4c, 4d, 6b |
+| 07 | `07-steward.sql` | 4a-steward, 4b, 4c, 4d, 6b, 6c(pulled forward — it was only the tick redefinition) — **DONE B2, batch complete** (steward_tick in 6c final form: lessons-aware guidance + atonement-on-quarantine; dispatch born 3-arg override-aware in 04; failure/quarantine/provider_override cols born in 04; 4d's stage_models seeds → overlay; provider fallback de-hardcoded — NULL means the stage's provider applies) |
 | 08 | `08-gates.sql` | 5a, 5b, 5c, 5e4(§1 already in 04), h1-6-1, h1-6-2, h1-6-6, l28, i3(on_maturity_verified final form), h3-followup-2(render_file_destination) |
 | 09 | `09-intents-covenants.sql` | 5d, 5d2, 5d3, 5d4, 5d5, pr1 (values_anchor + extensions/presiding INCLUDED) |
-| 10 | `10-sabbath-atonement.sql` | 5e, 5e2, 5e3, 6c, 6d, 6e, am1, i3(work_items born with file_enqueued_at — no materialized_at; enqueue_work_item_file final form) |
+| 10 | `10-sabbath-atonement.sql` | 5e, 5e2, 5e3, 6d, 6e, am1, i3(work_items born with file_enqueued_at — no materialized_at; enqueue_work_item_file final form) — (6c absorbed at B2 into 07-steward) |
 | 11 | `11-trust.sql` | 5f, 5f2, 5f3, 5f4, 5f5 |
 | 12 | `12-council.sql` | 5g, 5g2, 5g3, 5g4 |
 | 13 | `13-research-pipelines.sql` | h1-0, h1-1→generic example, h1-2, h1-7b, h2, h3-4, h3-5, h3-followup-3, i4, i6, i7, pe2 (i5 absorbed at B2 — origin CHECK born with agent_proposal) |
@@ -111,7 +111,14 @@ Dockerfile stage-2; doc_* rename swept through every downstream chain
 file, the runner-replay files, AND the Go daemons — tool names
 study_search/study_get/study_similar/study_citations → doc_*;
 todos.parent_kind values lowercased to workstream|doc|todo).
-**B2** = 03–07. **B3** = 08–12. **B4** = 13–16. **B5** = 17–19 +
+**B2** = 03–07 — **SHIPPED 2026-06-12/13** (03 `80c9f4c`, 04 `d1d74ef`,
+05 `c4ed606`, 06 `e49ec38`, 07 batch-final commit; 28 historical files
+died, manifest 189→155; operator seeds now live in the workspace
+overlay seed-4a-cost-escalation-models.sql; lib.rs requires-graph is
+NOT linear — sweep for non-linear edges on every chain cut).
+**B3** = 08–12. **B4** = 13–16 (incl. j8a+j11-dispatch+j12-brainstorm
+trimmed halves; es7's judge-gated tool_dispatch_complete_waiting;
+es1's cancel-cascade). **B5** = 17–19 +
 seed_harness genericize + bgworker `_kind` enum. **B6** = tests/ + CI
 workflow + rename-map.tsv finalization + overlay copies updated to new
 names (overlay note: init/01-seed-workstreams + any overlay migration
