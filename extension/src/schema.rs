@@ -580,7 +580,12 @@ extension_sql!(
         args_schema     jsonb NOT NULL,        -- JSON Schema for params
         execute_target  jsonb NOT NULL,
         active          bool NOT NULL DEFAULT true,
-        created_at      timestamptz NOT NULL DEFAULT now()
+        created_at      timestamptz NOT NULL DEFAULT now(),
+        -- Budget hooks (3c.2.5, born here at consolidation): typical
+        -- token weight of a result / one invocation. NULL = unknown.
+        -- Populate from observation data, not guesses.
+        expected_result_tokens     int,
+        expected_invocation_tokens int
     );
 
     -- ============================================================
@@ -594,6 +599,12 @@ extension_sql!(
         agent_family  text NOT NULL,
         tool_pattern  text NOT NULL,
         action        text NOT NULL CHECK (action IN ('allow','ask','deny')),
+        -- Provenance (3c.3.3, born here at consolidation): the importer
+        -- deletes/rebuilds only source='frontmatter' rows on agent
+        -- re-import; broadcast (substrate-internal SQL grants) and
+        -- manual (one-off psql) rows survive.
+        source        text NOT NULL DEFAULT 'frontmatter'
+                      CHECK (source IN ('frontmatter','broadcast','manual')),
         PRIMARY KEY (agent_family, tool_pattern)
     );
 
@@ -1051,6 +1062,14 @@ extension_sql!(
     -- (no user input append) and enqueue a chat work item. Used by
     -- chat_enqueue for the first turn AND by tool_dispatch's phase 3
     -- to continue the loop after appending tool replies.
+    --
+    -- Continuation chats inherit any payload keys starting with `_`
+    -- from the most recent chat work_queue row in the same session
+    -- (the 3c.3.1 fix, born here at consolidation). Without this,
+    -- continuation chats lose markers like _watchman_pass_id /
+    -- _work_item_id, so the harvest triggers only see the FIRST chat
+    -- per stage and miss the actual final chat. Generic: works for
+    -- any marker scheme as long as marker keys start with underscore.
     CREATE FUNCTION stewards.chat_post_internal(
         p_agent_family text,
         p_model        text,
@@ -1059,9 +1078,10 @@ extension_sql!(
     ) RETURNS bigint
     LANGUAGE plpgsql AS $func$
     DECLARE
-        v_body    jsonb;
-        v_payload jsonb;
-        v_work_id bigint;
+        v_body              jsonb;
+        v_payload           jsonb;
+        v_work_id           bigint;
+        v_inherited_markers jsonb;
     BEGIN
         -- compose with NULL user_input — history already contains
         -- everything we need (the user message was inserted by the
@@ -1069,6 +1089,19 @@ extension_sql!(
         -- by tool_dispatch's phase 3).
         v_body := stewards.dry_run_chat(
             p_agent_family, p_model, p_session_id, NULL);
+
+        SELECT jsonb_object_agg(je.key, je.value)
+          INTO v_inherited_markers
+          FROM stewards.work_queue wq
+          CROSS JOIN LATERAL jsonb_each(wq.payload) je
+         WHERE wq.payload->>'session_id' = p_session_id
+           AND wq.kind = 'chat'
+           AND wq.id = (
+               SELECT max(id) FROM stewards.work_queue
+                WHERE payload->>'session_id' = p_session_id
+                  AND kind = 'chat'
+           )
+           AND je.key LIKE '\_%' ESCAPE '\';
 
         v_payload := jsonb_build_object(
             'session_id',      p_session_id,
@@ -1080,7 +1113,7 @@ extension_sql!(
             -- cost AND so prompt caching keys on a stable user id.
             'body',            (v_body - '_meta')
                                || jsonb_build_object('user', p_session_id)
-        );
+        ) || coalesce(v_inherited_markers, '{}'::jsonb);
 
         INSERT INTO stewards.work_queue (kind, provider, payload)
         VALUES ('chat', p_provider, v_payload)
