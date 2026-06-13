@@ -87,9 +87,9 @@ pub(crate) enum WorkOutcome {
         // child_work_id to read each child's result/error.
         pending: Vec<(String, String, i64)>,
     },
-    /// Result of resolving a single gospel-engine reference. Write
+    /// Result of resolving a single external reference. Write
     /// phase UPSERTs into stewards.resolved_refs. content is the
-    /// raw JSON returned by /api/get?ref=... (or null if errored).
+    /// raw JSON returned by the configured resolver (or null if errored).
     Resolved {
         ref_str: String,
         content: Option<serde_json::Value>,

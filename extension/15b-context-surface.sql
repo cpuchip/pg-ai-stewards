@@ -1906,7 +1906,7 @@ Output format (markdown):
 - Doc title + slug
 - 3-5 paragraph summary
 - Key quotes preserved verbatim with attribution
-- Cross-references mentioned in the doc (other docs, scriptures, talks) if any
+- Cross-references mentioned in the doc (other docs or external sources) if any
 
 Output ONLY the markdown digest.$PROMPT$,
  0.3),

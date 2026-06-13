@@ -1,14 +1,14 @@
 //! Tool dispatch + reference resolution for the bgworker.
 //!
 //! Two `pub(crate)` entry points called from the bgworker dispatch loop:
-//! - `resolve_ref` — Phase 2.2 gospel-engine reference resolver
+//! - `resolve_ref` — config-driven external reference resolver
 //! - `tool_dispatch` — Phase 1.6 tool_calls executor (sql_fn + http kinds)
 //!
 //! Extracted from lib.rs as Phase 3c.3.6 v3 (2026-05-08). Per the
 //! pgrx-rust skill, plain `mod tools;` in lib.rs is sufficient — no
 //! `pub use` re-export needed for `pub(crate)` items.
 
-use crate::providers::GOSPEL_ENGINE_CONFIG;
+use crate::providers::RESOLVER_CONFIG;
 use crate::types::WorkOutcome;
 use pgrx::bgworkers::*;
 use pgrx::prelude::*;
@@ -47,16 +47,23 @@ pub(crate) enum ToolReply {
     },
 }
 
-/// Phase 2.2 — resolve a single gospel-engine reference like
-/// "Mosiah 18:8". GETs {GOSPEL_ENGINE_URL}/api/get?ref=<urlencoded>
-/// with the bearer token from GOSPEL_ENGINE_TOKEN.
+/// Resolve a single external reference (any string) by fetching the
+/// operator-configured endpoint. The URL comes from STEWARDS_RESOLVER_URL:
+/// a `{ref}` placeholder is replaced with the url-encoded reference, or the
+/// encoded ref is appended if the template has no placeholder. The optional
+/// STEWARDS_RESOLVER_TOKEN is sent as a bearer token. The response body is
+/// parsed as JSON and cached in stewards.resolved_refs.
 ///
-/// Soft-error semantics: a 404 from gospel-engine becomes a Resolved
-/// row with content=NULL and error="not found", NOT an Err. This way
-/// the work item completes successfully (no retry storms on
-/// genuinely-missing refs) and the cache row records the negative
-/// result. Only network failures and 5xx responses raise Err so the
-/// bgworker's retry policy can take over.
+/// Generic on purpose: the substrate does not know what a reference means
+/// (a scripture verse, a wiki slug, a product SKU) — the operator points
+/// the template at whatever HTTP service resolves it to JSON.
+///
+/// Soft-error semantics: a 404 becomes a Resolved row with content=NULL and
+/// error="not found", NOT an Err. This way the work item completes
+/// successfully (no retry storms on genuinely-missing refs) and the cache
+/// row records the negative result. Only network failures and 5xx responses
+/// raise Err so the bgworker's retry policy can take over. An unset
+/// STEWARDS_RESOLVER_URL is likewise cached as an error, not retried.
 pub(crate) fn resolve_ref(payload: &serde_json::Value) -> Result<WorkOutcome, String> {
     let ref_str = payload
         .get("ref")
@@ -64,26 +71,30 @@ pub(crate) fn resolve_ref(payload: &serde_json::Value) -> Result<WorkOutcome, St
         .ok_or_else(|| "payload.ref missing".to_string())?
         .to_string();
 
-    let cfg = GOSPEL_ENGINE_CONFIG
+    let cfg = RESOLVER_CONFIG
         .get()
         .cloned()
         .unwrap_or_default();
 
-    let Some(base) = cfg.url else {
+    let Some(template) = cfg.url else {
         // Cache the failure so we don't keep retrying with no config.
         return Ok(WorkOutcome::Resolved {
             ref_str,
             content: None,
-            error: Some("GOSPEL_ENGINE_URL not set".to_string()),
+            error: Some("STEWARDS_RESOLVER_URL not set".to_string()),
         });
     };
 
-    // Build URL with manual encoding of the ref (spaces -> %20, colon
-    // is fine in a query string but we percent-encode '&' which
-    // appears in "D&C 88:67"). reqwest's Client.get(url) does NOT
-    // re-encode the path/query, so we encode here.
+    // Manual query-value encoding of the ref (spaces -> %20, '&' which
+    // appears in refs like "D&C 88:67", etc.). reqwest's Client.get(url)
+    // does NOT re-encode the path/query, so we encode here. Substitute the
+    // {ref} placeholder; if the template has none, append the encoded ref.
     let encoded = url_encode_query_value(&ref_str);
-    let url = format!("{}/api/get?ref={}", base, encoded);
+    let url = if template.contains("{ref}") {
+        template.replace("{ref}", &encoded)
+    } else {
+        format!("{}{}", template, encoded)
+    };
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -110,11 +121,11 @@ pub(crate) fn resolve_ref(payload: &serde_json::Value) -> Result<WorkOutcome, St
     if !status.is_success() {
         // 5xx, 401, etc. — surface as Err so the work_queue marks
         // 'error' and ops can see the failure mode.
-        return Err(format!("gospel-engine HTTP {}: {}", status, body));
+        return Err(format!("resolver HTTP {}: {}", status, body));
     }
 
     let parsed: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| format!("decode gospel-engine response: {} (body={})", e, body))?;
+        .map_err(|e| format!("decode resolver response: {} (body={})", e, body))?;
 
     Ok(WorkOutcome::Resolved {
         ref_str,
@@ -124,8 +135,8 @@ pub(crate) fn resolve_ref(payload: &serde_json::Value) -> Result<WorkOutcome, St
 }
 
 /// Minimal RFC 3986 query-value percent encoder. Encodes everything
-/// outside ALPHA / DIGIT / "-._~" plus a few we know are safe in
-/// gospel-engine refs (':' is safe in a query). Avoids pulling
+/// outside ALPHA / DIGIT / "-._~" plus ':' (safe in a query value and
+/// common in many reference strings). Avoids pulling
 /// percent-encoding crate for one call site.
 fn url_encode_query_value(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);

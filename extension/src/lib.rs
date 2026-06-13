@@ -312,7 +312,7 @@ fn providers_loaded() -> TableIterator<
 
 // ---------------------------------------------------------------------------
 // Module-split breadcrumbs (Phase 3c.3.6, 2026-05-08):
-//   - Provider registry types + GospelEngineConfig → providers.rs
+//   - Provider registry types + ResolverConfig → providers.rs
 //   - WorkOutcome enum → types.rs
 //   - _PG_init + bgworker tick loop + dispatch/embed/chat → bgworker.rs
 //   - resolve_ref + tool_dispatch + exec_* helpers → tools.rs

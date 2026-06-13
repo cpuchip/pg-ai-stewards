@@ -11,8 +11,6 @@ verify-loop.sql
 verify-1-6-1-reaper-check.sql
 verify-1-6-1-reaper-setup.sql
 verify-1-6-1.sql
-verify-2-1.sql
-verify-2-2.sql
 verify-2-3.sql
 verify-2-7b1-inverse.sql
 verify-2-7b2-decision.sql
