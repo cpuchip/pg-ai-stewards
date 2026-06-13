@@ -331,7 +331,7 @@ es1's cancel-cascade).
     ct2-7e form. self_prompt_on is created first (§7.1) because compose_tools is
     LANGUAGE sql, body-validated at CREATE. No later batch redefines compose_tools
     (grep-confirmed across the remaining manifest). schema.rs base → 16 final.
-- **B5/17 SHIPPED 2026-06-13** (OSS `<pending-17>`): `17-personas.sql` — the
+- **B5/17 SHIPPED 2026-06-13** (OSS `35d66a6`): `17-personas.sql` — the
   chat-persona cognition + room-expression surface (the substrate half of the
   persona-host; OSS v0.1 = core + persona-host). The generic `persona` agent +
   persona-turn pipeline (r7) + two example provider pipelines (r8: lmstudio /
@@ -357,9 +357,23 @@ es1's cancel-cascade).
     mirroring r17's already-extracted codewright/librarian room_say grants. Core
     grants room_say + room_react to `persona` only.
   - **persona deny study_* → doc_*** (the canonical rename; rename-map row).
-- **B5/18–19 NEXT:** 18-scheduler (pe6/pe7) · 19-models (m1/m2/m4/m5/an1/zen1 +
-  the work_item_dispatch_stage dispatch-final deferred from 14 = j8a 4-layer +
-  j11 cap, accreting m2 capability-gate + r3 max-tokens) +
+- **B5/18 SHIPPED 2026-06-13** (OSS `<pending-18>`): `18-scheduler.sql` —
+  cron-style scheduled pipeline dispatch. pe6 (scheduled_pipelines table + the
+  plpgsql cron engine: cron_field_values + cron_next_after + the compute-next-due
+  trigger) + pe7 (scheduled_pipelines_fire dispatcher + watchman_scheduler_fire
+  FINAL, re-authored over 03's to tick pipelines first). Virgin smoke FULLY GREEN
+  (pgcrypto absent; 5 fns + trigger; cron parse */15→{0,15,30,45} + weekday-skip
+  → Mon 13:00; **end-to-end dispatch** — a due schedule fires a scheduler
+  work_item + advances next_due_at; **D-PE4 missed-window** skips a 48h-old run
+  without firing). 2 files retired; manifest 30→28; ext dir 48 .sql; secret-scan
+  clean. **DEVIATION (act+report):** the `ai-news-7am` operator seed (pe7) →
+  OVERLAY (a configured job referencing a general-research intent + a daily-digest
+  output path with stale AGE/study refs); core ships the machinery, not a specific
+  schedule (the B2 operator-seeds rule). watchman_scheduler_fire is a within-chain
+  re-author (03 → 18).
+- **B5/19 NEXT:** 19-models (m1/m2/m4/m5/an1/zen1 + the work_item_dispatch_stage
+  dispatch-final deferred from 14 = j8a 4-layer + j11 cap, accreting m2
+  capability-gate + r3 max-tokens) +
 seed_harness genericize + bgworker `_kind` enum. **B6** = tests/ + CI
 workflow + rename-map.tsv finalization + overlay copies updated to new
 names (overlay note: init/01-seed-workstreams + any overlay migration

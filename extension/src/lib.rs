@@ -236,6 +236,12 @@ extension_sql_file!(
     requires = ["create_subagents"],
 );
 
+extension_sql_file!(
+    "../18-scheduler.sql",
+    name = "create_scheduler",
+    requires = ["create_personas"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

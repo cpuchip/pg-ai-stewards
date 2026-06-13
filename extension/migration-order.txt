@@ -21,8 +21,6 @@ verify-4b.sql
 verify-4c.sql
 verify-5a.sql
 test-gate-e2e.sql
-pe6-scheduled-pipelines-schema-and-cron.sql
-pe7-scheduled-pipelines-fire-and-tick.sql
 j8a-dispatch-fallback-chain.sql
 j11-provider-spend-caps.sql
 m1-model-capability.sql
