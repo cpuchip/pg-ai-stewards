@@ -96,21 +96,15 @@ extension_sql_file!(
 // ---------------------------------------------------------------------------
 
 extension_sql_file!(
-    "../4a-cost-tracking.sql",
-    name = "create_phase_4a_cost_tracking",
+    "../06-cost.sql",
+    name = "create_cost",
     requires = ["create_mcp_bridge"],
-);
-
-extension_sql_file!(
-    "../4a-escalation-chain.sql",
-    name = "create_phase_4a_escalation_chain",
-    requires = ["create_phase_4a_cost_tracking"],
 );
 
 extension_sql_file!(
     "../4a-steward.sql",
     name = "create_phase_4a_steward",
-    requires = ["create_phase_4a_escalation_chain"],
+    requires = ["create_cost"],
 );
 
 extension_sql_file!(
@@ -135,16 +129,10 @@ extension_sql_file!(
 );
 
 extension_sql_file!(
-    "../4g-ad-hoc-cost.sql",
-    name = "create_phase_4g_ad_hoc_cost",
-    requires = ["create_phase_4d_steward_realign"],
-);
-
-extension_sql_file!(
     "../5a-maturity-gate.sql",
     name = "create_phase_5a_maturity_gate",
     requires = [
-        "create_phase_4g_ad_hoc_cost",
+        "create_phase_4d_steward_realign",
         "create_work_items"
     ],
 );

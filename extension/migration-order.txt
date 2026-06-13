@@ -15,8 +15,6 @@ verify-2-7b2-decision.sql
 verify-2-7b3-budget.sql
 verify-3c2-inverse.sql
 verify-3e2-2.sql
-4a-cost-tracking.sql
-4a-escalation-chain.sql
 verify-4a.sql
 4a-steward.sql
 verify-4a-steward.sql
@@ -25,7 +23,6 @@ verify-4b.sql
 4c-steward-dispatch.sql
 4d-steward-realign.sql
 verify-4c.sql
-4g-ad-hoc-cost.sql
 5a-maturity-gate.sql
 verify-5a.sql
 5b-scenarios-verify.sql
@@ -127,7 +124,6 @@ es7-judge-brief-dispatch.sql
 es8-consult-subagent.sql
 es9-drop-leaf-index.sql
 es10-grant-consult-subagent.sql
-es11-gateway-upstream-cost.sql
 pe2-research-summary-pipeline.sql
 pe6-scheduled-pipelines-schema-and-cron.sql
 pe7-scheduled-pipelines-fire-and-tick.sql
@@ -138,7 +134,6 @@ j8c-start-brainstorm-models.sql
 j9a-new-lens-agents.sql
 j9b-new-lens-pipelines.sql
 j9c-start-brainstorm-lenses.sql
-j10-provider-models-pricing.sql
 j11-provider-spend-caps.sql
 j12-error-classification.sql
 m1-model-capability.sql
@@ -147,9 +142,7 @@ m4-model-autoprobe.sql
 m5-autoprobe-schedule.sql
 r3-dispatch-max-tokens.sql
 an1-api-format.sql
-an4-lmstudio-chat-pricing.sql
 zen1-opencode-zen-provider.sql
-cv4-minimax-m3.sql
 r7-persona-turn.sql
 r8-persona-provider-pipelines.sql
 ct2-1-context-state-model.sql

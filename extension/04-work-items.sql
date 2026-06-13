@@ -130,10 +130,25 @@ CREATE TABLE IF NOT EXISTS stewards.work_items (
     stage_results   jsonb NOT NULL DEFAULT '{}'::jsonb,
     -- All chat session ids spawned by this work_item (one per stage).
     session_ids     text[] NOT NULL DEFAULT ARRAY[]::text[],
-    -- Cost guards
+    -- Cost guards (06-cost maintains the micro-dollar columns via the
+    -- cost_events trigger; born here so the table is complete)
     token_budget    int,
     tokens_in       int NOT NULL DEFAULT 0,
     tokens_out      int NOT NULL DEFAULT 0,
+    cost_micro_dollars  bigint NOT NULL DEFAULT 0,
+    cost_cap_micro      bigint,
+    cost_capped_at      timestamptz,
+    -- Model pin + human-mediated escalation queue (06-cost machinery)
+    model_override  text,
+    escalation_state    text NOT NULL DEFAULT 'normal'
+                    CONSTRAINT work_items_escalation_state_check
+                    CHECK (escalation_state IN ('normal','queued',
+                                                 'in_progress','failed',
+                                                 'resolved')),
+    escalation_claimed_by   text,
+    escalation_claimed_at   timestamptz,
+    escalation_completed_at timestamptz,
+    escalation_attempts     int NOT NULL DEFAULT 0,
     -- Provenance + planning (h3-1, born here)
     origin          text NOT NULL DEFAULT 'human'
                     CONSTRAINT work_items_origin_check
