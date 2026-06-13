@@ -15,14 +15,16 @@
 # is part of it — no go.work, no sibling-module stubs (the daemon-leg
 # consolidation, 2026-06-12, collapsed five binaries into this one module).
 #
-# This image ships ONLY the substrate-intrinsic binaries:
+# This image ships the substrate-intrinsic binaries:
 #   - stewards-mcp  (the bridge itself + the substrate self-surface)
 #   - fs-read-mcp   (path-scoped filesystem read, spawned on demand)
 #   - stewards-cli  (migrations / ad-hoc CLI inside the container)
-# Generic utilities (fetch-md, git) arrive in M2; coder-mcp in M1 behind
-# the hardening-review Hinge. Domain MCP servers (your own search / docs /
-# data tools) are "bring your own" — register one in an overlay and add its
-# binary here.
+#   - coder-mcp     (the sandbox coding capability — spawns hardened
+#                    coder-runtime sandboxes against the host docker daemon;
+#                    see SECURITY.md for the trust model + hardening review)
+# Generic utilities (fetch-md, git) arrive in M2. Domain MCP servers (your
+# own search / docs / data tools) are "bring your own" — register one in an
+# overlay and add its binary here.
 # =====================================================================
 
 # ---------------------------------------------------------------------
@@ -45,20 +47,27 @@ ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 
 RUN go build -trimpath -ldflags="-s -w" -o /out/stewards-mcp  ./cmd/stewards-mcp  \
  && go build -trimpath -ldflags="-s -w" -o /out/fs-read-mcp   ./cmd/fs-read-mcp   \
- && go build -trimpath -ldflags="-s -w" -o /out/stewards-cli  ./cmd/stewards-cli
+ && go build -trimpath -ldflags="-s -w" -o /out/stewards-cli  ./cmd/stewards-cli  \
+ && go build -trimpath -ldflags="-s -w" -o /out/coder-mcp     ./cmd/coder-mcp
 
 # ---------------------------------------------------------------------
-# Stage 2 — runtime. Slim alpine + the three binaries.
+# Stage 2 — runtime. Slim alpine + the substrate binaries.
 # ---------------------------------------------------------------------
 FROM alpine:3.20
 
 # ca-certificates: HTTPS to model providers + remote MCP servers (e.g. Exa).
 # tzdata: sane timestamps in logs and scheduled-pipeline cron math.
-RUN apk add --no-cache ca-certificates tzdata
+# docker-cli + git + github-cli: coder-mcp's sandbox-manager shells `docker`
+# against the host daemon (socket mounted by compose) to spawn coder-runtime
+# sandboxes, and runs clone/commit/push/gh-pr BRIDGE-SIDE (the GitHub token
+# lives here, never inside a sandbox). Omit the coder mcp_server row (or skip
+# building coder-runtime) if you don't want the coding capability.
+RUN apk add --no-cache ca-certificates tzdata git github-cli docker-cli
 
 COPY --from=builder /out/stewards-mcp  /usr/local/bin/stewards-mcp
 COPY --from=builder /out/fs-read-mcp   /usr/local/bin/fs-read-mcp
 COPY --from=builder /out/stewards-cli  /usr/local/bin/stewards-cli
+COPY --from=builder /out/coder-mcp     /usr/local/bin/coder-mcp
 
 # Default DSN points at the compose service name `pg`; compose overrides it.
 ENV STEWARDS_DSN="postgres://stewards:stewards@pg:5432/stewards?sslmode=disable"
