@@ -12,8 +12,8 @@
 --   2. pg-ai-stewards — re-uses the existing /usr/local/bin/stewards-mcp
 --      binary (the same one Claude Code talks to in stdio mode).
 --      When invoked without subcommand args, it serves the inbound MCP
---      tool surface: study_search, study_get, study_similar,
---      study_citations, work_item_list, work_item_show,
+--      tool surface: doc_search, doc_get, doc_similar,
+--      doc_citations, work_item_list, work_item_show,
 --      watchman_pass_show, watchman_passes_list, work_item_escalation_*.
 --      We register it here as a *bridge-spawnable* MCP so the substrate's
 --      internal research agent can call those tools through the bridge
@@ -63,10 +63,10 @@ ON CONFLICT (name) DO UPDATE
 -- the same pg:5432 service name.
 --
 -- Tool surface (registered by tools.go in stewards-mcp):
---   - study_search          full-text search
---   - study_get             read by slug
---   - study_similar         embedding edges
---   - study_citations       cited canonical sources
+--   - doc_search          full-text search
+--   - doc_get             read by slug
+--   - doc_similar         embedding edges
+--   - doc_citations       cited canonical sources
 --   - work_item_list        list work_items by filter
 --   - work_item_show        read a work_item
 --   - watchman_pass_show    read a watchman pass
@@ -78,7 +78,7 @@ VALUES (
   'pg-ai-stewards',
   'Substrate self-surface — exposes the substrate''s own studies/work_items/'
     || 'watchman read tools to internal agents through the bridge proxy. The '
-    || 'agent calls study_search/work_item_show to consult prior work before '
+    || 'agent calls doc_search/work_item_show to consult prior work before '
     || 'doing external research. Escalation write tools (work_item_escalation_*) '
     || 'exist on the same MCP but are excluded from research-agent grants — '
     || 'they belong to the operator review surface.',

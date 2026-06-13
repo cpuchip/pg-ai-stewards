@@ -16,7 +16,7 @@
 --   - model: qwen3.6-plus (cheaper; context-gathering is structured, not creative)
 --   - provider: opencode_go
 --   - auto_advance: true
---   - tools_disabled: false (needs fs-read + study_search etc.)
+--   - tools_disabled: false (needs fs-read + doc_search etc.)
 --
 -- Gather stage's input_template is rewritten to:
 --   (a) drop the "CONSULT PRIOR WORK FIRST" section (context_gather owns
@@ -57,9 +57,9 @@ You have:
 - `fs_search` (regex search across `.spec/journal/*`, `.spec/proposals/*`, `.mind/*`, `docs/**`)
 - `fs_read` (read a file in full)
 - `fs_list` (list files matching a glob)
-- `study_search` (substrate's studies corpus — gospel + research + planning)
-- `study_get` (read a study by slug)
-- `study_similar` (related studies via embedding edges)
+- `doc_search` (substrate's studies corpus — gospel + research + planning)
+- `doc_get` (read a study by slug)
+- `doc_similar` (related studies via embedding edges)
 - `work_item_list` / `work_item_show` (prior work_items on this binding)
 
 ## HARD CONSTRAINTS
@@ -106,7 +106,7 @@ Given the prior context above, find external sources to fill the gaps and answer
 
 You have `web_search_exa` (Exa neural search), `web_search` (DuckDuckGo), `news_search`, `fetch_url`, `fetch_urls`, `yt_search`, `yt_get`, and others. Use 1-2 search calls per round to cast wide; use `fetch_url` to read a specific high-value source. Parallel tool calls in one round = ONE round.
 
-You can also still use `fs_*` and `study_*` if the prior context surfaces a substrate document you want to read directly — but skip another full sweep; context_gather already did that.
+You can also still use `fs_*` and `doc_*` if the prior context surfaces a substrate document you want to read directly — but skip another full sweep; context_gather already did that.
 
 ## FOR EACH SOURCE YOU KEEP
 

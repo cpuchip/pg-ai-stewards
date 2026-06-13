@@ -169,11 +169,11 @@ CREATE OR REPLACE FUNCTION stewards.watchman_input(p_slug text)
 RETURNS text
 LANGUAGE plpgsql STABLE AS $func$
 DECLARE
-    v_study  stewards.studies;
+    v_study  stewards.docs;
     v_input  text;
     v_neighbors text;
 BEGIN
-    SELECT * INTO v_study FROM stewards.studies WHERE slug = p_slug;
+    SELECT * INTO v_study FROM stewards.docs WHERE slug = p_slug;
     IF v_study.id IS NULL THEN
         RETURN NULL;
     END IF;
@@ -191,7 +191,7 @@ BEGIN
     )
     INTO v_neighbors
     FROM stewards.context_for(p_slug, 1) c
-    LEFT JOIN stewards.studies s ON s.slug = c.neighbor
+    LEFT JOIN stewards.docs s ON s.slug = c.neighbor
     WHERE c.hop = 1;
 
     v_input := format(

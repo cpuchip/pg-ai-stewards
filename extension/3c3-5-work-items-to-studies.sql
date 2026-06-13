@@ -1,15 +1,15 @@
 -- =====================================================================
--- Phase 3c.3.5 — auto-promote completed work_items into stewards.studies
+-- Phase 3c.3.5 — auto-promote completed work_items into stewards.docs
 --
 -- The substrate produces studies via study-write pipelines. They sit in
 -- work_items.stage_results as JSONB until something pulls them out.
 -- Future Watchman passes that walk the studies graph won't see them
--- unless they exist as stewards.studies rows.
+-- unless they exist as stewards.docs rows.
 --
 -- This file adds:
 --   1. stewards.work_item_promote_to_study(work_item_id) — explicit
 --      function that takes a completed work_item and upserts it as a
---      study via stewards.import_study(). Single code path with the
+--      study via stewards.import_doc(). Single code path with the
 --      regular importer.
 --   2. AFTER UPDATE trigger on work_items that fires the function on
 --      transition to status='completed' for any pipeline matching
@@ -20,7 +20,7 @@
 -- Slugs are namespaced 'substrate--{work_item_slug}' to prevent
 -- collision with workspace studies imported from `study/`.
 --
--- Idempotent: import_study() is itself an UPSERT, the trigger guards
+-- Idempotent: import_doc() is itself an UPSERT, the trigger guards
 -- on the OLD→NEW transition, and the backfill calls the same function.
 -- =====================================================================
 
@@ -83,7 +83,7 @@ BEGIN
         'actor',           v_wi.actor
     );
 
-    PERFORM stewards.import_study(
+    PERFORM stewards.import_doc(
         v_slug,
         '.substrate-produced/' || v_slug || '.md',
         v_title,
@@ -97,8 +97,8 @@ END;
 $$;
 
 COMMENT ON FUNCTION stewards.work_item_promote_to_study(uuid) IS
-  'Upserts a completed study-write work_item into stewards.studies '
-  'via the standard import_study() path. Returns the resulting slug, '
+  'Upserts a completed study-write work_item into stewards.docs '
+  'via the standard import_doc() path. Returns the resulting slug, '
   'or NULL if the work_item was not promotable (wrong status, wrong '
   'pipeline, or empty review output). Idempotent.';
 
@@ -126,7 +126,7 @@ CREATE TRIGGER work_item_promote_trg
 
 -- ---------------------------------------------------------------------
 -- 3. Backfill — promote any work_items that completed before this file
---    was applied. Idempotent because import_study() is an upsert.
+--    was applied. Idempotent because import_doc() is an upsert.
 -- ---------------------------------------------------------------------
 DO $backfill$
 DECLARE

@@ -3,9 +3,9 @@
 -- Live-DB migration. Same pattern as 2-6a/b/c.
 --
 -- Adds:
---   - stewards.studies.last_consolidated_at column
+--   - stewards.docs.last_consolidated_at column
 --     (the existing `updated_at` column already serves as
---     `last_touched_at` because the touch_study() trigger only
+--     `last_touched_at` because the touch_doc() trigger only
 --     bumps it on semantic changes to title/body/frontmatter.
 --     No new column needed for that side.)
 --   - stewards.verdicts table — one row per consolidation pass.
@@ -18,7 +18,7 @@
 --     last_consolidated_at in one transaction (single-write rule).
 --   - stewards.record_finding() — writes a finding row.
 --   - stewards.acknowledge_finding() — marks a finding acknowledged.
---   - stewards.study_history() — verdict + finding timeline for a
+--   - stewards.doc_history() — verdict + finding timeline for a
 --     single doc.
 --
 -- The schema enforces the anti-loop discipline directly:
@@ -37,11 +37,11 @@
 -- ============================================================
 -- studies.last_consolidated_at
 -- ============================================================
-ALTER TABLE stewards.studies
+ALTER TABLE stewards.docs
     ADD COLUMN IF NOT EXISTS last_consolidated_at timestamptz;
 
 CREATE INDEX IF NOT EXISTS studies_dirty_idx
-    ON stewards.studies (updated_at)
+    ON stewards.docs (updated_at)
     WHERE last_consolidated_at IS NULL
        OR updated_at > last_consolidated_at;
 
@@ -64,7 +64,7 @@ CREATE INDEX IF NOT EXISTS studies_dirty_idx
 CREATE TABLE IF NOT EXISTS stewards.verdicts (
     id              bigserial PRIMARY KEY,
     study_id        text NOT NULL
-                    REFERENCES stewards.studies(id) ON DELETE CASCADE,
+                    REFERENCES stewards.docs(id) ON DELETE CASCADE,
     verdict         text NOT NULL
                     CHECK (verdict IN ('clean', 'drift', 'done',
                                         'superseded', 'skipped')),
@@ -101,7 +101,7 @@ CREATE INDEX IF NOT EXISTS verdicts_verdict_idx
 CREATE TABLE IF NOT EXISTS stewards.findings (
     id              bigserial PRIMARY KEY,
     study_id        text
-                    REFERENCES stewards.studies(id) ON DELETE CASCADE,
+                    REFERENCES stewards.docs(id) ON DELETE CASCADE,
     -- study_id is nullable for synthesis findings that span
     -- multiple docs (related_study_ids carries the full set).
     related_study_ids text[] NOT NULL DEFAULT ARRAY[]::text[],
@@ -139,7 +139,7 @@ SELECT s.id,
        s.last_consolidated_at,
        (s.updated_at - coalesce(s.last_consolidated_at,
                                  'epoch'::timestamptz)) AS dirty_for
-  FROM stewards.studies s
+  FROM stewards.docs s
  WHERE (s.last_consolidated_at IS NULL
         OR s.updated_at > s.last_consolidated_at)
    AND NOT EXISTS (
@@ -173,7 +173,7 @@ DECLARE
     v_id       bigint;
 BEGIN
     SELECT s.id INTO v_study_id
-      FROM stewards.studies s
+      FROM stewards.docs s
      WHERE s.slug = p_slug;
     IF v_study_id IS NULL THEN
         RAISE EXCEPTION 'record_verdict: no study with slug %', p_slug;
@@ -189,9 +189,9 @@ BEGIN
 
     -- Bump last_consolidated_at. Use a direct UPDATE that does NOT
     -- bump updated_at (which would re-dirty the doc immediately).
-    -- The touch_study() trigger only bumps updated_at on
+    -- The touch_doc() trigger only bumps updated_at on
     -- title/body/frontmatter changes, so this UPDATE is safe.
-    UPDATE stewards.studies
+    UPDATE stewards.docs
        SET last_consolidated_at = now()
      WHERE id = v_study_id;
 
@@ -219,13 +219,13 @@ DECLARE
     v_id           bigint;
 BEGIN
     SELECT s.id INTO v_study_id
-      FROM stewards.studies s
+      FROM stewards.docs s
      WHERE s.slug = p_slug;
     -- Note: study_id may be NULL for synthesis findings that span
     -- only related studies. We allow that.
 
     SELECT array_agg(s.id) INTO v_related_ids
-      FROM stewards.studies s
+      FROM stewards.docs s
      WHERE s.slug = ANY(p_related_slugs);
 
     INSERT INTO stewards.findings
@@ -276,10 +276,10 @@ END;
 $func$;
 
 -- ============================================================
--- Function: study_history()
+-- Function: doc_history()
 -- Returns verdict + finding timeline for a single doc, newest first.
 -- ============================================================
-CREATE OR REPLACE FUNCTION stewards.study_history(p_slug text)
+CREATE OR REPLACE FUNCTION stewards.doc_history(p_slug text)
 RETURNS TABLE (
     event_at    timestamptz,
     event_type  text,
@@ -289,7 +289,7 @@ RETURNS TABLE (
 )
 LANGUAGE sql STABLE AS $func$
     WITH s AS (
-        SELECT id FROM stewards.studies WHERE slug = p_slug
+        SELECT id FROM stewards.docs WHERE slug = p_slug
     )
     SELECT v.created_at,
            ('verdict:' || v.verdict)::text,

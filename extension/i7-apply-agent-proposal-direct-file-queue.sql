@@ -135,7 +135,7 @@ BEGIN
     -- Per-source-type DB landing
     IF v_source_type IN ('study','lesson','note','exhibit') THEN
         SELECT id INTO v_existing_id
-          FROM stewards.studies
+          FROM stewards.docs
          WHERE kind = v_source_type AND slug = v_slug
          LIMIT 1;
         IF v_existing_id IS NOT NULL THEN
@@ -152,7 +152,7 @@ BEGIN
                             'rationale', v_rationale
                          );
 
-        INSERT INTO stewards.studies (slug, title, body, kind, frontmatter, project_association, file_path)
+        INSERT INTO stewards.docs (slug, title, body, kind, frontmatter, project_association, file_path)
         VALUES (v_slug, v_title, v_body, v_source_type, v_frontmatter, v_project, v_file_dest);
 
     ELSIF v_source_type = 'schema-migration' THEN

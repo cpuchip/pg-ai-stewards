@@ -1300,45 +1300,43 @@ extension_sql!(
 );
 
 // ---------------------------------------------------------------------------
-// Phase 2.1 — Studies + AGE citations
+// Docs corpus (authored 2026-06-12; consolidates the historical Phase 2.1
+// "studies" block plus the 6a / h3-1 column migrations).
 //
-// Studies are first-class rows with embeddings (so similarity search
-// works the same way it does for brain entries). Citations to scriptures
-// and conference talks are AGE edges — one Study vertex per study row,
-// one ScriptureRef / Talk vertex per unique URI cited.
+// Docs are first-class rows with embeddings (so similarity search works
+// the same way it does for brain entries). Citations to canonical sources
+// are typed CITES edges in the relational graph (01-graph.sql) — one
+// 'doc' node per doc row, one node per unique URI cited.
 //
-// URI scheme: we use the workspace-relative path under gospel-library/
-// as the canonical id. Examples:
+// URI scheme: we use the workspace-relative path of the cited source as
+// the canonical id. Examples (a scripture-corpus deployment):
 //   eng/scriptures/bofm/mosiah/18.md          (whole chapter)
 //   eng/scriptures/bofm/mosiah/18.md#11       (single verse)
 //   eng/general-conference/2024/04/<slug>.md  (talk)
-// This avoids inventing an lds:// scheme before we know what the
-// resolver will need; gospel-engine-v2's /api/get already accepts
-// these paths.
-//
-// The AGE graph 'stewards_graph' is created in init/00-extensions.sql
-// because it requires AGE to be loaded in the session, and CREATE
-// EXTENSION pg_ai_stewards may run before the session has LOAD'd age.
-// import_study() defends against the graph not existing by calling
-// stewards.ensure_studies_graph() on first invocation per session.
 // ---------------------------------------------------------------------------
 extension_sql!(
     r#"
-    CREATE TABLE stewards.studies (
+    CREATE TABLE stewards.docs (
         id              text PRIMARY KEY DEFAULT gen_random_uuid()::text,
         slug            text NOT NULL UNIQUE,
         title           text NOT NULL,
-        file_path       text NOT NULL,
+        -- Nullable: docs promoted from completed work items may not
+        -- have a file destination (absorbed from migration 6a).
+        file_path       text,
         body            text NOT NULL DEFAULT '',
         frontmatter     jsonb NOT NULL DEFAULT '{}'::jsonb,
 
-        -- Phase 2.5: kind discriminator. 'study' is the default for
-        -- back-compat with all pre-2.5 import_study() calls. Other
-        -- known kinds: 'doc', 'proposal', 'phase-doc', 'journal'.
-        -- A CHECK constraint is intentionally NOT added yet — the
-        -- taxonomy is still settling and we don't want migration
-        -- pain when a new kind appears.
-        kind            text NOT NULL DEFAULT 'study',
+        -- Kind discriminator. Open taxonomy — known kinds include
+        -- 'doc', 'study', 'proposal', 'phase-doc', 'journal'. A CHECK
+        -- constraint is intentionally NOT added: the taxonomy belongs
+        -- to the deployment, and a new kind should cost a row, not a
+        -- migration.
+        kind            text NOT NULL DEFAULT 'doc',
+
+        -- Cross-domain metadata (absorbed from migration h3-1).
+        tags                text[] NOT NULL DEFAULT '{}',
+        source_type         text,
+        project_association text,
 
         -- Embedding (populated async via the same embed work_queue
         -- path that brain_entries uses; trigger below).
@@ -1357,28 +1355,32 @@ extension_sql!(
         updated_at      timestamptz NOT NULL DEFAULT now()
     );
 
-    CREATE INDEX studies_slug_idx       ON stewards.studies (slug);
-    CREATE INDEX studies_kind_idx        ON stewards.studies (kind);
-    CREATE INDEX studies_created_idx    ON stewards.studies (created_at DESC);
-    CREATE INDEX studies_fts_idx        ON stewards.studies USING gin (body_tsv);
-    CREATE INDEX studies_embedding_idx  ON stewards.studies
+    CREATE INDEX docs_slug_idx       ON stewards.docs (slug);
+    CREATE INDEX docs_kind_idx       ON stewards.docs (kind);
+    CREATE INDEX docs_created_idx    ON stewards.docs (created_at DESC);
+    CREATE INDEX docs_fts_idx        ON stewards.docs USING gin (body_tsv);
+    CREATE INDEX docs_embedding_idx  ON stewards.docs
         USING hnsw (embedding vector_cosine_ops);
-    CREATE INDEX studies_frontmatter_idx ON stewards.studies USING gin (frontmatter);
+    CREATE INDEX docs_frontmatter_idx ON stewards.docs USING gin (frontmatter);
+    CREATE INDEX docs_tags_gin        ON stewards.docs USING gin (tags);
+    CREATE INDEX docs_source_type_idx ON stewards.docs (source_type);
+    CREATE INDEX docs_project_association_idx
+        ON stewards.docs (project_association);
 
-    CREATE TABLE stewards.study_versions (
+    CREATE TABLE stewards.doc_versions (
         id          bigserial PRIMARY KEY,
-        study_id    text NOT NULL
-                    REFERENCES stewards.studies(id) ON DELETE CASCADE,
+        doc_id      text NOT NULL
+                    REFERENCES stewards.docs(id) ON DELETE CASCADE,
         title       text NOT NULL,
         body        text NOT NULL,
         frontmatter jsonb NOT NULL DEFAULT '{}'::jsonb,
         changed_by  text NOT NULL DEFAULT 'system',
         changed_at  timestamptz NOT NULL DEFAULT now()
     );
-    CREATE INDEX study_versions_study_idx
-        ON stewards.study_versions (study_id, changed_at DESC);
+    CREATE INDEX doc_versions_doc_idx
+        ON stewards.doc_versions (doc_id, changed_at DESC);
 
-    CREATE FUNCTION stewards.touch_study() RETURNS trigger
+    CREATE FUNCTION stewards.touch_doc() RETURNS trigger
     LANGUAGE plpgsql AS $func$
     BEGIN
         IF TG_OP = 'UPDATE' THEN
@@ -1386,8 +1388,8 @@ extension_sql!(
                OR NEW.body         IS DISTINCT FROM OLD.body
                OR NEW.frontmatter  IS DISTINCT FROM OLD.frontmatter
             THEN
-                INSERT INTO stewards.study_versions
-                    (study_id, title, body, frontmatter, changed_by)
+                INSERT INTO stewards.doc_versions
+                    (doc_id, title, body, frontmatter, changed_by)
                 VALUES
                     (OLD.id, OLD.title, OLD.body, OLD.frontmatter,
                      coalesce(current_setting('stewards.actor', true), 'system'));
@@ -1398,13 +1400,13 @@ extension_sql!(
     END;
     $func$;
 
-    CREATE TRIGGER studies_touch
-        BEFORE UPDATE ON stewards.studies
-        FOR EACH ROW EXECUTE FUNCTION stewards.touch_study();
+    CREATE TRIGGER docs_touch
+        BEFORE UPDATE ON stewards.docs
+        FOR EACH ROW EXECUTE FUNCTION stewards.touch_doc();
 
     -- Embed-enqueue trigger. Reuses the existing 'embed' work_kind
     -- in the bgworker (which UPDATEs stewards.<target_table> by id).
-    CREATE FUNCTION stewards.enqueue_study_embed() RETURNS trigger
+    CREATE FUNCTION stewards.enqueue_doc_embed() RETURNS trigger
     LANGUAGE plpgsql AS $func$
     BEGIN
         IF TG_OP = 'INSERT'
@@ -1416,7 +1418,7 @@ extension_sql!(
                 'embed',
                 'lm_studio',
                 jsonb_build_object(
-                    'target_table', 'studies',
+                    'target_table', 'docs',
                     'target_id',    NEW.id,
                     'text',         coalesce(NEW.title, '') || E'\n\n' || coalesce(NEW.body, ''),
                     'model',        'nomic-embed-text-v1.5',
@@ -1428,46 +1430,10 @@ extension_sql!(
     END;
     $func$;
 
-    CREATE TRIGGER studies_enqueue_embed
+    CREATE TRIGGER docs_enqueue_embed
         AFTER INSERT OR UPDATE OF title, body
-        ON stewards.studies
-        FOR EACH ROW EXECUTE FUNCTION stewards.enqueue_study_embed();
-
-    -- ============================================================
-    -- AGE graph bootstrap.
-    --
-    -- ensure_studies_graph() is idempotent and safe to call from any
-    -- session. It LOADs age and creates the graph if missing. Called
-    -- at startup from 00-extensions.sql AND defensively from
-    -- import_study so a fresh session can ingest without a separate
-    -- bootstrap step.
-    -- ============================================================
-    CREATE FUNCTION stewards.ensure_studies_graph() RETURNS void
-    LANGUAGE plpgsql AS $func$
-    BEGIN
-        LOAD 'age';
-        -- Add ag_catalog to the session search_path. This persists for
-        -- the rest of the transaction (set_config local := true) so
-        -- callers can use cypher() and ag_catalog.* without further
-        -- qualification.
-        --
-        -- IMPORTANT: do NOT call this function during CREATE EXTENSION
-        -- (e.g. from a seed in extension_sql_file!). pgrx's emitted
-        -- pg_extern CREATE FUNCTION statements are unqualified and
-        -- inherit the install transaction's search_path; if ag_catalog
-        -- is first, every later pg_extern lands in ag_catalog instead
-        -- of stewards. The workstream seed was moved out of 2-6a to
-        -- init/01-seed-workstreams.sql for exactly this reason in v0.2.0.
-        PERFORM set_config('search_path',
-            'ag_catalog,' || current_setting('search_path'), true);
-        IF NOT EXISTS (
-            SELECT 1 FROM ag_catalog.ag_graph WHERE name = 'stewards_graph'
-        ) THEN
-            PERFORM ag_catalog.create_graph('stewards_graph');
-            RAISE NOTICE 'created AGE graph stewards_graph';
-        END IF;
-    END;
-    $func$;
+        ON stewards.docs
+        FOR EACH ROW EXECUTE FUNCTION stewards.enqueue_doc_embed();
 
     -- ============================================================
     -- Markdown link parser.
@@ -1530,40 +1496,36 @@ extension_sql!(
     $func$;
 
     -- ============================================================
-    -- import_study: insert/upsert the row + sync AGE graph.
+    -- import_doc: insert/upsert the row + sync the graph.
     --
-    -- - INSERT or UPDATE stewards.studies on slug conflict.
-    -- - For each unique gospel-library link in the body, MERGE the
-    --   target vertex (Scripture/Talk/Manual) and a CITES edge.
-    -- - Existing CITES edges from this Study are deleted first
+    -- - INSERT or UPDATE stewards.docs on slug conflict.
+    -- - Upsert the 'doc' node, then for each unique source link in
+    --   the body, upsert the cited node + a CITES edge. The cited
+    --   node's kind is the parsed link kind (scripture | talk |
+    --   manual | other); its ref is the canonical URI.
+    -- - Existing CITES edges from this doc are deleted first
     --   (sync semantics: edges always reflect the current body).
     --
-    -- AGE writes use cypher()'s 3-argument form: the third arg is
-    -- an agtype passed as $param inside the Cypher body. This is
-    -- the only safe way to inject user data into Cypher — string
-    -- interpolation breaks on apostrophes (AGE does NOT recognize
-    -- PG's '' escape as a single quote inside Cypher string literals).
+    -- Edge weight carries the citation count so weighted walks can
+    -- rank by citation density; props keep the exact numbers.
     --
-    -- Returns the study id.
+    -- Returns the doc id.
     -- ============================================================
-    CREATE FUNCTION stewards.import_study(
+    CREATE FUNCTION stewards.import_doc(
         p_slug        text,
         p_file_path   text,
         p_title       text,
         p_body        text,
         p_frontmatter jsonb DEFAULT '{}'::jsonb,
-        p_kind        text  DEFAULT 'study'
+        p_kind        text  DEFAULT 'doc'
     ) RETURNS text
     LANGUAGE plpgsql AS $func$
     DECLARE
         v_id      text;
+        v_node    uuid;
         v_link    record;
-        v_label   text;
-        v_cypher  text;
     BEGIN
-        PERFORM stewards.ensure_studies_graph();
-
-        INSERT INTO stewards.studies (slug, file_path, title, body, frontmatter, kind)
+        INSERT INTO stewards.docs (slug, file_path, title, body, frontmatter, kind)
         VALUES (p_slug, p_file_path, p_title, p_body, p_frontmatter, p_kind)
         ON CONFLICT (slug) DO UPDATE
             SET title       = EXCLUDED.title,
@@ -1573,40 +1535,17 @@ extension_sql!(
                 kind        = EXCLUDED.kind
         RETURNING id INTO v_id;
 
-        -- MERGE the Study vertex. Param-bound, no interpolation.
-        -- The AGE label stays :Study even for non-study kinds — a
-        -- corpus-wide label rename costs more than the cosmetic gain
-        -- and we rely on the table's `kind` column for filtering.
-        EXECUTE
-            $cy$
-            SELECT * FROM cypher('stewards_graph', $$
-                MERGE (s:Study {slug: $slug})
-                SET s.id = $id, s.title = $title, s.file_path = $file_path,
-                    s.kind = $kind
-                RETURN s
-            $$, $1) AS (v agtype)
-            $cy$
-        USING (jsonb_build_object(
-            'slug',      p_slug,
-            'id',        v_id,
-            'title',     p_title,
-            'file_path', p_file_path,
-            'kind',      p_kind
-        )::text)::ag_catalog.agtype;
+        v_node := stewards.graph_node_upsert(
+            'doc', p_slug, p_title,
+            jsonb_build_object('id', v_id,
+                               'file_path', p_file_path,
+                               'doc_kind',  p_kind));
 
         -- Drop existing CITES edges so re-imports stay in sync with body.
-        EXECUTE
-            $cy$
-            SELECT * FROM cypher('stewards_graph', $$
-                MATCH (s:Study {slug: $slug})-[r:CITES]->()
-                DELETE r
-            $$, $1) AS (v agtype)
-            $cy$
-        USING (jsonb_build_object('slug', p_slug)::text)::ag_catalog.agtype;
+        DELETE FROM stewards.edges
+         WHERE src = v_node AND kind = 'CITES';
 
-        -- For each unique cited URI, MERGE target vertex + CITES edge.
-        -- The vertex label varies by kind, which means the Cypher text
-        -- itself differs per row — we build it per-link and bind values.
+        -- For each unique cited URI, upsert the cited node + CITES edge.
         FOR v_link IN
             SELECT uri,
                    max(anchor_text) AS anchor_text,
@@ -1615,75 +1554,48 @@ extension_sql!(
               FROM stewards.parse_gospel_links(p_body)
              GROUP BY uri
         LOOP
-            v_label := CASE v_link.kind
-                WHEN 'scripture' THEN 'Scripture'
-                WHEN 'talk'      THEN 'Talk'
-                WHEN 'manual'    THEN 'Manual'
-                ELSE 'Reference'
-            END;
-
-            v_cypher := format(
-                $cy$
-                SELECT * FROM cypher('stewards_graph', $$
-                    MATCH (s:Study {slug: $slug})
-                    MERGE (t:%s {uri: $uri})
-                    SET t.kind = $kind
-                    MERGE (s)-[r:CITES]->(t)
-                    SET r.anchor_text = $anchor_text,
-                        r.citation_count = $citation_count
-                    RETURN r
-                $$, $1) AS (v agtype)
-                $cy$,
-                v_label
-            );
-
-            EXECUTE v_cypher
-            USING (jsonb_build_object(
-                'slug',           p_slug,
-                'uri',            v_link.uri,
-                'kind',           v_link.kind,
-                'anchor_text',    v_link.anchor_text,
-                'citation_count', v_link.citation_count
-            )::text)::ag_catalog.agtype;
+            PERFORM stewards.graph_edge_upsert(
+                'doc', p_slug,
+                v_link.kind, v_link.uri,
+                'CITES',
+                v_link.citation_count::real,
+                jsonb_build_object(
+                    'anchor_text',    v_link.anchor_text,
+                    'citation_count', v_link.citation_count,
+                    'provenance',     'parsed',
+                    'source',         'import_doc'));
         END LOOP;
 
         RETURN v_id;
     END;
     $func$;
 
-    -- Convenience read function: return one row per Study with its
-    -- citation count and a sample of cited URIs.
-    CREATE FUNCTION stewards.study_citations(p_slug text)
+    -- Convenience read function: one row per cited URI with the
+    -- anchor text and citation count from the CITES edge props.
+    CREATE FUNCTION stewards.doc_citations(p_slug text)
     RETURNS TABLE (
-        study_slug text,
+        doc_slug   text,
         cited_uri  text,
         cited_kind text,
         anchor_text text,
         citation_count int
     )
-    LANGUAGE plpgsql STABLE AS $func$
-    BEGIN
-        PERFORM stewards.ensure_studies_graph();
-        RETURN QUERY EXECUTE
-            $cy$
-            SELECT
-                ag_catalog.agtype_to_text(s_slug)::text,
-                ag_catalog.agtype_to_text(t_uri)::text,
-                ag_catalog.agtype_to_text(t_kind)::text,
-                ag_catalog.agtype_to_text(r_anchor)::text,
-                ag_catalog.agtype_to_int8(r_count)::int
-            FROM cypher('stewards_graph', $$
-                MATCH (s:Study {slug: $slug})-[r:CITES]->(t)
-                RETURN s.slug, t.uri, t.kind, r.anchor_text, r.citation_count
-                ORDER BY r.citation_count DESC, t.uri ASC
-            $$, $1) AS (s_slug agtype, t_uri agtype, t_kind agtype,
-                        r_anchor agtype, r_count agtype)
-            $cy$
-        USING (jsonb_build_object('slug', p_slug)::text)::ag_catalog.agtype;
-    END;
+    LANGUAGE sql STABLE AS $func$
+        SELECT s.ref,
+               t.ref,
+               t.kind,
+               e.props->>'anchor_text',
+               coalesce((e.props->>'citation_count')::int, 1)
+          FROM stewards.edges e
+          JOIN stewards.nodes s ON s.id = e.src
+                               AND s.kind = 'doc' AND s.ref = p_slug
+          JOIN stewards.nodes t ON t.id = e.dst
+         WHERE e.kind = 'CITES'
+         ORDER BY coalesce((e.props->>'citation_count')::int, 1) DESC,
+                  t.ref ASC;
     $func$;
     "#,
-    name = "create_studies",
+    name = "create_docs",
     requires = ["create_chat_helpers"],
 );
 
@@ -1940,26 +1852,26 @@ extension_sql!(
         SELECT EXISTS (SELECT 1 FROM d);
     $func$;
 
-    -- Refresh refs for every study in the corpus. Returns total
+    -- Refresh refs for every doc in the corpus. Returns total
     -- newly enqueued items. Use after a parser/normalizer change
     -- (followed by `DELETE FROM stewards.resolved_refs WHERE error
     -- IS NOT NULL` to retry the previously-missing refs).
-    CREATE FUNCTION stewards.refresh_all_study_refs()
+    CREATE FUNCTION stewards.refresh_all_doc_refs()
     RETURNS int
     LANGUAGE sql AS $func$
-        SELECT coalesce(sum(stewards.refresh_study_refs(slug))::int, 0)
-          FROM stewards.studies;
+        SELECT coalesce(sum(stewards.refresh_doc_refs(slug))::int, 0)
+          FROM stewards.docs;
     $func$;
 
     -- ============================================================
-    -- refresh_study_refs(slug) — for every CITES edge under the
-    -- study, parse anchor_text into single-verse refs and enqueue
+    -- refresh_doc_refs(slug) — for every CITES edge under the
+    -- doc, parse anchor_text into single-verse refs and enqueue
     -- the unresolved ones. Returns count of newly enqueued items.
     --
     -- Idempotent — calling twice without intervening work just
     -- returns 0 the second time.
     -- ============================================================
-    CREATE FUNCTION stewards.refresh_study_refs(p_slug text)
+    CREATE FUNCTION stewards.refresh_doc_refs(p_slug text)
     RETURNS int
     LANGUAGE plpgsql AS $func$
     DECLARE
@@ -1970,7 +1882,7 @@ extension_sql!(
     BEGIN
         FOR v_link IN
             SELECT cited_uri, anchor_text
-              FROM stewards.study_citations(p_slug)
+              FROM stewards.doc_citations(p_slug)
         LOOP
             FOR v_ref IN
                 SELECT * FROM stewards.parse_reference(v_link.anchor_text)
@@ -1986,7 +1898,7 @@ extension_sql!(
     $func$;
 
     -- ============================================================
-    -- study_citations_resolved(slug) — citations joined with
+    -- doc_citations_resolved(slug) — citations joined with
     -- resolved verse text. One row per CITES edge (chapter-level),
     -- with an aggregated array of resolved verse contents.
     --
@@ -1994,7 +1906,7 @@ extension_sql!(
     -- decompose), resolved_verses is an empty array — UI should
     -- show "open the source file" rather than verse text.
     -- ============================================================
-    CREATE FUNCTION stewards.study_citations_resolved(p_slug text)
+    CREATE FUNCTION stewards.doc_citations_resolved(p_slug text)
     RETURNS TABLE (
         cited_uri        text,
         cited_kind       text,
@@ -2006,7 +1918,7 @@ extension_sql!(
     BEGIN
         RETURN QUERY
         WITH cites AS (
-            SELECT * FROM stewards.study_citations(p_slug)
+            SELECT * FROM stewards.doc_citations(p_slug)
         ),
         verses AS (
             SELECT c.cited_uri,
@@ -2042,53 +1954,50 @@ extension_sql!(
     $func$;
     "#,
     name = "create_resolver",
-    requires = ["create_studies"],
+    requires = ["create_docs"],
 );
 
 // ---------------------------------------------------------------------------
-// Phase 2.3 — similarity bridge (pgvector cosine -> AGE :SIMILAR_TO)
+// Similarity bridge (pgvector cosine -> SIMILAR_TO edges)
 //
-// All studies are embedded by the existing `embed` work_kind (Phase 2.1).
-// This block ports the probe's bridge pattern into production:
-//   1. For one source study, compute cosine similarity against every
-//      other embedded study using pgvector's `<=>` operator.
-//   2. Take top-K above min_score, MERGE :SIMILAR_TO edges in AGE
-//      with `score` and `method` properties.
+// All docs are embedded by the existing `embed` work_kind. This block
+// writes precomputed similarity into the relational graph (01-graph):
+//   1. For one source doc, compute cosine similarity against every
+//      other embedded doc using pgvector's `<=>` operator.
+//   2. Take top-K above min_score, upsert SIMILAR_TO edges with the
+//      score as the edge weight and {method, score} in props.
 //   3. Edges are directional from the source's perspective. Reads
-//      use undirected MATCH so "similar to X" returns both
+//      union both directions so "similar to X" returns both
 //      X->Y (X picked Y as top-K) and Y->X (Y picked X as top-K).
 //
 // Kept deliberately simple:
-//   - One method only ('pgvector_cosine'). Future phases can add
-//     'maxsim_pooled' or 'fts_overlap' as additional edges.
+//   - One method only ('pgvector_cosine'), recorded in props. Edge
+//     identity is (src, dst, kind) — a future second method either
+//     replaces the edge or earns its own edge kind.
 //   - No vector aggregation across citations yet — body embedding
-//     IS the study's representation. If we later want sub-document
-//     similarity (e.g. "this paragraph of A matches that paragraph
-//     of B"), it lives in a separate :SIMILAR_PARAGRAPH edge type.
-//   - Refresh is on-demand. Re-embeds don't auto-trigger refresh
-//     because the corpus is small (69 studies; bulk refresh runs
-//     in <1s) and tying it via NOTIFY would couple the embed
-//     pipeline to the AGE write path. Manual call after re-import
-//     is fine; we'll add NOTIFY-triggered refresh when the corpus
-//     grows past ~1000 studies and bulk refresh starts to hurt.
+//     IS the doc's representation. Sub-document similarity, if it
+//     ever lands, gets its own edge kind.
+//   - Refresh is on-demand. Re-embeds don't auto-trigger refresh;
+//     bulk refresh is cheap at small corpus sizes. Revisit with a
+//     NOTIFY-triggered refresh when the corpus grows past ~1000
+//     docs and bulk refresh starts to hurt.
 // ---------------------------------------------------------------------------
 extension_sql!(
     r#"
     -- ============================================================
-    -- refresh_study_similarity(slug, top_k, min_score)
+    -- refresh_doc_similarity(slug, top_k, min_score)
     --
-    -- For one source study, drop its outgoing :SIMILAR_TO edges
-    -- and write fresh ones for the top-K nearest other studies
+    -- For one source doc, drop its outgoing SIMILAR_TO edges
+    -- and write fresh ones for the top-K nearest other docs
     -- with cosine similarity >= min_score.
     --
     -- Returns the count of edges written. Returns 0 (and writes
-    -- nothing) when the source study has no embedding yet.
+    -- nothing) when the source doc has no embedding yet.
     --
-    -- Defaults: top_k=5, min_score=0.5. The 0.5 floor is a guess
-    -- based on Phase 2.1 probe results; tune after observing real
-    -- score distributions across the 69-study corpus.
+    -- Defaults: top_k=5, min_score=0.5. Tune after observing real
+    -- score distributions in the deployed corpus.
     -- ============================================================
-    CREATE FUNCTION stewards.refresh_study_similarity(
+    CREATE FUNCTION stewards.refresh_doc_similarity(
         p_slug      text,
         p_top_k     int     DEFAULT 5,
         p_min_score float   DEFAULT 0.5
@@ -2097,18 +2006,19 @@ extension_sql!(
     LANGUAGE plpgsql AS $func$
     DECLARE
         v_src_emb     vector(768);
+        v_node        uuid;
         v_written     int := 0;
         v_pair        record;
     BEGIN
-        PERFORM stewards.ensure_studies_graph();
-
         SELECT embedding INTO v_src_emb
-          FROM stewards.studies
+          FROM stewards.docs
          WHERE slug = p_slug;
 
         IF NOT FOUND THEN
-            RAISE EXCEPTION 'study not found: %', p_slug;
+            RAISE EXCEPTION 'doc not found: %', p_slug;
         END IF;
+
+        v_node := stewards.graph_node_upsert('doc', p_slug);
 
         -- Always drop existing outgoing edges first — even when the
         -- embedding is NULL. "Refresh\" means the cache reflects
@@ -2116,14 +2026,10 @@ extension_sql!(
         -- state is "no edges,\" not "whatever was here before.\"
         -- (Inverse hypothesis caught this: nulling the embedding +
         -- refreshing previously left stale edges in place.)
-        EXECUTE
-            $cy$
-            SELECT * FROM cypher('stewards_graph', $$
-                MATCH (s:Study {slug: $slug})-[r:SIMILAR_TO {method: 'pgvector_cosine'}]->()
-                DELETE r
-            $$, $1) AS (v agtype)
-            $cy$
-        USING (jsonb_build_object('slug', p_slug)::text)::ag_catalog.agtype;
+        DELETE FROM stewards.edges
+         WHERE src = v_node
+           AND kind = 'SIMILAR_TO'
+           AND props->>'method' = 'pgvector_cosine';
 
         IF v_src_emb IS NULL THEN
             -- Not embedded yet — outgoing edges cleared, nothing to
@@ -2136,27 +2042,19 @@ extension_sql!(
         FOR v_pair IN
             SELECT s.slug AS dst_slug,
                    round((1 - (s.embedding <=> v_src_emb))::numeric, 4)::float AS score
-              FROM stewards.studies s
+              FROM stewards.docs s
              WHERE s.slug <> p_slug
                AND s.embedding IS NOT NULL
                AND (1 - (s.embedding <=> v_src_emb)) >= p_min_score
              ORDER BY s.embedding <=> v_src_emb
              LIMIT p_top_k
         LOOP
-            EXECUTE
-                $cy$
-                SELECT * FROM cypher('stewards_graph', $$
-                    MATCH (a:Study {slug: $src_slug}), (b:Study {slug: $dst_slug})
-                    MERGE (a)-[r:SIMILAR_TO {method: 'pgvector_cosine'}]->(b)
-                    SET r.score = $score
-                    RETURN r
-                $$, $1) AS (v agtype)
-                $cy$
-            USING (jsonb_build_object(
-                'src_slug', p_slug,
-                'dst_slug', v_pair.dst_slug,
-                'score',    v_pair.score
-            )::text)::ag_catalog.agtype;
+            PERFORM stewards.graph_edge_upsert(
+                'doc', p_slug, 'doc', v_pair.dst_slug,
+                'SIMILAR_TO',
+                v_pair.score::real,
+                jsonb_build_object('method', 'pgvector_cosine',
+                                   'score',  v_pair.score));
             v_written := v_written + 1;
         END LOOP;
 
@@ -2164,32 +2062,33 @@ extension_sql!(
     END;
     $func$;
 
-    -- Convenience: refresh every study that has an embedding.
+    -- Convenience: refresh every doc that has an embedding.
     -- Returns total edges written across the corpus.
-    CREATE FUNCTION stewards.refresh_all_study_similarity(
+    CREATE FUNCTION stewards.refresh_all_doc_similarity(
         p_top_k     int   DEFAULT 5,
         p_min_score float DEFAULT 0.5
     )
     RETURNS int
     LANGUAGE sql AS $func$
-        SELECT coalesce(sum(stewards.refresh_study_similarity(slug, p_top_k, p_min_score))::int, 0)
-          FROM stewards.studies
+        SELECT coalesce(sum(stewards.refresh_doc_similarity(slug, p_top_k, p_min_score))::int, 0)
+          FROM stewards.docs
          WHERE embedding IS NOT NULL;
     $func$;
 
     -- ============================================================
-    -- study_similar(slug, limit) — read SIMILAR_TO edges back.
+    -- doc_similar(slug, limit) — read SIMILAR_TO edges back.
     --
-    -- Returns one row per OTHER study related to the input slug.
+    -- Returns one row per OTHER doc related to the input slug.
     -- Matches edges in BOTH directions (a->b OR b->a), takes the
     -- higher score per pair (since both directions may exist with
     -- different scores — cosine is symmetric but top-K cutoffs
     -- can asymmetrically include/exclude an edge).
     --
-    -- Joins back to stewards.studies so callers get title +
-    -- file_path without a second round trip.
+    -- Joins back to stewards.docs so callers get title + file_path
+    -- without a second round trip. Pure SQL — the relational graph
+    -- removed the AGE temp-table workaround entirely.
     -- ============================================================
-    CREATE FUNCTION stewards.study_similar(
+    CREATE FUNCTION stewards.doc_similar(
         p_slug  text,
         p_limit int DEFAULT 10
     )
@@ -2200,78 +2099,45 @@ extension_sql!(
         score     float,
         direction text   -- 'outgoing' | 'incoming' | 'mutual'
     )
-    LANGUAGE plpgsql AS $func$
-    DECLARE
-        v_param ag_catalog.agtype;
-    BEGIN
-        -- Suppress the NOTICE chatter from DROP TABLE IF EXISTS when
-        -- this function is called repeatedly (e.g. lateral joins).
-        SET LOCAL client_min_messages = WARNING;
-        PERFORM stewards.ensure_studies_graph();
-        v_param := (jsonb_build_object('slug', p_slug)::text)::ag_catalog.agtype;
-
-        -- AGE requires the third arg of cypher() to be a literal $N
-        -- parameter, not an inline expression \u2014 hence two EXECUTEs
-        -- with USING rather than two CTEs in a single statement.
-        --
-        -- Results land in a session-local TEMP table that we drop at
-        -- function exit so re-entrant calls (e.g. lateral joins) don't
-        -- accumulate state. We avoid CREATE TEMP IF NOT EXISTS because
-        -- it spams NOTICE on every call inside a lateral join.
-        DROP TABLE IF EXISTS pg_temp._study_similar_buf;
-        CREATE TEMP TABLE pg_temp._study_similar_buf (
-            other_slug text,
-            score      float,
-            dir        text
-        ) ON COMMIT DROP;
-
-        EXECUTE
-            $cy$
-            INSERT INTO pg_temp._study_similar_buf (other_slug, score, dir)
-            SELECT ag_catalog.agtype_to_text(other_slug)::text,
-                   ag_catalog.agtype_to_float8(score_v)::float,
-                   'outgoing'
-            FROM cypher('stewards_graph', $$
-                MATCH (a:Study {slug: $slug})-[r:SIMILAR_TO]->(b:Study)
-                RETURN b.slug, r.score
-            $$, $1) AS (other_slug agtype, score_v agtype)
-            $cy$
-        USING v_param;
-
-        EXECUTE
-            $cy$
-            INSERT INTO pg_temp._study_similar_buf (other_slug, score, dir)
-            SELECT ag_catalog.agtype_to_text(other_slug)::text,
-                   ag_catalog.agtype_to_float8(score_v)::float,
+    LANGUAGE sql STABLE AS $func$
+        WITH me AS (
+            SELECT id FROM stewards.nodes
+             WHERE kind = 'doc' AND ref = p_slug
+        ),
+        hits AS (
+            SELECT n.ref AS other_slug,
+                   (e.props->>'score')::float AS score,
+                   'outgoing' AS dir
+              FROM stewards.edges e
+              JOIN me ON e.src = me.id
+              JOIN stewards.nodes n ON n.id = e.dst
+             WHERE e.kind = 'SIMILAR_TO'
+            UNION ALL
+            SELECT n.ref,
+                   (e.props->>'score')::float,
                    'incoming'
-            FROM cypher('stewards_graph', $$
-                MATCH (a:Study {slug: $slug})<-[r:SIMILAR_TO]-(b:Study)
-                RETURN b.slug, r.score
-            $$, $1) AS (other_slug agtype, score_v agtype)
-            $cy$
-        USING v_param;
-
-        RETURN QUERY
-        WITH merged AS (
-            SELECT b.other_slug AS slug,
-                   max(b.score) AS score,
+              FROM stewards.edges e
+              JOIN me ON e.dst = me.id
+              JOIN stewards.nodes n ON n.id = e.src
+             WHERE e.kind = 'SIMILAR_TO'
+        ),
+        merged AS (
+            SELECT h.other_slug,
+                   max(h.score) AS score,
                    CASE
-                       WHEN bool_or(b.dir = 'outgoing') AND bool_or(b.dir = 'incoming')
+                       WHEN bool_or(h.dir = 'outgoing') AND bool_or(h.dir = 'incoming')
                             THEN 'mutual'
-                       WHEN bool_or(b.dir = 'outgoing') THEN 'outgoing'
+                       WHEN bool_or(h.dir = 'outgoing') THEN 'outgoing'
                        ELSE 'incoming'
                    END AS direction
-              FROM pg_temp._study_similar_buf b
-             GROUP BY b.other_slug
+              FROM hits h
+             GROUP BY h.other_slug
         )
-        SELECT m.slug, st.title, st.file_path, m.score, m.direction
+        SELECT m.other_slug, d.title, d.file_path, m.score, m.direction
           FROM merged m
-          JOIN stewards.studies st ON st.slug = m.slug
-         ORDER BY m.score DESC, m.slug ASC
+          JOIN stewards.docs d ON d.slug = m.other_slug
+         ORDER BY m.score DESC, m.other_slug ASC
          LIMIT p_limit;
-
-        DROP TABLE pg_temp._study_similar_buf;
-    END;
     $func$;
     "#,
     name = "create_similarity",
@@ -2279,26 +2145,27 @@ extension_sql!(
 );
 
 // ---------------------------------------------------------------------------
-// Phase 2.4 — `study show` view
+// `doc show` view
 //
-// One SQL function that pulls together everything Phase 2 built:
-//   - the study row (title, file_path, frontmatter)
-//   - resolved citations (Phase 2.2) with verse text
-//   - similar studies (Phase 2.3) ranked by cosine score
+// One SQL function that pulls together everything the docs subsystem
+// built:
+//   - the doc row (title, file_path, frontmatter)
+//   - resolved citations with verse text
+//   - similar docs ranked by cosine score
 //
 // Returns a single text blob formatted as markdown so a thin CLI
 // wrapper just prints it. Keeping all formatting in SQL means the
-// CLI is a one-liner (`psql -t -A -c "SELECT stewards.study_show(...)"`)
+// CLI is a one-liner (`psql -t -A -c "SELECT stewards.doc_show(...)"`)
 // and any client (psql, Go binary, MCP tool, eventual web UI)
 // renders the same view.
 //
 // Cite text is truncated for the show view (~140 chars) so the
 // output stays scannable; full text is always available via
-// stewards.study_citations_resolved(slug).
+// stewards.doc_citations_resolved(slug).
 // ---------------------------------------------------------------------------
 extension_sql!(
     r#"
-    CREATE FUNCTION stewards.study_show(
+    CREATE FUNCTION stewards.doc_show(
         p_slug             text,
         p_similarity_limit int DEFAULT 5,
         p_citation_limit   int DEFAULT 20,
@@ -2307,7 +2174,7 @@ extension_sql!(
     RETURNS text
     LANGUAGE plpgsql AS $func$
     DECLARE
-        v_study      stewards.studies%ROWTYPE;
+        v_study      stewards.docs%ROWTYPE;
         v_out        text := '';
         v_cite       record;
         v_verse      jsonb;
@@ -2316,9 +2183,9 @@ extension_sql!(
         v_missing_count  int := 0;
         v_sim_count      int := 0;
     BEGIN
-        SELECT * INTO v_study FROM stewards.studies WHERE slug = p_slug;
+        SELECT * INTO v_study FROM stewards.docs WHERE slug = p_slug;
         IF NOT FOUND THEN
-            RAISE EXCEPTION 'study not found: %', p_slug;
+            RAISE EXCEPTION 'doc not found: %', p_slug;
         END IF;
 
         v_out := v_out || '# ' || v_study.title || E'\n\n';
@@ -2348,7 +2215,7 @@ extension_sql!(
 
         FOR v_cite IN
             SELECT cited_uri, cited_kind, anchor_text, citation_count, resolved_verses
-              FROM stewards.study_citations_resolved(p_slug)
+              FROM stewards.doc_citations_resolved(p_slug)
              ORDER BY citation_count DESC, anchor_text ASC
              LIMIT p_citation_limit
         LOOP
@@ -2394,12 +2261,12 @@ extension_sql!(
             END IF;
         END LOOP;
 
-        -- ---------------- Similar studies ----------------
-        v_out := v_out || E'## Similar studies\n\n';
+        -- ---------------- Similar docs ----------------
+        v_out := v_out || E'## Similar docs\n\n';
 
         FOR v_sim IN
             SELECT slug, title, score, direction
-              FROM stewards.study_similar(p_slug, p_similarity_limit)
+              FROM stewards.doc_similar(p_slug, p_similarity_limit)
         LOOP
             v_out := v_out
                 || '- **' || v_sim.title || '** '
@@ -2412,7 +2279,7 @@ extension_sql!(
         IF v_sim_count = 0 THEN
             v_out := v_out
                 || '_(no similarity edges — run '
-                || '`SELECT stewards.refresh_study_similarity(''' || p_slug || ''')` '
+                || '`SELECT stewards.refresh_doc_similarity(''' || p_slug || ''')` '
                 || 'to compute them)_' || E'\n';
         END IF;
 
@@ -2421,12 +2288,12 @@ extension_sql!(
             || E'\n---\n'
             || '*' || v_resolved_count::text || ' verses resolved, '
             || v_missing_count::text || ' missing, '
-            || v_sim_count::text || ' similar studies*' || E'\n';
+            || v_sim_count::text || ' similar docs*' || E'\n';
 
         RETURN v_out;
     END;
     $func$;
     "#,
-    name = "create_study_show",
+    name = "create_doc_show",
     requires = ["create_similarity"],
 );

@@ -85,7 +85,7 @@ Commands:
   import --source <kind>:<dir-or-file> [--source ...]
       Import documents/agents/skills into the substrate. May be
       repeated. Document kinds (study|doc|proposal|phase-doc|phase|
-      journal) target stewards.studies; agents and skills target
+      journal) target stewards.docs; agents and skills target
       stewards.agents / stewards.skills.
       Examples:
           --source study:study
@@ -265,7 +265,7 @@ func runImport(ctx context.Context, args []string) {
 		// Dispatch by kind: agents/skills go to specialized importers
 		// that target stewards.agents / stewards.skills tables; other
 		// kinds (study, doc, proposal, journal, ...) go through
-		// stewards.import_study() into stewards.studies.
+		// stewards.import_doc() into stewards.docs.
 		switch src.Kind {
 		case "agent", "agents":
 			ok, fail = importer.ImportAgents(ctx, pool, src, *limit, *verbose)
@@ -411,7 +411,7 @@ func runTodo(ctx context.Context, args []string) {
 	switch args[0] {
 	case "create":
 		fs := flag.NewFlagSet("todo create", flag.ExitOnError)
-		parent := fs.String("parent", "", "<kind>:<slug> (e.g. Workstream:WS5, Study:proposal-token-efficiency)")
+		parent := fs.String("parent", "", "<kind>:<slug> (e.g. workstream:WS5, doc:proposal-token-efficiency)")
 		title := fs.String("title", "", "todo title (required)")
 		body := fs.String("body", "", "todo body")
 		slug := fs.String("slug", "", "optional human-friendly slug (must be unique)")
@@ -1132,11 +1132,11 @@ func runMaterializeWrites(ctx context.Context, args []string) {
 
 		// If sourceKind='work_item', also update the studies row's
 		// file_path if the work_item promoted to one. The promotion
-		// path inserts into stewards.studies; we set the file_path
+		// path inserts into stewards.docs; we set the file_path
 		// here once the file actually exists.
 		if p.sourceKind == "work_item" && strings.HasSuffix(p.targetPath, ".md") {
 			_, _ = pool.Exec(ctx,
-				`UPDATE stewards.studies
+				`UPDATE stewards.docs
 				    SET file_path = $1
 				  WHERE slug = 'substrate--' || (
 				          SELECT slug FROM stewards.work_items WHERE id = $2::uuid

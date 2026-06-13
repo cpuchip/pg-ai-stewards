@@ -1,6 +1,6 @@
 // Package importer parses heterogeneous documents into the
 // (slug, file_path, title, body, frontmatter, kind) shape that
-// stewards.import_study() consumes.
+// stewards.import_doc() consumes.
 //
 // Each kind has a different "natural shape" (markdown w/ italic
 // metadata, markdown w/ YAML frontmatter, structured YAML). Parsers
@@ -27,7 +27,7 @@ type Source struct {
 	Path string
 }
 
-// Doc is the parsed shape ready for stewards.import_study().
+// Doc is the parsed shape ready for stewards.import_doc().
 type Doc struct {
 	Slug        string
 	FilePath    string // workspace-relative
@@ -78,7 +78,7 @@ func singleParser(p func(absPath, relPath, sourceRoot string) (*Doc, error)) Par
 }
 
 // ImportSource walks src.Path (file or dir), parses each matching
-// file, and inserts via stewards.import_study(). Returns (ok, fail).
+// file, and inserts via stewards.import_doc(). Returns (ok, fail).
 func ImportSource(ctx context.Context, pool *pgxpool.Pool, src Source, limit int, verbose bool) (int, int) {
 	parser, ext, err := parserFor(src.Kind)
 	if err != nil {
@@ -164,7 +164,7 @@ func ImportSource(ctx context.Context, pool *pgxpool.Pool, src Source, limit int
 	return ok, fail
 }
 
-// upsert calls stewards.import_study via pgx — fully parameterized,
+// upsert calls stewards.import_doc via pgx — fully parameterized,
 // no SQL string building, no apostrophe-escape issues. After the
 // upsert, calls stewards.link_declared_edges() to refresh frontmatter-
 // declared :HAS_PROPOSAL / :FEEDS / :SUPERSEDES / :IMPLEMENTS edges
@@ -179,7 +179,7 @@ func upsert(ctx context.Context, pool *pgxpool.Pool, doc *Doc) error {
 		fmJSON = []byte("{}")
 	}
 	if _, err := pool.Exec(ctx,
-		`SELECT stewards.import_study($1, $2, $3, $4, $5::jsonb, $6)`,
+		`SELECT stewards.import_doc($1, $2, $3, $4, $5::jsonb, $6)`,
 		doc.Slug, doc.FilePath, doc.Title, doc.Body, string(fmJSON), doc.Kind,
 	); err != nil {
 		return err

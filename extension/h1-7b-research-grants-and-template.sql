@@ -36,7 +36,7 @@ ON CONFLICT (agent_family, tool_pattern) DO NOTHING;
 -- array with the new template, preserving every other stage as-is.
 -- The new template:
 --   - Adds "## CONSULT PRIOR WORK FIRST" before "## TOOL GUIDANCE"
---   - Lists the new tools (study_search, fs_search, work_item_list,
+--   - Lists the new tools (doc_search, fs_search, work_item_list,
 --     fs_read) and what each is for
 --   - Bumps "Maximum 4 rounds" → "Maximum 8 rounds"
 --   - Bumps "Maximum 8 sources" → "Maximum 8 strong sources OR
@@ -64,11 +64,11 @@ Find sources that bear on the binding question, give precedence to what we alrea
 
 Before external search, check what the substrate already knows. Spend 2-4 rounds here when the topic is one we've worked on; skip to external search when it's genuinely new ground.
 
-- `study_search` — full-text search of the substrate's studies corpus (gospel, research, planning). Returns matching slugs + snippets + ranks.
+- `doc_search` — full-text search of the substrate's studies corpus (gospel, research, planning). Returns matching slugs + snippets + ranks.
 - `fs_search` — regex search across journals (`.spec/journal/*`), proposals (`.spec/proposals/*`), mind files (`.mind/*`), and docs (`docs/**`). Use this to find prior work mentioning a topic by name.
 - `fs_read` — read a journal or proposal in full once `fs_search` surfaces it.
 - `work_item_list` / `work_item_show` — list and inspect prior work_items on this binding question or adjacent.
-- `study_get` / `study_similar` — read a study by slug, find related studies via embedding edges.
+- `doc_get` / `doc_similar` — read a study by slug, find related studies via embedding edges.
 
 When prior work already answers a part of the binding question, your brief should cite it — point at the existing source instead of over-searching externally for confirmation.
 

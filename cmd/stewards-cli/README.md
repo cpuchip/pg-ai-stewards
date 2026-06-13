@@ -62,8 +62,8 @@ stewards-cli import \
 
 ### `study show <slug> [--sim N --cites N --verse-chars N]`
 
-Calls `stewards.study_show()` and prints the formatted blob. Works on
-any kind, not just studies — the function signature stayed `study_show`
+Calls `stewards.doc_show()` and prints the formatted blob. Works on
+any kind, not just studies — the function signature stayed `doc_show`
 because renaming would break every existing caller.
 
 **Note flag ordering:** Go's stdlib `flag` package stops at the first
@@ -81,7 +81,7 @@ narrow.
 
 ### `study refresh [<slug>]`
 
-Re-runs `refresh_study_refs` and `refresh_study_similarity` for one
+Re-runs `refresh_doc_refs` and `refresh_doc_similarity` for one
 slug, or corpus-wide when omitted.
 
 ## Phase 2.5 verification (corpus state as of 2026-05-04)

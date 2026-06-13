@@ -32,7 +32,7 @@ The intent and active covenant for this council are loaded into your system prom
 Council intent: {{intent_purpose}}
 Binding question: {{binding_question}}
 
-Your job as proposer: offer a concrete proposed answer to the binding question. Lead with the answer; back it with reasoning that engages the corpus where relevant. You have substrate-internal tools (study_search_text, study_get, study_similar, study_citations) available — use them to ground your proposal in existing work.
+Your job as proposer: offer a concrete proposed answer to the binding question. Lead with the answer; back it with reasoning that engages the corpus where relevant. You have substrate-internal tools (doc_search, doc_get, doc_similar, doc_citations) available — use them to ground your proposal in existing work.
 
 Don't hedge. Don't list every possible angle. Take a position and defend it. The critic will stress-test it; the synthesizer will integrate.
 

@@ -1,4 +1,4 @@
-.claude/cache/
+**/.claude/cache/
 *.exe
 *.log
 bin/

@@ -30,42 +30,28 @@ use providers::{Provider, ProviderRegistry, ProviderSummary, PROVIDER_REGISTRY};
 
 
 // =====================================================================
-// Phase 2.6 / 2.7 / 3a — folded back from live-DB migration files.
+// The install chain — extension_sql_file! blocks in dependency order.
 //
-// These five blocks were originally applied incrementally to the dev
-// database via psql redirects (extension/2-6a-*.sql etc) so we could
-// iterate on the substrate without rebuilding the extension binary
-// every time. As of v0.2.0 they are part of the canonical install
-// chain, in linear dependency order:
-//
-//   create_study_show
-//      └─ create_workstreams           (2-6a: workstream vertices + DECLARED edges)
-//          └─ create_todos             (2-6b: todos as persistent connector vertices)
-//              └─ create_phases_context (2-6c: phase splitter + context_for() walk)
-//                  └─ create_watchman_substrate (2-7a: dirty-bit + verdicts + findings + dirty_queue)
-//                      └─ create_watchman_pass  (3a: watchman-consolidator agent + watchman_input())
-//
-// The .sql files remain in the repo as the canonical source of each
-// block's text (extension_sql_file! reads them at compile time via
-// include_str! semantics). Editing the SQL files is the right move;
-// editing the macro signatures here is only for renames/dependency
-// changes.
+// The .sql files are the canonical source of each block's text
+// (extension_sql_file! reads them at compile time via include_str!
+// semantics). Editing the SQL files is the right move; editing the
+// macro signatures here is only for renames/dependency changes.
 //
 // Idempotency: every block uses CREATE OR REPLACE, ADD COLUMN IF NOT
 // EXISTS, ON CONFLICT DO UPDATE, etc. so applying the same block twice
 // is a no-op. This matters for `cargo pgrx schema` which may run blocks
 // multiple times during development.
-// =====================================================================
-
+//
 // Consolidation leg (2026-06-12): the authored chain begins here.
-// 00-config and 01-graph are the new foundation; subsystem files
-// progressively replace the historical chain below (see
-// .spec/proposals/authoring-blueprint.md).
+// 00-config, 01-graph, and 02-workstreams are the new foundation;
+// numbered subsystem files progressively replace the historical
+// chain below (see .spec/proposals/authoring-blueprint.md).
+// =====================================================================
 
 extension_sql_file!(
     "../00-config.sql",
     name = "create_config",
-    requires = ["create_study_show"],
+    requires = ["create_doc_show"],
 );
 
 extension_sql_file!(
@@ -75,27 +61,15 @@ extension_sql_file!(
 );
 
 extension_sql_file!(
-    "../2-6a-workstreams.sql",
+    "../02-workstreams.sql",
     name = "create_workstreams",
     requires = ["create_graph"],
 );
 
 extension_sql_file!(
-    "../2-6b-todos.sql",
-    name = "create_todos",
-    requires = ["create_workstreams"],
-);
-
-extension_sql_file!(
-    "../2-6c-phases-context.sql",
-    name = "create_phases_context",
-    requires = ["create_todos"],
-);
-
-extension_sql_file!(
     "../2-7a-watchman-substrate.sql",
     name = "create_watchman_substrate",
-    requires = ["create_phases_context"],
+    requires = ["create_workstreams"],
 );
 
 extension_sql_file!(
@@ -374,16 +348,12 @@ extension_sql_file!(
 );
 
 // Batch G — make the substrate land in real files.
-extension_sql_file!(
-    "../6a-studies-file-path-nullable.sql",
-    name = "create_batch_g1_studies_file_path_nullable",
-    requires = ["create_phase_5g4_bishop_and_suggest"],
-);
-
+// (6a's file_path-nullable migration was absorbed into the create_docs
+//  table definition at the 2026-06-12 consolidation.)
 extension_sql_file!(
     "../6b-steward-retry-lessons.sql",
     name = "create_batch_g2_steward_retry_lessons",
-    requires = ["create_batch_g1_studies_file_path_nullable"],
+    requires = ["create_phase_5g4_bishop_and_suggest"],
 );
 
 extension_sql_file!(

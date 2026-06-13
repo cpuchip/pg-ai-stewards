@@ -79,7 +79,7 @@ You are gathering context from the substrate's own knowledge — prior journals,
 ## TOOLS
 
 - `fs_search` / `fs_read` / `fs_list` — substrate-scoped files (journals, proposals, mind, docs, and per-pipeline-scoped project dirs if available)
-- `study_search` / `study_get` / `study_similar` — substrate studies corpus
+- `doc_search` / `doc_get` / `doc_similar` — substrate studies corpus
 - `work_item_list` / `work_item_show` — prior work_items on this topic or in the same project
 - `watchman_pass_show` / `watchman_passes_list` — substrate state
 
@@ -132,7 +132,7 @@ Follow the **planning-partner** intent's values:
 
 ## TOOLS
 
-You have the full research suite: `fs_*`, `study_*`, `work_item_*` on the substrate side; `web_search_exa`, `web_search`, `news_search`, `fetch_url`, `fetch_urls`, `yt_search`, `yt_get` on the external side. Use external search only when prior context doesn't cover something the plan needs.
+You have the full research suite: `fs_*`, `doc_*`, `work_item_*` on the substrate side; `web_search_exa`, `web_search`, `news_search`, `fetch_url`, `fetch_urls`, `yt_search`, `yt_get` on the external side. Use external search only when prior context doesn't cover something the plan needs.
 
 ## HARD CONSTRAINTS
 

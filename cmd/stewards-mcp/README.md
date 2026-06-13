@@ -8,8 +8,8 @@ Two read-only tools over the substrate's studies corpus:
 
 | Tool | Wraps | Purpose |
 |------|-------|---------|
-| `study_search` | `stewards.study_search_text(query, kinds[], limit)` | FTS over slugs+titles+bodies, returns `{slug, kind, title, snippet, rank}` per hit |
-| `study_get` | `stewards.study_get(slug, include_body, line_offset, line_count, max_chars)` | Read a study by slug with line-range pagination |
+| `doc_search` | `stewards.doc_search(query, kinds[], limit)` | FTS over slugs+titles+bodies, returns `{slug, kind, title, snippet, rank}` per hit |
+| `doc_get` | `stewards.doc_get(slug, include_body, line_offset, line_count, max_chars)` | Read a study by slug with line-range pagination |
 
 Future phases (3e.2-3e.5) add stewards_brain, stewards_work_item, gospel_passthrough, and outbound MCP-client capability for consuming external MCP servers like gospel-engine-v2.
 
@@ -40,7 +40,7 @@ Add to `.mcp.json` at the repo root (gitignored — local config only):
 }
 ```
 
-Restart the Claude Code session — `.mcp.json` is read at session startup. After restart, `mcp__pg-ai-stewards__study_search` and `mcp__pg-ai-stewards__study_get` should appear in the deferred-tools list.
+Restart the Claude Code session — `.mcp.json` is read at session startup. After restart, `mcp__pg-ai-stewards__doc_search` and `mcp__pg-ai-stewards__doc_get` should appear in the deferred-tools list.
 
 ## Manual smoke test
 
@@ -50,7 +50,7 @@ Without restarting Claude Code, you can test the protocol by piping JSON-RPC mes
 {
   echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"0.1"}}}'
   echo '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"study_search","arguments":{"query":"faith hope charity","limit":3}}}'
+  echo '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"doc_search","arguments":{"query":"faith hope charity","limit":3}}}'
   sleep 2
 } | ./bin/stewards-mcp.exe 2>/dev/null
 ```

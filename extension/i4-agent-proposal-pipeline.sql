@@ -14,7 +14,7 @@
 --
 -- After verified, on_maturity_verified calls apply_agent_proposal which:
 --   - Reads stage_results.validate.output
---   - For study/lesson/note/exhibit: INSERT into stewards.studies
+--   - For study/lesson/note/exhibit: INSERT into stewards.docs
 --     (kind=source_type) + sets work_items.file_destination
 --   - For schema-migration: validates SQL syntax (deferred to I.3) +
 --     sets file_destination = projects/pg-ai-stewards/extension/iN-<slug>.sql
@@ -249,7 +249,7 @@ BEGIN
 
         -- Check uniqueness on (kind, slug) — soft check, not a constraint
         SELECT id INTO v_existing_id
-          FROM stewards.studies
+          FROM stewards.docs
          WHERE kind = v_source_type AND slug = v_slug
          LIMIT 1;
         IF v_existing_id IS NOT NULL THEN
@@ -269,7 +269,7 @@ BEGIN
 
         -- INSERT into studies. file_path set so future migrate-writes
         -- can find / update if needed.
-        INSERT INTO stewards.studies (slug, title, body, kind, frontmatter, project_association, file_path)
+        INSERT INTO stewards.docs (slug, title, body, kind, frontmatter, project_association, file_path)
         VALUES (v_slug, v_title, v_body, v_source_type, v_frontmatter, v_project, v_file_dest);
 
     ELSIF v_source_type = 'schema-migration' THEN

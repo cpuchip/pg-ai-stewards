@@ -69,7 +69,7 @@ BEGIN
         v_title := v_slug;
     END IF;
 
-    INSERT INTO stewards.studies (slug, kind, title, body, frontmatter)
+    INSERT INTO stewards.docs (slug, kind, title, body, frontmatter)
     VALUES (
         v_slug,
         'study',
