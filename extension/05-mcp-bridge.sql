@@ -546,3 +546,28 @@ VALUES (
   true
 )
 ON CONFLICT (name) DO NOTHING;
+
+-- exa-search — the default web search (Exa's hosted MCP, remote/http). The
+-- substrate ships with web search working OUT OF THE BOX: Exa's endpoint
+-- serves web_search_exa on a keyless free/anonymous tier (rate-limited). For
+-- production volume, add your own key by appending &exaApiKey=<KEY> to the url
+-- (operators own this row after install). Deny-by-default like every bridged
+-- server — grant web_search_exa per-agent in an overlay.
+--
+-- Be a good citizen: the free tier is for trying it out; register your own Exa
+-- account + key for anything beyond light use.
+INSERT INTO stewards.mcp_servers (name, description, transport, command, args, url, env, enabled)
+VALUES (
+  'exa-search',
+  'Web search via Exa''s hosted MCP. Tool: web_search_exa (neural web search '
+    || '-> titles, URLs, and content highlights). Works on Exa''s keyless free '
+    || 'tier out of the box; append &exaApiKey=<KEY> to the url for production '
+    || 'rate limits.',
+  'http',
+  NULL,
+  ARRAY[]::text[],
+  'https://mcp.exa.ai/mcp?tools=web_search_exa',
+  '{}'::jsonb,
+  true
+)
+ON CONFLICT (name) DO NOTHING;
