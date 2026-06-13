@@ -1,0 +1,30 @@
+# Opt-in coder overlay — adds the sandbox coding capability to the bridge.
+#
+#   # build the sandbox image once:
+#   docker build -f extension/coder-runtime.Dockerfile -t coder-runtime:latest extension
+#   # then bring the stack up WITH the coder:
+#   docker compose -f docker-compose.yaml -f docker-compose.coder.yaml up -d
+#
+# This mounts the HOST docker socket into the bridge so coder-mcp can spawn
+# hardened coder-runtime sandboxes as sibling containers. **The docker socket
+# is host-root-equivalent** — anything that can reach it can control the host
+# daemon (and therefore the host). The default `docker compose up` (without
+# this file) does NOT mount it, so the substrate cannot touch the host daemon
+# unless you opt in here. Read SECURITY.md before enabling this, and prefer a
+# host you are willing to grant that trust (e.g. a dedicated playground box).
+#
+# Set CODER_REPO_ALLOWLIST in .env to the repos the coder may clone — it is
+# deny-all by default. GITHUB_TOKEN (also from .env) is resolved bridge-side
+# and never enters a sandbox.
+services:
+  bridge:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - coder-worktrees:/worktrees
+
+volumes:
+  coder-worktrees:
+    # Fixed name so the bridge's mount and the sandbox's `docker run -v` (which
+    # references the literal volume name "coder-worktrees") resolve to the same
+    # volume regardless of the compose project prefix.
+    name: coder-worktrees
