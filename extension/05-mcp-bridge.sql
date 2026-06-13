@@ -504,3 +504,45 @@ VALUES (
   true
 )
 ON CONFLICT (name) DO NOTHING;
+
+-- fetch-md — fetch a URL and return readable markdown (fetch_url, fetch_urls,
+-- extract_links, fetch_url_raw). A generic utility the research pipelines lean
+-- on. Static fetch needs no key; the js:true rendering path needs a `chromium`
+-- binary in the bridge image (omitted by default — see bridge.Dockerfile).
+INSERT INTO stewards.mcp_servers (name, description, transport, command, args, url, env, enabled)
+VALUES (
+  'fetch-md',
+  'Fetch a web page and return it as readable markdown. Tools: fetch_url '
+    || '(one URL -> markdown via readability), fetch_urls (batch), extract_links '
+    || '(list a page''s links), fetch_url_raw (unprocessed HTML). The default '
+    || 'path is a plain HTTP client; a js:true param renders with headless '
+    || 'chromium when available.',
+  'stdio',
+  '/usr/local/bin/fetch-md-mcp',
+  ARRAY[]::text[],
+  NULL,
+  '{}'::jsonb,
+  true
+)
+ON CONFLICT (name) DO NOTHING;
+
+-- git — general git/gh operations over a configured workdir, distinct from
+-- coder-mcp's sandbox-scoped git. Branch ops are namespaced to agent/* and
+-- main/master/release/* are protected (the tool refuses them). GITHUB_TOKEN is
+-- read from the bridge env at exec time (rotation without restart); deny-by-
+-- default like every bridged server — grant per-agent in an overlay.
+INSERT INTO stewards.mcp_servers (name, description, transport, command, args, url, env, enabled)
+VALUES (
+  'git',
+  'General git + GitHub ops over a configured workdir. Tools: git_clone, '
+    || 'git_status, git_branch_create, git_add, git_commit, git_push, '
+    || 'gh_pr_create, gh_issue_create. Agent branches are namespaced (agent/*) '
+    || 'and protected branches (main/master/release/*) are refused.',
+  'stdio',
+  '/usr/local/bin/git-mcp',
+  ARRAY[]::text[],
+  NULL,
+  '{"GITHUB_TOKEN": "$$env:GITHUB_TOKEN"}'::jsonb,
+  true
+)
+ON CONFLICT (name) DO NOTHING;

@@ -167,7 +167,7 @@ Given the prior context above, find external sources to fill the gaps and answer
 
 ## TOOL GUIDANCE
 
-You have `web_search_exa` (Exa neural search), `web_search` (DuckDuckGo), `news_search`, `fetch_url`, `fetch_urls`, `yt_search`, `yt_get`, and others. Use 1-2 search calls per round to cast wide; use `fetch_url` to read a specific high-value source. Parallel tool calls in one round = ONE round.
+You have `fetch_url` / `fetch_urls` (fetch a page as readable markdown), plus whatever web-search tools your operator has registered (e.g. `web_search_exa`, `news_search`, `yt_search`, `yt_get`). Use 1-2 search calls per round to cast wide; use `fetch_url` to read a specific high-value source. Parallel tool calls in one round = ONE round.
 
 You can also still use `fs_*` and `doc_*` if the prior context surfaces a substrate document you want to read directly — but skip another full sweep; context_gather already did that.
 
@@ -377,7 +377,7 @@ Follow the **planning-partner** intent's values:
 
 ## TOOLS
 
-You have the full research suite: `fs_*`, `doc_*`, `work_item_*` on the substrate side; `web_search_exa`, `web_search`, `news_search`, `fetch_url`, `fetch_urls`, `yt_search`, `yt_get` on the external side. Use external search only when prior context doesn't cover something the plan needs.
+You have the full research suite: `fs_*`, `doc_*`, `work_item_*` on the substrate side; `fetch_url` / `fetch_urls` plus any web-search tools your operator registered (`web_search_exa`, `news_search`, `yt_search`, `yt_get`) on the external side. Use external search only when prior context doesn't cover something the plan needs.
 
 ## HARD CONSTRAINTS
 
@@ -905,7 +905,7 @@ VALUES (
             'input_template',
                 'Binding question: {{input.binding_question}}' || E'\n\n' ||
                 'You are gathering items for a DAILY DIGEST that answers the binding question above. This is not a deep research piece — it is a 24-hour news scan.' || E'\n\n' ||
-                'Use the tools available (web_search_exa, web_search, fetch_url, yt_*, etc.) to find 4-8 noteworthy items from the last 24 hours that bear on the binding question. Prefer primary sources (official announcements, vendor docs, the paper itself). Secondary reporting only when it adds context the primary source omits.' || E'\n\n' ||
+                'Use the tools available (fetch_url plus any registered web search like web_search_exa, news_search, yt_*) to find 4-8 noteworthy items from the last 24 hours that bear on the binding question. Prefer primary sources (official announcements, vendor docs, the paper itself). Secondary reporting only when it adds context the primary source omits.' || E'\n\n' ||
                 'For each item kept, capture:' || E'\n' ||
                 '  - Title + URL + publication date/time' || E'\n' ||
                 '  - One-sentence summary of what shipped or was reported' || E'\n' ||
