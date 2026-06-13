@@ -48,13 +48,11 @@ COPY src ./src
 # call in src/lib.rs and update this list.
 COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      03-watchman.sql 04-work-items.sql 05-mcp-bridge.sql \
-     4a-cost-tracking.sql \
-     4a-escalation-chain.sql \
+     06-cost.sql \
      4a-steward.sql \
      4b-dispatch-override.sql \
      4c-steward-dispatch.sql \
      4d-steward-realign.sql \
-     4g-ad-hoc-cost.sql \
      5a-maturity-gate.sql \
      5b-scenarios-verify.sql \
      5c-sessions-gate-kind.sql \
