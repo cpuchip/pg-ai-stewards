@@ -1,5 +1,7 @@
 # pg-ai-stewards
 
+[![CI](https://github.com/cpuchip/pg-ai-stewards/actions/workflows/ci.yml/badge.svg)](https://github.com/cpuchip/pg-ai-stewards/actions/workflows/ci.yml)
+
 **An agentic substrate that lives in Postgres** — work items, pipelines,
 multi-model councils, cost accounting, and persistent memory for AI agents,
 with **covenant, intent, and stewardship as first-class state** rather than

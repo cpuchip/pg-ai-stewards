@@ -371,7 +371,7 @@ es1's cancel-cascade).
   output path with stale AGE/study refs); core ships the machinery, not a specific
   schedule (the B2 operator-seeds rule). watchman_scheduler_fire is a within-chain
   re-author (03 → 18).
-- **B5/19 SHIPPED 2026-06-13** (OSS `<pending-19>`) — ★ **THE AUTHORED CHAIN IS
+- **B5/19 SHIPPED 2026-06-13** (OSS `addeee8`) — ★ **THE AUTHORED CHAIN IS
   COMPLETE (00→19); the migration manifest now carries ZERO migration entries
   (verify/test harness only).** `19-models.sql` — the model capability registry
   + auto-probe + the work_item_dispatch_stage FINAL (deferred from 14). m1
@@ -404,11 +404,26 @@ es1's cancel-cascade).
 - **B5 tail (carry-forward, NOT SQL-chain):** seed_harness genericize + bgworker
   `_kind` enum are schema.rs/Rust-side cleanups (the bgworker was consolidated at
   the daemon leg); assess them against the module at B6, not as authored-SQL.
-  **B6** = tests/ + CI
-workflow + rename-map.tsv finalization + overlay copies updated to new
-names (overlay note: init/01-seed-workstreams + any overlay migration
-touching study_* tools or AGE must re-author against doc_* + relational
-graph; import_workstream signature is unchanged).
+- **B6 IN FLIGHT 2026-06-13.** **tests/ + CI SHIPPED (OSS `<pending-b6a>`):**
+  `tests/virgin-smoke.sql` — the authoritative virgin-boot test (plpgsql ASSERT
+  so CI fails on regression): vector-only / no-pgcrypto / no-AGE; doc_* rename
+  complete; a representative object per subsystem 00-19 + the 4-layer dispatch
+  FINAL; no operator/personal seeds leaked (empty registries, no workspace
+  personas); and the functional spine e2e (intent→work_item→dispatch with
+  capability substitution). `tests/README.md` + `.github/workflows/ci.yml`
+  (extension build+virgin-smoke job + go build/vet job; concurrency-cancel;
+  go-version-file). README CI badge added. `.gitattributes` was already
+  comprehensive (eol=lf); `*.exe` already gitignored (no binary tracked).
+  migration-order.txt header repoints the harness to tests/.
+  **B6 REMAINING:** (1) **overlay re-author** (workspace repo) — the 33 overlay
+  migrations + init/01-seed-workstreams against doc_*/relational/config-keys
+  (import_workstream signature unchanged); (2) **rename-map.tsv finalize**
+  (workspace parity/) — fold all B1-B5 rename rows; (3) **classify the 20
+  live↔repo mismatches** via the verify-suite (needs live; read-only diff);
+  (4) **anatomy doc** name + two-tier (bundle+overlay) update; (5) **B5-tail**
+  seed_harness genericize + bgworker `_kind` enum (schema.rs/Rust-side; assess
+  vs the daemon module). Then the **CUT** (Hinge ①+③) + the **coder wave**
+  20-coder.sql (Hinge ②).
 
 B1b audit notes for later batches:
 - `parse_gospel_links` kept as-is in core (markdown-link parser with a
