@@ -47,9 +47,7 @@ COPY src ./src
 # When adding a new file, also add the corresponding extension_sql_file!
 # call in src/lib.rs and update this list.
 COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
-     2-7a-watchman-substrate.sql 3a-watchman-pass.sql \
-     2-7b1-watchman-automation.sql 2-7b2-watchman-scheduler.sql \
-     2-7b3-watchman-budget.sql 2-7b4-watchman-soak-prep.sql \
+     03-watchman.sql \
      3c1-pipelines-work-items.sql 3c2-work-item-advance-trigger.sql \
      3c2-5-study-tools.sql 3c3-stage-templating-and-study-write.sql \
      3c3-1-trigger-bugfixes.sql \

@@ -53,7 +53,7 @@ func registerInspectionTools(srv *mcp.Server, pool *pgxpool.Pool) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "watchman_pass_show",
 		Description: "Show one Watchman pass plus the per-doc verdicts it produced. " +
-			"Each verdict includes study_id, verdict (clean/drift/done/superseded/skipped), " +
+			"Each verdict includes doc_id, verdict (clean/drift/done/superseded/skipped), " +
 			"reasoning, model, and tokens. Findings (drift details) are surfaced separately.",
 	}, makeWatchmanPassShow(pool))
 }
@@ -288,7 +288,7 @@ type WatchmanPassShowInput struct {
 }
 
 type WatchmanVerdict struct {
-	StudyID   string    `json:"study_id"`
+	DocID     string    `json:"doc_id"`
 	Verdict   string    `json:"verdict"`
 	Reasoning string    `json:"reasoning"`
 	Model     string    `json:"model"`
@@ -339,7 +339,7 @@ func makeWatchmanPassShow(pool *pgxpool.Pool) func(
 
 		// Verdicts
 		rows, err := pool.Query(ctx, `
-			SELECT study_id, verdict, COALESCE(reasoning,''), COALESCE(model,''),
+			SELECT doc_id, verdict, COALESCE(reasoning,''), COALESCE(model,''),
 			       COALESCE(tokens_in,0), COALESCE(tokens_out,0),
 			       actor, created_at
 			  FROM stewards.verdicts
@@ -354,7 +354,7 @@ func makeWatchmanPassShow(pool *pgxpool.Pool) func(
 		var verdicts []WatchmanVerdict
 		for rows.Next() {
 			var v WatchmanVerdict
-			if err := rows.Scan(&v.StudyID, &v.Verdict, &v.Reasoning, &v.Model,
+			if err := rows.Scan(&v.DocID, &v.Verdict, &v.Reasoning, &v.Model,
 				&v.TokensIn, &v.TokensOut, &v.Actor, &v.CreatedAt); err != nil {
 				return toolError("watchman_pass_show verdicts scan: %v", err),
 					WatchmanPassShowOutput{}, nil

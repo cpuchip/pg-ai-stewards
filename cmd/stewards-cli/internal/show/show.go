@@ -990,7 +990,7 @@ func printWatchmanPassDetail(ctx context.Context, pool *pgxpool.Pool, passID str
 		`SELECT s.slug, v.verdict, v.tokens_in, v.tokens_out,
 		        v.created_at, v.reasoning
 		   FROM stewards.verdicts v
-		   JOIN stewards.docs s ON s.id = v.study_id
+		   JOIN stewards.docs s ON s.id = v.doc_id
 		  WHERE v.pass_id = $1
 		  ORDER BY v.created_at`,
 		passID,
@@ -1023,7 +1023,7 @@ func printWatchmanPassDetail(ctx context.Context, pool *pgxpool.Pool, passID str
 		        f.message, coalesce(f.suggested_action, ''),
 		        f.acknowledged_at IS NOT NULL AS acked
 		   FROM stewards.findings f
-		   LEFT JOIN stewards.docs s ON s.id = f.study_id
+		   LEFT JOIN stewards.docs s ON s.id = f.doc_id
 		  WHERE f.pass_id = $1
 		  ORDER BY f.created_at`,
 		passID,

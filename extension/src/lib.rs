@@ -67,45 +67,15 @@ extension_sql_file!(
 );
 
 extension_sql_file!(
-    "../2-7a-watchman-substrate.sql",
-    name = "create_watchman_substrate",
+    "../03-watchman.sql",
+    name = "create_watchman",
     requires = ["create_workstreams"],
-);
-
-extension_sql_file!(
-    "../3a-watchman-pass.sql",
-    name = "create_watchman_pass",
-    requires = ["create_watchman_substrate"],
-);
-
-extension_sql_file!(
-    "../2-7b1-watchman-automation.sql",
-    name = "create_watchman_automation",
-    requires = ["create_watchman_pass"],
-);
-
-extension_sql_file!(
-    "../2-7b2-watchman-scheduler.sql",
-    name = "create_watchman_scheduler",
-    requires = ["create_watchman_automation"],
-);
-
-extension_sql_file!(
-    "../2-7b3-watchman-budget.sql",
-    name = "create_watchman_budget",
-    requires = ["create_watchman_scheduler"],
-);
-
-extension_sql_file!(
-    "../2-7b4-watchman-soak-prep.sql",
-    name = "create_watchman_soak_prep",
-    requires = ["create_watchman_budget"],
 );
 
 extension_sql_file!(
     "../3c1-pipelines-work-items.sql",
     name = "create_pipelines_work_items",
-    requires = ["create_watchman_soak_prep"],
+    requires = ["create_watchman"],
 );
 
 extension_sql_file!(
