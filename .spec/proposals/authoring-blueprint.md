@@ -196,7 +196,7 @@ es1's cancel-cascade).
   would never materialize); restored here — FLAG for the 20-mismatch
   classification (live may carry the j8c regression). NOTE: lens dispatch
   with NULL models needs 19's fallback (degrades gracefully until then).
-- **B4/15a SHIPPED 2026-06-13** (OSS `<pending>`): `15a-context-engrams.sql`
+- **B4/15a SHIPPED 2026-06-13** (OSS `ad4f675`): `15a-context-engrams.sql`
   — the engram + corpus DATA layer (split from 15b per the size note).
   messages.engrams + flagged_injection + agents.working_budget columns;
   provider_rules table+seed + provider helpers; engram_embeddings + populate
@@ -231,24 +231,66 @@ es1's cancel-cascade).
   misroute discard. pgcrypto/`digest` concern deferred to 15b (only es7's
   intercept computes a content sha; 15a has zero crypto). NO doc_* renames
   in 15a (those land in 15b with l6's wrappers).
-- **B4/15b NEXT:** `15b-context-surface.sql` — the live composition + judge
-  surface. compose_messages FINAL (**ct2-7a2** — verify it folds k6/k7/k8/k9/
-  l1/l13 fixes) + compose_tools FINAL (**ct2-7b**); the judge-brief path
-  (**es7**: judge-brief agent, dispatch_judge_brief, render_judge_brief_surface,
-  apply_judge_brief + trigger, intercept_oversized_tool_after FINAL + the l23
-  `messages_aa_intercept_oversized` trigger, tool_dispatch_complete_waiting
-  FINAL); intercept_threshold_chars (l22) + read_overflow_raw (l23);
-  **l6 heavyweight wrappers WITH the doc_* renames** (investigate_study/
-  summarize_study/audit_studies → investigate_doc/summarize_doc/audit_docs —
-  the FIRST rename-map.tsv rows of B4); deep_research (k5); l7 suspect-sources
-  + l8 untrusted-data-wrap (`tool_name_for_tool_call_id` — used by es7
-  intercept); l24/l25 dry_run_chat; l30/l31/l32 tool-round caps; es1
-  cancel-cascade; ct2-1/2/3 context state/render/tools; ct2-7a self-notes
-  store + ct2-7a2 wire + ct2-7b tools; ct2-7d working tags. **Resolve at 15b:**
-  pgcrypto vs built-in `sha256()` for es7's intercept content-sha (lean
-  built-in to drop the dep — byte-identical); **judge_templates (l18) +
-  render_judge_surface (l22) are DEAD post-es9** (render_judge_surface = 0
-  callers after es7) → OMIT both (flag: live may carry orphan judge_templates).
+- **B4/15b SHIPPED 2026-06-13** (OSS `<pending-15b>`): `15b-context-surface.sql`
+  — the live composition + judge surface. compose_messages FINAL (**ct2-7a2**;
+  confirmed self-contained — its ct2-2 base header documents the k2→k6→k7→k8→
+  k9→l1→l13 fold, and the §7 render_self_notes line is the only addition) +
+  the CT2 state model (ct2-1) / levers / self-notes store (ct2-7a) / working
+  tags (ct2-7d, the FINAL context_pressure_line with tag echo); the judge-brief
+  path (**es7** minus extract_engrams, which 15a owns): judge-brief agent,
+  dispatch_judge_brief, render_judge_brief_surface, apply_judge_brief + trigger,
+  intercept_oversized_tool_after FINAL + the l23 `messages_aa_intercept_oversized`
+  trigger, tool_dispatch_complete_waiting FINAL; intercept_threshold_chars (l22)
+  + read_overflow_raw (l23); l8 tool_name_for_tool_call_id + untrusted-web-wrap;
+  l7 suspect-sources; the heavyweight wrappers (l6) **with the doc_* renames**;
+  deep_research (k5); chat_post_internal FINAL + caps (l30/l31/l32); the 5-arg
+  dry_run_chat wrapper (l25); work_item_cancel cascade (es1). Virgin scratch
+  smoke FULLY GREEN (CASCADE vector; **pgcrypto NOT installed**; 38 kept fns,
+  0 dead fns, 5 triggers; compose_messages renders system-first; self-note
+  {global} renders; working-tag stamp + pressure-line echo; **the judge
+  intercept end-to-end** — a 62.4k-char tool msg → built-in-sha256 dedup →
+  1 overflow parent (sha set) → judge wq dispatched → [JUDGE-PENDING] → K.1
+  extraction correctly skipped). 24 files retired, manifest 70→46, ext dir 63
+  .sql; secret-scan clean. **DEVIATIONS (act+report):**
+  - **sha256 swap (correctness, not cleanup):** es7's intercept used pgcrypto
+    `digest()` — the ONLY pgcrypto use in the extension. Swapped to built-in
+    `encode(sha256(convert_to(content,'UTF8')),'hex')` (byte-identical for a
+    UTF-8 DB). The OSS core requires `vector` only, so on a virgin install the
+    old digest() would fail at runtime in the judge intercept. pgcrypto now
+    truly unneeded (yaml_sha256 is Rust; gen_random_uuid is core).
+  - **compose_tools NOT authored here → deferred to 16.** Its true final is
+    **ct2-7e** (not ct2-7b — ct2-7e redefines it LAST in manifest order, adding
+    the propose_prompt_change CASE branch). ct2-7e's body calls `self_prompt_on`,
+    a LANGUAGE sql function validated at CREATE time → it cannot precede
+    self_prompt_on (born in ct2-7e). The schema.rs base compose_tools carries
+    until 16 authors the single final (mirrors the B3 apply_gate_decision
+    placement). The context_*/remember/forget/tag tool ROWS are registered in
+    15b; 16's gate makes them family-scoped.
+  - **judge_templates (l18) + render_judge_surface (l22) OMITTED (dead post-es9)**
+    — render_judge_surface read the es9-dropped `messages_raw_overflow_leaves`
+    and was the only consumer of judge_templates/judge_template_for_pipeline.
+    Files retired. ★ FLAG (20-mismatch): live may carry the orphan judge_templates
+    table + judge_template_for_pipeline.
+  - **trigger_extract_engrams_on_large_tool NOT re-authored** — 15a's
+    agent-aware (effective_extraction_threshold) form is the clean-room final;
+    l23's later `[CORPUS-INDEXED]`-guarded redefinition is dead (post-es9 that
+    marker is never produced; extract_engrams self-skips). ★ FLAG (20-mismatch):
+    live may carry l23's guarded form.
+  - **3 within-chain finals re-authored here** (each a genuine cross-subsystem
+    evolution the blueprint sanctioned for B4): `tool_dispatch_complete_waiting`
+    (05 base → es7 judge-gate), `work_item_cancel` (04 base → es1 cascade),
+    `chat_post_internal` (04 base → l32 two-tier caps; needs the 5-arg
+    dry_run_chat + cap helpers born in 15b). l24's drop-the-duplicate step is
+    moot on a clean chain (only the l25 5-arg wrapper is authored).
+  - **doc_* wrapper renames (FIRST rename-map.tsv rows of B4):** tool
+    summarize_study/investigate_study/audit_studies → summarize_doc/
+    investigate_doc/audit_docs; agent+pipeline families subagent-study-*/
+    subagent-studies-audit → subagent-doc-*/subagent-docs-audit; prose
+    studies/study → docs/doc. Go handlers renamed in lockstep
+    (`cmd/stewards-mcp/heavyweight_tools.go`; GOWORK=off build+vet green).
+  - **agents.kind value-seeds (ct2-7a)** are NULL-guarded UPDATEs targeting
+    families born later (persona@17) or workspace-flavored (dev/debug) — no-ops
+    on the virgin core; kind for example agents is a B5 seed-pass concern.
 - **B4/16:** 16-subagents (k4/l9/es8/es10/r11/ct2-5/ct2-7e; k4 hardcoded
   'scripture-study' slug → config default_intent_slug; k4/l9 subagent depth
   caps). **B5** = 17–19 +

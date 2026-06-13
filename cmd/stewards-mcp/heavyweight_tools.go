@@ -11,7 +11,7 @@
 // K.5a (external content): deep_research is the proof-of-pattern.
 // L.6 fills out the rest of the wrapper set:
 //   summarize_url, audit_files, investigate_session,
-//   summarize_study, investigate_study, audit_studies.
+//   summarize_doc, investigate_doc, audit_docs.
 
 package main
 
@@ -69,25 +69,25 @@ func registerHeavyweightTools(srv *mcp.Server, pool *pgxpool.Pool) {
 	}, makeInvestigateSession(pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "summarize_study",
-		Description: "Read a substrate study by slug and return a focused digest. " +
+		Name: "summarize_doc",
+		Description: "Read a substrate doc by slug and return a focused digest. " +
 			"Delegates to a sub-agent restricted to doc_get + expand_message ONLY. " +
-			"Use for: pulling a known study's substance without the full text in active context.",
-	}, makeSummarizeStudy(pool))
+			"Use for: pulling a known doc's substance without the full text in active context.",
+	}, makeSummarizeDoc(pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "investigate_study",
-		Description: "Search the studies corpus and synthesize what it knows about a topic. " +
+		Name: "investigate_doc",
+		Description: "Search the docs corpus and synthesize what it knows about a topic. " +
 			"Delegates to a sub-agent restricted to doc_search / doc_get / doc_similar + expand_message. " +
-			"Use for: 'what has the corpus said about X?', cross-study syntheses, finding adjacent material.",
-	}, makeInvestigateStudy(pool))
+			"Use for: 'what has the corpus said about X?', cross-doc syntheses, finding adjacent material.",
+	}, makeInvestigateDoc(pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "audit_studies",
-		Description: "Audit the studies corpus against a quality / completeness question. " +
+		Name: "audit_docs",
+		Description: "Audit the docs corpus against a quality / completeness question. " +
 			"Delegates to a sub-agent restricted to doc_search / doc_get + expand_message. " +
-			"Use for: 'which studies on X lack a Becoming section?', 'are any studies contradicting Y?'.",
-	}, makeAuditStudies(pool))
+			"Use for: 'which docs on X lack a Becoming section?', 'are any docs contradicting Y?'.",
+	}, makeAuditDocs(pool))
 
 	// L.4 / L.5 direct SQL fn wrappers.
 	mcp.AddTool(srv, &mcp.Tool{
@@ -272,22 +272,22 @@ func makeInvestigateSession(pool *pgxpool.Pool) func(
 	}
 }
 
-type SummarizeStudyInput struct {
-	Slug         string `json:"slug" jsonschema:"the study slug"`
+type SummarizeDocInput struct {
+	Slug         string `json:"slug" jsonschema:"the doc slug"`
 	Focus        string `json:"focus,omitempty" jsonschema:"optional focus"`
 	CostCapMicro int64  `json:"cost_cap_micro,omitempty" jsonschema:"max micro-dollars (default 300000=$0.30)"`
 }
 
-func makeSummarizeStudy(pool *pgxpool.Pool) func(
-	ctx context.Context, req *mcp.CallToolRequest, in SummarizeStudyInput,
+func makeSummarizeDoc(pool *pgxpool.Pool) func(
+	ctx context.Context, req *mcp.CallToolRequest, in SummarizeDocInput,
 ) (*mcp.CallToolResult, SpawnSubagentOutput, error) {
 	return func(
-		ctx context.Context, req *mcp.CallToolRequest, in SummarizeStudyInput,
+		ctx context.Context, req *mcp.CallToolRequest, in SummarizeDocInput,
 	) (*mcp.CallToolResult, SpawnSubagentOutput, error) {
 		if in.Slug == "" {
-			return toolError("summarize_study: 'slug' is required"), SpawnSubagentOutput{}, nil
+			return toolError("summarize_doc: 'slug' is required"), SpawnSubagentOutput{}, nil
 		}
-		binding := fmt.Sprintf("Summarize the substrate study with slug: %s\n\n"+
+		binding := fmt.Sprintf("Summarize the substrate doc with slug: %s\n\n"+
 			"Use doc_get to read it. Preserve key quotes verbatim with attribution.", in.Slug)
 		if in.Focus != "" {
 			binding += "\n\nFocus: " + in.Focus
@@ -297,31 +297,31 @@ func makeSummarizeStudy(pool *pgxpool.Pool) func(
 			costCap = 300_000
 		}
 		return makeSpawnSubagent(pool)(ctx, req, SpawnSubagentInput{
-			PipelineFamily:  "subagent-study-summary",
+			PipelineFamily:  "subagent-doc-summary",
 			BindingQuestion: binding,
 			CostCapMicro:    costCap,
 		})
 	}
 }
 
-type InvestigateStudyInput struct {
+type InvestigateDocInput struct {
 	Query        string `json:"query" jsonschema:"search query"`
 	Focus        string `json:"focus,omitempty" jsonschema:"optional focus"`
 	CostCapMicro int64  `json:"cost_cap_micro,omitempty" jsonschema:"max micro-dollars (default 600000=$0.60)"`
 }
 
-func makeInvestigateStudy(pool *pgxpool.Pool) func(
-	ctx context.Context, req *mcp.CallToolRequest, in InvestigateStudyInput,
+func makeInvestigateDoc(pool *pgxpool.Pool) func(
+	ctx context.Context, req *mcp.CallToolRequest, in InvestigateDocInput,
 ) (*mcp.CallToolResult, SpawnSubagentOutput, error) {
 	return func(
-		ctx context.Context, req *mcp.CallToolRequest, in InvestigateStudyInput,
+		ctx context.Context, req *mcp.CallToolRequest, in InvestigateDocInput,
 	) (*mcp.CallToolResult, SpawnSubagentOutput, error) {
 		if in.Query == "" {
-			return toolError("investigate_study: 'query' is required"), SpawnSubagentOutput{}, nil
+			return toolError("investigate_doc: 'query' is required"), SpawnSubagentOutput{}, nil
 		}
-		binding := fmt.Sprintf("Investigate the studies corpus for: %s\n\n"+
-			"Use doc_search to find relevant studies, doc_get to read them, doc_similar to surface "+
-			"adjacent material. Synthesize what the corpus knows; cite study slugs.", in.Query)
+		binding := fmt.Sprintf("Investigate the docs corpus for: %s\n\n"+
+			"Use doc_search to find relevant docs, doc_get to read them, doc_similar to surface "+
+			"adjacent material. Synthesize what the corpus knows; cite doc slugs.", in.Query)
 		if in.Focus != "" {
 			binding += "\n\nFocus: " + in.Focus
 		}
@@ -330,40 +330,40 @@ func makeInvestigateStudy(pool *pgxpool.Pool) func(
 			costCap = 600_000
 		}
 		return makeSpawnSubagent(pool)(ctx, req, SpawnSubagentInput{
-			PipelineFamily:  "subagent-study-investigate",
+			PipelineFamily:  "subagent-doc-investigate",
 			BindingQuestion: binding,
 			CostCapMicro:    costCap,
 		})
 	}
 }
 
-type AuditStudiesInput struct {
-	Query        string `json:"query" jsonschema:"search query to find studies to audit"`
+type AuditDocsInput struct {
+	Query        string `json:"query" jsonschema:"search query to find docs to audit"`
 	Question     string `json:"question" jsonschema:"the audit question"`
 	CostCapMicro int64  `json:"cost_cap_micro,omitempty" jsonschema:"max micro-dollars (default 600000=$0.60)"`
 }
 
-func makeAuditStudies(pool *pgxpool.Pool) func(
-	ctx context.Context, req *mcp.CallToolRequest, in AuditStudiesInput,
+func makeAuditDocs(pool *pgxpool.Pool) func(
+	ctx context.Context, req *mcp.CallToolRequest, in AuditDocsInput,
 ) (*mcp.CallToolResult, SpawnSubagentOutput, error) {
 	return func(
-		ctx context.Context, req *mcp.CallToolRequest, in AuditStudiesInput,
+		ctx context.Context, req *mcp.CallToolRequest, in AuditDocsInput,
 	) (*mcp.CallToolResult, SpawnSubagentOutput, error) {
 		if in.Query == "" {
-			return toolError("audit_studies: 'query' is required"), SpawnSubagentOutput{}, nil
+			return toolError("audit_docs: 'query' is required"), SpawnSubagentOutput{}, nil
 		}
 		if in.Question == "" {
-			return toolError("audit_studies: 'question' is required"), SpawnSubagentOutput{}, nil
+			return toolError("audit_docs: 'question' is required"), SpawnSubagentOutput{}, nil
 		}
-		binding := fmt.Sprintf("Audit studies matching: %s\n\nAudit question: %s\n\n"+
-			"Use doc_search to find candidates, doc_get to inspect. Produce a per-study finding table.",
+		binding := fmt.Sprintf("Audit docs matching: %s\n\nAudit question: %s\n\n"+
+			"Use doc_search to find candidates, doc_get to inspect. Produce a per-doc finding table.",
 			in.Query, in.Question)
 		costCap := in.CostCapMicro
 		if costCap == 0 {
 			costCap = 600_000
 		}
 		return makeSpawnSubagent(pool)(ctx, req, SpawnSubagentInput{
-			PipelineFamily:  "subagent-studies-audit",
+			PipelineFamily:  "subagent-docs-audit",
 			BindingQuestion: binding,
 			CostCapMicro:    costCap,
 		})
