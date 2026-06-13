@@ -123,7 +123,17 @@ BEGIN
     -- even that is seeded at runtime, so core ships zero intents).
     SELECT count(*) INTO n FROM stewards.intents WHERE slug IN ('scripture-study');
     ASSERT n=0, format('personal intent slugs must NOT be in core, found %s', n);
-    RAISE NOTICE 'OK 4: no operator/personal seeds leaked (empty registries, no workspace personas)';
+
+    -- mcp_servers: ONLY the two core daemons (fs-read, pg-ai-stewards). No
+    -- personal MCP servers (gospel-engine, webster, yt, exa, etc.) leak in.
+    SELECT count(*) INTO n FROM stewards.mcp_servers
+     WHERE name IN ('gospel-engine','gospel-engine-v2','webster','yt','search',
+                    'exa-search','byu-citations','becoming','strongs');
+    ASSERT n=0, format('personal MCP servers must NOT be in core, found %s', n);
+    ASSERT (SELECT count(*) FROM stewards.mcp_servers
+             WHERE name IN ('fs-read','pg-ai-stewards')) = 2,
+        'the two core MCP daemons (fs-read, pg-ai-stewards) must be seeded';
+    RAISE NOTICE 'OK 4: no operator/personal seeds leaked (empty registries, no workspace personas, core MCP only)';
 END $$;
 
 -- ---------------------------------------------------------------------

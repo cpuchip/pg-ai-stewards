@@ -404,7 +404,7 @@ es1's cancel-cascade).
 - **B5 tail (carry-forward, NOT SQL-chain):** seed_harness genericize + bgworker
   `_kind` enum are schema.rs/Rust-side cleanups (the bgworker was consolidated at
   the daemon leg); assess them against the module at B6, not as authored-SQL.
-- **B6 IN FLIGHT 2026-06-13.** **tests/ + CI SHIPPED (OSS `<pending-b6a>`):**
+- **B6 IN FLIGHT 2026-06-13.** **tests/ + CI SHIPPED (OSS `8509d26`):**
   `tests/virgin-smoke.sql` — the authoritative virgin-boot test (plpgsql ASSERT
   so CI fails on regression): vector-only / no-pgcrypto / no-AGE; doc_* rename
   complete; a representative object per subsystem 00-19 + the 4-layer dispatch
@@ -419,11 +419,19 @@ es1's cancel-cascade).
   migrations + init/01-seed-workstreams against doc_*/relational/config-keys
   (import_workstream signature unchanged); (2) **rename-map.tsv finalize**
   (workspace parity/) — fold all B1-B5 rename rows; (3) **classify the 20
-  live↔repo mismatches** via the verify-suite (needs live; read-only diff);
-  (4) **anatomy doc** name + two-tier (bundle+overlay) update; (5) **B5-tail**
-  seed_harness genericize + bgworker `_kind` enum (schema.rs/Rust-side; assess
-  vs the daemon module). Then the **CUT** (Hinge ①+③) + the **coder wave**
-  20-coder.sql (Hinge ②).
+  live↔repo mismatches** via the verify-suite (needs live; read-only diff).
+  **VERIFIED DONE this session:** (4) **anatomy doc** is clean — no stale
+  study_*/AGE, "overlay migrations" already correct, the one kimi-k2.6 is an
+  illustrative payload value; (5) **seed_harness genericize** — virgin boot =
+  all-generic agents (brainstorm-*/judge-brief/persona/prompt-critic/
+  stewards-explore/subagent-doc-*/watchman-consolidator/fanout-*/engram-extractor),
+  intents=0, mcp_servers = ONLY the two core daemons (fs-read + pg-ai-stewards);
+  the smoke now ASSERTs no personal MCP leaks. **Remaining tail:** bgworker
+  `_kind` enum is a deferrable Rust-typing refactor (work_queue.kind match arms;
+  not clean-room-critical). **CI follow-up:** Node-20 actions deprecation
+  (checkout@v4 / setup-go@v5) — bump to Node-24 majors before 2026-06-16
+  (non-fatal; go job green @37s). Then the **CUT** (Hinge first+third) + the
+  **coder wave** 20-coder.sql (Hinge second).
 
 B1b audit notes for later batches:
 - `parse_gospel_links` kept as-is in core (markdown-link parser with a
