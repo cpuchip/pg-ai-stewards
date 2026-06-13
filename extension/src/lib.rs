@@ -224,6 +224,12 @@ extension_sql_file!(
     requires = ["create_context_engrams"],
 );
 
+extension_sql_file!(
+    "../16-subagents.sql",
+    name = "create_subagents",
+    requires = ["create_context_surface"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

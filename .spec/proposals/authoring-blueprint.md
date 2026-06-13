@@ -231,7 +231,7 @@ es1's cancel-cascade).
   misroute discard. pgcrypto/`digest` concern deferred to 15b (only es7's
   intercept computes a content sha; 15a has zero crypto). NO doc_* renames
   in 15a (those land in 15b with l6's wrappers).
-- **B4/15b SHIPPED 2026-06-13** (OSS `<pending-15b>`): `15b-context-surface.sql`
+- **B4/15b SHIPPED 2026-06-13** (OSS `13cb0f5`): `15b-context-surface.sql`
   — the live composition + judge surface. compose_messages FINAL (**ct2-7a2**;
   confirmed self-contained — its ct2-2 base header documents the k2→k6→k7→k8→
   k9→l1→l13 fold, and the §7 render_self_notes line is the only addition) +
@@ -291,9 +291,47 @@ es1's cancel-cascade).
   - **agents.kind value-seeds (ct2-7a)** are NULL-guarded UPDATEs targeting
     families born later (persona@17) or workspace-flavored (dev/debug) — no-ops
     on the virgin core; kind for example agents is a B5 seed-pass concern.
-- **B4/16:** 16-subagents (k4/l9/es8/es10/r11/ct2-5/ct2-7e; k4 hardcoded
-  'scripture-study' slug → config default_intent_slug; k4/l9 subagent depth
-  caps). **B5** = 17–19 +
+- **B4/16 SHIPPED 2026-06-13** (OSS `<pending-16>`): `16-subagents.sql` —
+  the sub-agent delegation surface + the §7.3 self-editable base prompt.
+  l9 depth cap (subagent_depth_of/check_subagent_depth + enforcement trigger)
+  · k4 spawn_subagent_create + tool · es8 consult_subagent_dispatch + tool ·
+  es10 grant · r11 on_one_shot_pipeline_completed FINAL + trigger · ct2-5
+  auto-tag + context_resolve_handle FINAL · ct2-7e (self_prompt_on +
+  agent_prompt_history/prompt_change_proposals + prompt-critic agent/pipeline/
+  deny-* + completion trigger + propose_prompt_change tool + **the
+  compose_tools FINAL** + the human surface). Virgin scratch smoke FULLY
+  GREEN (pgcrypto absent; l9 3 fns; **no scripture-study hardcode**; depth cap
+  raises at 3 / allows ≤2; spawn at root → origin=agent_planning, cap=500000;
+  **INERT property** — propose_prompt_change hidden for a non-flagged family,
+  shown for one with BOTH flags, context_* gated likewise; **propose happy
+  path** — session→smoke16-sp resolve, proposal pending + prompt-critic
+  work_item dispatched; ct2-5 sub-agent-id tag resolution). 7 files retired;
+  manifest 46→39; ext dir 57 .sql; secret-scan clean. **DEVIATIONS (act+report):**
+  - **k4 slug → config:** the hardcoded 'scripture-study' fallback intent →
+    `stewards.config_get_text('default_intent_slug','default')` (the 09/14
+    pattern; no personal slug in core). The spawn_subagent tool_def example
+    'study-write' → 'doc-write' (doc_* genericization, prose only).
+  - **es10 placed BEFORE ct2-7e** so prompt-critic (born in §7, tools-disabled)
+    is NOT swept into the consult_subagent grant — matching the live ledger
+    order (es10 applied before ct2-7e existed). Smoke: 22 families granted,
+    prompt-critic excluded, its deny-* intact. ★ FLAG (20-mismatch): core
+    coverage (pipelines-through-15b) is a benign, council-intent-aligned
+    superset; live's chronological coverage may differ.
+  - **on_one_shot_pipeline_completed FINAL = r11, authored here.** Run-order
+    inversion handled: r11 (manifest line 42) is the chronological final and a
+    true superset (14 had only aggregate+brainstorm; r11 adds redline/persona-%/
+    subagent-%). ★ CROSS-BATCH NOTE for B5/17: r7/r8's redefinitions of this
+    function + its trigger are DEAD (superseded by r11). 17 authors the persona
+    agent / pipelines / deny-* perm but must NOT re-author
+    on_one_shot_pipeline_completed (it would regress, dropping the subagent-% arm).
+  - **context_resolve_handle FINAL = ct2-5, re-authored here** (overwrites 15b's
+    ct2-3 form — adds the context_tags fallback so a lever resolves a sub-agent
+    id). Within-chain re-author, legitimate.
+  - **compose_tools FINAL (deferred from 15b) authored here** — the CASE-gated
+    ct2-7e form. self_prompt_on is created first (§7.1) because compose_tools is
+    LANGUAGE sql, body-validated at CREATE. No later batch redefines compose_tools
+    (grep-confirmed across the remaining manifest). schema.rs base → 16 final.
+- **B5** = 17–19 +
 seed_harness genericize + bgworker `_kind` enum. **B6** = tests/ + CI
 workflow + rename-map.tsv finalization + overlay copies updated to new
 names (overlay note: init/01-seed-workstreams + any overlay migration
