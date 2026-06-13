@@ -186,6 +186,29 @@ extension_sql_file!(
     requires = ["create_research_pipelines"],
 );
 
+// =====================================================================
+// Consolidation leg B4/15 (2026-06-13): the context engine, split in two.
+//   15a-context-engrams — the engram + corpus DATA layer: messages.engrams
+//                schema + extractor agent/pipeline (provenance-tagged),
+//                provider_rules + budget cascade + graduated-render helper,
+//                engram_embeddings + search, map-reduce extraction, the
+//                injection regex screen, embed-route + model-substitution
+//                logging, the work-kind crash-loop breaker, and the engram
+//                tools (expand_message / mark_engram_important /
+//                re_extract_engrams / summarize_my_context / read_corpus_parents).
+//                Authors the FINAL post-ES.3 state — the es9-dropped leaf
+//                machinery (chunk_and_index, contextualize_leaf, the leaves
+//                table, retrieve_with_merge, render_judge_surface) and its
+//                orphaned helpers are simply not built (no build-then-drop).
+//   15b-context-surface — the live composition + judge surface (next).
+// =====================================================================
+
+extension_sql_file!(
+    "../15a-context-engrams.sql",
+    name = "create_context_engrams",
+    requires = ["create_fanout_brainstorm"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

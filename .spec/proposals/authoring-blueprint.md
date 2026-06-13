@@ -175,9 +175,83 @@ es1's cancel-cascade).
   rename-map rows (consolidation, not renames). **on_maturity_verified true
   final is j7** (j1/j7 add fanout-aggregator branches) → 08's update at B4
   close must fold i4 agent-proposal + j1/j7 fanout branches, all wrapped.
-- **B4/14-16 NEXT:** 14-fanout (j1-j9c + trimmed halves + the 08
-  on_maturity_verified fold), 15-context-engine (k/l/es/ct2 — huge; may
-  split 15a/b), 16-subagents (k4/l9/es8/es10/r11/ct2-5/ct2-7e). **B5** = 17–19 +
+- **B4/14 SHIPPED 2026-06-13** (OSS `b1a9b01`): fan-out machinery
+  (fanout-decompose/aggregate agents, decompose-fanout + aggregate-children
+  pipelines, spawn_children) + 12-lens brainstorm library (agents+pipelines,
+  start_brainstorm) + catalog_default_* helpers + the one-shot/child-terminal
+  triggers. Virgin scratch smoke fully green; go build+vet green; 13 files
+  retired (j8a + j11 KEPT for B5/19), manifest 110→97. **Deviations:**
+  on_maturity_verified TRUE final (j7) folded once into **08** (calls
+  spawn_children/check_and_dispatch_fanout_aggregator[14] +
+  apply_agent_proposal/enqueue_proposed_work_items[13] as late-bound forward
+  refs); **work_item_dispatch_stage dispatch-final defers to 19** (j8a 4-layer
+  + j11 cap-gate accrete via m2/r3) — only j8a's dependency-free
+  catalog_default_* helpers moved to 14 (j12 pre-flight needs them); j8b
+  consumed into the 4 lens pipeline defs (NULL model + metadata.default_*);
+  j2's on_aggregate_completed superseded by j6's on_one_shot; start_brainstorm
+  'scripture-study' → config default_intent_slug. ★ **spawn_children =
+  CORRECT UNION of j3+j4+j8c** — j8c (last live redefinition) DROPPED j3's
+  aggregator + j4's per-child file_destination while adding override
+  propagation (the aggregate-children template was NULL'd by j3, so the index
+  would never materialize); restored here — FLAG for the 20-mismatch
+  classification (live may carry the j8c regression). NOTE: lens dispatch
+  with NULL models needs 19's fallback (degrades gracefully until then).
+- **B4/15a SHIPPED 2026-06-13** (OSS `<pending>`): `15a-context-engrams.sql`
+  — the engram + corpus DATA layer (split from 15b per the size note).
+  messages.engrams + flagged_injection + agents.working_budget columns;
+  provider_rules table+seed + provider helpers; engram_embeddings + populate
+  trigger + search_engrams_by_vector; messages_raw_overflow (parents only,
+  + content_sha256 + source_sha256_… helper); model_substitutions + trigger;
+  kind_circuit_breaker + record/reset helpers; the extraction pipeline
+  (engram-extractor agent = **es6 prompt w/ PROVENANCE**, extract_engrams =
+  **es7 final** [skips judge-owned], apply_engram_extraction = **es6 final**
+  [4-shape normalizer + provenance], agent-aware extraction trigger = l12
+  final); render_engrams_under_pressure (l1); the budget cascade
+  (effective_budget/stage_working_budget) + extraction-threshold +
+  stage_context_strategy helpers; map_reduce_extract_engrams (+ apply +
+  l21 map-reduce trigger only); the injection regex screen (k6); embed-route
+  trigger (es2); and the 5 engram tool_defs (expand_message /
+  mark_engram_important / re_extract_engrams / summarize_my_context /
+  read_corpus_parents). Virgin scratch smoke fully green (CASCADE vector;
+  22 kept fns, 0 dead fns, 7 triggers, leaves table absent, injection flag +
+  extraction-enqueue + render functional); 27 historical files retired,
+  manifest 97→70, extension dir 86 .sql. **★ KEY DEVIATION — authored the
+  post-ES.3 FINAL state, never build-then-drop.** The historical chain built
+  the leaf-chunk-and-embed corpus (l14 leaves table, l15 contextualize_leaf,
+  l16 chunk_and_index + split helpers, l17 retrieve_with_merge, es3 circuit
+  breaker, es4) and **es9 dropped all of it** (ratified ES.3 council
+  2026-05-15, decision 3) once the judge-compiled-brief (es7, → 15b)
+  replaced it. So 15a omits the leaf machinery entirely. **It ALSO omits 3
+  orphan helpers es9 left undropped in live** (`split_one_chunk`,
+  `find_last_break_pos`, the `leaf-contextualizer` agent — dead once
+  chunk_and_index/contextualize_leaf were dropped) → **FLAG for the
+  20-mismatch classification: live carries these 3 orphans; the authored
+  core intentionally does not.** One-shot live-data migrations dropped
+  (no-ops on virgin DB): l3 backfill DO, l27 sha backfill UPDATE, es2
+  misroute discard. pgcrypto/`digest` concern deferred to 15b (only es7's
+  intercept computes a content sha; 15a has zero crypto). NO doc_* renames
+  in 15a (those land in 15b with l6's wrappers).
+- **B4/15b NEXT:** `15b-context-surface.sql` — the live composition + judge
+  surface. compose_messages FINAL (**ct2-7a2** — verify it folds k6/k7/k8/k9/
+  l1/l13 fixes) + compose_tools FINAL (**ct2-7b**); the judge-brief path
+  (**es7**: judge-brief agent, dispatch_judge_brief, render_judge_brief_surface,
+  apply_judge_brief + trigger, intercept_oversized_tool_after FINAL + the l23
+  `messages_aa_intercept_oversized` trigger, tool_dispatch_complete_waiting
+  FINAL); intercept_threshold_chars (l22) + read_overflow_raw (l23);
+  **l6 heavyweight wrappers WITH the doc_* renames** (investigate_study/
+  summarize_study/audit_studies → investigate_doc/summarize_doc/audit_docs —
+  the FIRST rename-map.tsv rows of B4); deep_research (k5); l7 suspect-sources
+  + l8 untrusted-data-wrap (`tool_name_for_tool_call_id` — used by es7
+  intercept); l24/l25 dry_run_chat; l30/l31/l32 tool-round caps; es1
+  cancel-cascade; ct2-1/2/3 context state/render/tools; ct2-7a self-notes
+  store + ct2-7a2 wire + ct2-7b tools; ct2-7d working tags. **Resolve at 15b:**
+  pgcrypto vs built-in `sha256()` for es7's intercept content-sha (lean
+  built-in to drop the dep — byte-identical); **judge_templates (l18) +
+  render_judge_surface (l22) are DEAD post-es9** (render_judge_surface = 0
+  callers after es7) → OMIT both (flag: live may carry orphan judge_templates).
+- **B4/16:** 16-subagents (k4/l9/es8/es10/r11/ct2-5/ct2-7e; k4 hardcoded
+  'scripture-study' slug → config default_intent_slug; k4/l9 subagent depth
+  caps). **B5** = 17–19 +
 seed_harness genericize + bgworker `_kind` enum. **B6** = tests/ + CI
 workflow + rename-map.tsv finalization + overlay copies updated to new
 names (overlay note: init/01-seed-workstreams + any overlay migration
