@@ -49,29 +49,8 @@ COPY src ./src
 COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      03-watchman.sql 04-work-items.sql 05-mcp-bridge.sql \
      06-cost.sql 07-steward.sql \
-     5a-maturity-gate.sql \
-     5b-scenarios-verify.sql \
-     5c-sessions-gate-kind.sql \
-     5d-intents-covenants.sql \
-     5d2-seed-fns.sql \
-     5d3-compose-with-intent.sql \
-     5d4-backfill-intent.sql \
-     5d5-tools-off-and-templates.sql \
-     5e-lessons-and-pipeline-flags.sql \
-     5e2-sabbath.sql \
-     5e3-atonement.sql \
-     5e4-promotion-gate-and-triggers.sql \
-     5f-trust.sql \
-     5f2-evaluate-trust.sql \
-     5f3-gate-trust-check.sql \
-     5f4-retry-with-lessons.sql \
-     5f5-apply-gate-override.sql \
-     5g-council.sql \
-     5g2-convene-council.sql \
-     5g3-synthesize-and-resolve.sql \
-     5g4-bishop-and-suggest.sql \
-     6d-pending-file-writes.sql \
-     am1-pending-file-writes-notify.sql ./
+     08-gates.sql 09-intents-covenants.sql 10-sabbath-atonement.sql \
+     11-trust.sql 12-council.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,

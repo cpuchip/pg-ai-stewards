@@ -116,7 +116,46 @@ todos.parent_kind values lowercased to workstream|doc|todo).
 died, manifest 189→155; operator seeds now live in the workspace
 overlay seed-4a-cost-escalation-models.sql; lib.rs requires-graph is
 NOT linear — sweep for non-linear edges on every chain cut).
-**B3** = 08–12. **B4** = 13–16 (incl. j8a+j11-dispatch+j12-brainstorm
+**B3** = 08–12 — **SHIPPED 2026-06-13** (virgin scratch smoke fully green:
+AGE absent, 0 study% fns / study_id cols, values_anchor + file_enqueued_at
+renames clean, 15 tables / 9 gate_prompts / 5 triggers; gate ladder + trust
+gate + l28 veto + verify-fail + the 08→10 on_maturity_verified materialize
+path all e2e; GOWORK=off go build+vet green). 32 historical files died;
+manifest 155→123. **Dependency-correctness deviations from this file's
+literal source-map (the B2 non-linear lesson, applied to cross-batch
+function evolution + forward refs):**
+- `apply_gate_decision` final form is authored ONCE in **11-trust** (not
+  08): its trust check `SELECT`s from `trust_scores`, and a plpgsql SELECT
+  from a table born later in the chain is NOT a safe CREATE-time forward
+  ref (unlike `NEW.<field>` record access + wrapped function calls, which
+  04 already relies on). It is the trust-gated form WITHOUT the inline
+  sabbath fire (h1-6-2 moved sabbath to the trigger; firing it inline too
+  would double-dispatch).
+- `maybe_enqueue_atonement` + the override-aware `sabbath_dispatch` /
+  `atonement_dispatch` (h1-0 finals) → **10-sabbath**; **`h1-0` is fully
+  consumed at B3** (maturity_ladder → 08; work_items sabbath/atonement
+  overrides → 10) — REMOVE h1-0 from 13-research-pipelines' source list.
+- `pipelines.maturity_ladder` born in **08** (gate machinery; h1-0's
+  ADD COLUMN IF NOT EXISTS in B4 is a no-op).
+- `5d5`'s tools_disabled finals for evaluate_gate/generate_scenarios/
+  verify_work_item + the intent-aware `evaluate` template folded into 08
+  (single definition). `covenant_check` template seeded in 09.
+- **`6e` SPLIT**: lesson-file producer → 10; resolution-file producer →
+  **12** (it declares `resolutions%ROWTYPE` + triggers ON resolutions; a
+  %ROWTYPE / trigger on a not-yet-existing table fails at CREATE — only
+  forward *column* refs are deferred).
+- sessions.kind union folded into `src/schema.rs` (born-complete; 5c/5e/5g
+  constraint churn dropped). yaml.rs: slug from YAML (default "default",
+  was hardcoded scripture-study) + emits values_anchor.
+**SURFACED TENSION (for Michael, not silently fixed):** `work_item_promote_trigger`
+(04, B2-shipped) calls `work_item_promote_to_doc` UNWRAPPED, so on a
+sabbath-enabled pipeline a `status→completed` transition *aborts* (the
+sabbath gate RAISEs check_violation) until `sabbath_completed_at` is set.
+This conflates "defer promotion" with "block completion." Faithful to the
+historical authoring (not introduced by B3), but likely wants the PERFORM
+wrapped in BEGIN/EXCEPTION→NOTICE (mirroring on_maturity_verified). Touches
+sabbath-discipline semantics → Michael's call.
+**B4** = 13–16 (incl. j8a+j11-dispatch+j12-brainstorm
 trimmed halves; es7's judge-gated tool_dispatch_complete_waiting;
 es1's cancel-cascade). **B5** = 17–19 +
 seed_harness genericize + bgworker `_kind` enum. **B6** = tests/ + CI

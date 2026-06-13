@@ -107,148 +107,54 @@ extension_sql_file!(
     requires = ["create_cost"],
 );
 
+// =====================================================================
+// Consolidation leg B3 (2026-06-13): the historical 5a–5g4/6d/am1 chain
+// is replaced by five authored subsystem files. Each is a single, final
+// definition (no per-phase redefinitions); see the authoring-blueprint.
+//   08-gates   — maturity ladder, gate eval, scenarios/verify, the
+//                review-prefix BEFORE gate + the maturity→verified
+//                AFTER producer trigger.
+//   09-intents — intents + covenants (values_anchor, extensions catch-all,
+//                presiding render + Watch echo), config-driven intent
+//                defaulting, covenant_check.
+//   10-sabbath — endings (Sabbath) + lessons-from-failure (Atonement) +
+//                the file-materialize queue + producers.
+//   11-trust   — trust ladder + counters + the trust-gated
+//                apply_gate_decision (authored HERE: its trust check
+//                SELECTs from trust_scores, born in this file).
+//   12-council — convene → deliberate → synthesize → bishop resolution +
+//                the resolution-file producer.
+// Linear requires chain; sweep for non-linear edges on any future cut.
+// =====================================================================
+
 extension_sql_file!(
-    "../5a-maturity-gate.sql",
-    name = "create_phase_5a_maturity_gate",
-    requires = [
-        "create_steward",
-        "create_work_items"
-    ],
+    "../08-gates.sql",
+    name = "create_gates",
+    requires = ["create_steward"],
 );
 
 extension_sql_file!(
-    "../5b-scenarios-verify.sql",
-    name = "create_phase_5b_scenarios_verify",
-    requires = ["create_phase_5a_maturity_gate"],
+    "../09-intents-covenants.sql",
+    name = "create_intents_covenants",
+    requires = ["create_gates"],
 );
 
 extension_sql_file!(
-    "../5c-sessions-gate-kind.sql",
-    name = "create_phase_5c_sessions_gate_kind",
-    requires = ["create_phase_5b_scenarios_verify"],
+    "../10-sabbath-atonement.sql",
+    name = "create_sabbath_atonement",
+    requires = ["create_intents_covenants"],
 );
 
 extension_sql_file!(
-    "../5d-intents-covenants.sql",
-    name = "create_phase_5d_intents_covenants",
-    requires = ["create_phase_5c_sessions_gate_kind"],
+    "../11-trust.sql",
+    name = "create_trust",
+    requires = ["create_sabbath_atonement"],
 );
 
 extension_sql_file!(
-    "../5d2-seed-fns.sql",
-    name = "create_phase_5d2_seed_fns",
-    requires = ["create_phase_5d_intents_covenants"],
-);
-
-extension_sql_file!(
-    "../5d3-compose-with-intent.sql",
-    name = "create_phase_5d3_compose_with_intent",
-    requires = ["create_phase_5d2_seed_fns"],
-);
-
-extension_sql_file!(
-    "../5d4-backfill-intent.sql",
-    name = "create_phase_5d4_backfill_intent",
-    requires = ["create_phase_5d3_compose_with_intent"],
-);
-
-extension_sql_file!(
-    "../5d5-tools-off-and-templates.sql",
-    name = "create_phase_5d5_tools_off_and_templates",
-    requires = ["create_phase_5d4_backfill_intent"],
-);
-
-extension_sql_file!(
-    "../5e-lessons-and-pipeline-flags.sql",
-    name = "create_phase_5e_lessons_and_pipeline_flags",
-    requires = ["create_phase_5d5_tools_off_and_templates"],
-);
-
-extension_sql_file!(
-    "../5e2-sabbath.sql",
-    name = "create_phase_5e2_sabbath",
-    requires = ["create_phase_5e_lessons_and_pipeline_flags"],
-);
-
-extension_sql_file!(
-    "../5e3-atonement.sql",
-    name = "create_phase_5e3_atonement",
-    requires = ["create_phase_5e2_sabbath"],
-);
-
-extension_sql_file!(
-    "../5e4-promotion-gate-and-triggers.sql",
-    name = "create_phase_5e4_promotion_gate_and_triggers",
-    requires = ["create_phase_5e3_atonement"],
-);
-
-extension_sql_file!(
-    "../5f-trust.sql",
-    name = "create_phase_5f_trust",
-    requires = ["create_phase_5e4_promotion_gate_and_triggers"],
-);
-
-extension_sql_file!(
-    "../5f2-evaluate-trust.sql",
-    name = "create_phase_5f2_evaluate_trust",
-    requires = ["create_phase_5f_trust"],
-);
-
-extension_sql_file!(
-    "../5f3-gate-trust-check.sql",
-    name = "create_phase_5f3_gate_trust_check",
-    requires = ["create_phase_5f2_evaluate_trust"],
-);
-
-extension_sql_file!(
-    "../5f4-retry-with-lessons.sql",
-    name = "create_phase_5f4_retry_with_lessons",
-    requires = ["create_phase_5f3_gate_trust_check"],
-);
-
-extension_sql_file!(
-    "../5f5-apply-gate-override.sql",
-    name = "create_phase_5f5_apply_gate_override",
-    requires = ["create_phase_5f4_retry_with_lessons"],
-);
-
-extension_sql_file!(
-    "../5g-council.sql",
-    name = "create_phase_5g_council",
-    requires = ["create_phase_5f5_apply_gate_override"],
-);
-
-extension_sql_file!(
-    "../5g2-convene-council.sql",
-    name = "create_phase_5g2_convene_council",
-    requires = ["create_phase_5g_council"],
-);
-
-extension_sql_file!(
-    "../5g3-synthesize-and-resolve.sql",
-    name = "create_phase_5g3_synthesize_and_resolve",
-    requires = ["create_phase_5g2_convene_council"],
-);
-
-extension_sql_file!(
-    "../5g4-bishop-and-suggest.sql",
-    name = "create_phase_5g4_bishop_and_suggest",
-    requires = ["create_phase_5g3_synthesize_and_resolve"],
-);
-
-// Batch G — make the substrate land in real files.
-// (6a's file_path-nullable migration was absorbed into the create_docs
-//  table definition at the 2026-06-12 consolidation.)
-extension_sql_file!(
-    "../6d-pending-file-writes.sql",
-    name = "create_batch_g4_1_pending_file_writes",
-    requires = ["create_phase_5g4_bishop_and_suggest"],
-);
-
-extension_sql_file!(
-    "../am1-pending-file-writes-notify.sql",
-    name = "create_am1_pending_file_writes_notify",
-    requires = ["create_batch_g4_1_pending_file_writes"],
+    "../12-council.sql",
+    name = "create_council",
+    requires = ["create_trust"],
 );
 
 // ---------------------------------------------------------------------------

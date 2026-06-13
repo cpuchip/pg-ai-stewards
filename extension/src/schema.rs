@@ -172,8 +172,14 @@ extension_sql!(
     CREATE TABLE stewards.sessions (
         id              text PRIMARY KEY DEFAULT gen_random_uuid()::text,
         label           text,
+        -- Born-complete kind set: gate (08), sabbath/atonement (10), and
+        -- council (12) session kinds are folded in here so those subsystem
+        -- files don't churn the constraint. Named so the historical
+        -- per-phase ADD CONSTRAINT statements are no longer needed.
         kind            text NOT NULL DEFAULT 'chat'
-                        CHECK (kind IN ('chat','agent','tool','study','dev')),
+                        CONSTRAINT sessions_kind_check
+                        CHECK (kind IN ('chat','agent','tool','study','dev',
+                                        'gate','sabbath','atonement','council')),
         created_at      timestamptz NOT NULL DEFAULT now(),
         last_active_at  timestamptz NOT NULL DEFAULT now()
     );
