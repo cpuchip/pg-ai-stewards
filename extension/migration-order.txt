@@ -21,18 +21,6 @@ verify-4b.sql
 verify-4c.sql
 verify-5a.sql
 test-gate-e2e.sql
-h1-2-research-write-pipeline.sql
-h1-5b-tighten-gather-template.sql
-h1-7b-research-grants-and-template.sql
-h2-context-gather-stage.sql
-h3-1-schema-migrations.sql
-h3-4-planning-pipeline.sql
-h3-5-enqueue-proposed-work-items.sql
-h3-followup-3-revise-proposal-pipeline.sql
-h-ledger-1-schema-migrations.sql
-i4-agent-proposal-pipeline.sql
-i6-schema-migration-claude-attest.sql
-i7-apply-agent-proposal-direct-file-queue.sql
 j1-fanout-machinery.sql
 j2-aggregate-auto-verify.sql
 j3-spawn-sets-aggregator-destination.sql
@@ -88,7 +76,6 @@ es7-judge-brief-dispatch.sql
 es8-consult-subagent.sql
 es9-drop-leaf-index.sql
 es10-grant-consult-subagent.sql
-pe2-research-summary-pipeline.sql
 pe6-scheduled-pipelines-schema-and-cron.sql
 pe7-scheduled-pipelines-fire-and-tick.sql
 j8a-dispatch-fallback-chain.sql
