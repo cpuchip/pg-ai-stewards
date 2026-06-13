@@ -77,6 +77,13 @@ BEGIN
         jsonb_build_object('source_type','book-digest','book_slug',v_row.slug,
                            'book_title',v_row.title,'book_author',v_row.author),
         'doc');
+    -- Queue the file write too, so the digest materializes to disk IF the
+    -- operator has the materializer on (/workspace RW). With /workspace RO
+    -- (the safe default) this row simply waits — the doc is always in the DB.
+    INSERT INTO stewards.pending_file_writes
+        (requested_by, target_path, write_mode, content, source_id, source_kind)
+    VALUES ('book_publish', 'study/books/' || v_row.slug || '.md', 'create',
+            p_body, v_doc, 'book-digest');
     PERFORM stewards.brain_upsert('ideas',
         'Book digest: ' || v_row.title,
         left(p_body, 4000),
