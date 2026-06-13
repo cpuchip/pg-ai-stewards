@@ -31,7 +31,11 @@ extension_sql!(
         kind        text NOT NULL,
         provider    text NOT NULL,
         status      text NOT NULL DEFAULT 'pending'
-                    CHECK (status IN ('pending', 'in_progress', 'done', 'error')),
+                    -- 'waiting_for_tools' (3e.2.b, born here at
+                    -- consolidation): a tool_dispatch row parked while
+                    -- its async mcp_proxy children resolve.
+                    CHECK (status IN ('pending', 'in_progress',
+                                      'waiting_for_tools', 'done', 'error')),
         payload     jsonb NOT NULL DEFAULT '{}'::jsonb,
         result      jsonb,
         error       text,

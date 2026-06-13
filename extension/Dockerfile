@@ -47,10 +47,7 @@ COPY src ./src
 # When adding a new file, also add the corresponding extension_sql_file!
 # call in src/lib.rs and update this list.
 COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
-     03-watchman.sql 04-work-items.sql \
-     3e2-1-mcp-bridge-schemas.sql \
-     3e2-2-mcp-proxy-dispatch.sql \
-     3e2-3-mcp-tool-cache-promote.sql \
+     03-watchman.sql 04-work-items.sql 05-mcp-bridge.sql \
      4a-cost-tracking.sql \
      4a-escalation-chain.sql \
      4a-steward.sql \
