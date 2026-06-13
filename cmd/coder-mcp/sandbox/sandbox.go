@@ -96,6 +96,14 @@ func docker(ctx context.Context, args ...string) (string, error) {
 // so the coder tools operate on a repo the bridge cloned there (CV2.1). The
 // caller must CloneRepo first (the subpath must exist).
 func (m *Manager) Provision(ctx context.Context, wi string, net Network, worktree bool) error {
+	// Operator kill-switch: CODER_SANDBOX_NETWORK=off|none|false forces EVERY
+	// sandbox fully offline (--network=none), regardless of what the pipeline
+	// requested. Egress is on by default so the agent can pull go mod / npm /
+	// pip; set this for untrusted repos or an air-gapped posture.
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CODER_SANDBOX_NETWORK"))) {
+	case "off", "none", "false", "0":
+		net = NetOff
+	}
 	_ = m.Teardown(ctx, wi) // clear any leftover; ignore "not found"
 	args := []string{
 		"run", "-d", "--name", containerName(wi),

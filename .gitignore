@@ -6,3 +6,8 @@ bin/
 # Local stack
 .env
 /workspace/
+# Local compose tweaks (Compose auto-merges this). Drop the coder override
+# here to keep the coder on for your own host without the -f flag, while the
+# committed default stays socket-free.
+docker-compose.override.yaml
+docker-compose.override.yml

@@ -93,10 +93,12 @@ What the review found, and the residual decisions:
 2. **Network egress defaults to ON per build (residual risk).** Builds need to
    pull dependencies, so the code-* pipelines run sandboxes with egress on. A
    malicious/compromised build script in an allow-listed repo could exfiltrate
-   over the network. Mitigations: the repo allow-list bounds *what* gets cloned;
-   `--network=none` is available for offline runs. **Recommendation:** for
-   untrusted repos, run offline and vendor dependencies; consider an egress
-   allow-list (proxy) as a future hardening.
+   over the network. **Turn it off globally** with `CODER_SANDBOX_NETWORK=off`
+   (or `none`/`false`) — that forces every sandbox to `--network=none`
+   regardless of what the pipeline requested. The repo allow-list also bounds
+   *what* can be cloned. **Recommendation:** for untrusted repos, set
+   `CODER_SANDBOX_NETWORK=off` and vendor dependencies; an egress allow-list
+   (proxy) is a possible future hardening.
 3. **Writable rootfs (low risk, by design).** The sandbox rootfs is writable
    (the coder builds in `/tmp` and `/work`). A read-only rootfs + tmpfs is a
    possible future tightening; it's low-value given the container is ephemeral.
