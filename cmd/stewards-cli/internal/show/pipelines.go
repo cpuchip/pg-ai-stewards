@@ -2,7 +2,7 @@
 //
 // Pipelines are read-only here (defined via SQL migration). work_items
 // are created/inspected/transitioned through the functions in
-// 3c1-pipelines-work-items.sql.
+// 04-work-items.sql (was 3c1-pipelines-work-items.sql).
 package show
 
 import (

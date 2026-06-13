@@ -73,51 +73,15 @@ extension_sql_file!(
 );
 
 extension_sql_file!(
-    "../3c1-pipelines-work-items.sql",
-    name = "create_pipelines_work_items",
+    "../04-work-items.sql",
+    name = "create_work_items",
     requires = ["create_watchman"],
-);
-
-extension_sql_file!(
-    "../3c2-work-item-advance-trigger.sql",
-    name = "create_work_item_advance_trigger",
-    requires = ["create_pipelines_work_items"],
-);
-
-extension_sql_file!(
-    "../3c2-5-study-tools.sql",
-    name = "create_study_tools",
-    requires = ["create_work_item_advance_trigger"],
-);
-
-extension_sql_file!(
-    "../3c3-stage-templating-and-study-write.sql",
-    name = "create_stage_templating_and_study_write",
-    requires = ["create_study_tools"],
-);
-
-extension_sql_file!(
-    "../3c3-1-trigger-bugfixes.sql",
-    name = "create_trigger_bugfixes_3c3_1",
-    requires = ["create_stage_templating_and_study_write"],
-);
-
-extension_sql_file!(
-    "../3c3-3-agent-tool-perms-provenance.sql",
-    name = "create_agent_tool_perms_provenance",
-    requires = ["create_trigger_bugfixes_3c3_1"],
-);
-
-extension_sql_file!(
-    "../3c3-5-work-items-to-studies.sql",
-    name = "create_work_items_to_studies_promotion",
-    requires = ["create_agent_tool_perms_provenance"],
 );
 
 extension_sql_file!(
     "../3e2-1-mcp-bridge-schemas.sql",
     name = "create_mcp_bridge_schemas",
-    requires = ["create_work_items_to_studies_promotion"],
+    requires = ["create_work_items"],
 );
 
 extension_sql_file!(
@@ -166,7 +130,7 @@ extension_sql_file!(
     name = "create_phase_4b_dispatch_override",
     requires = [
         "create_phase_4a_steward",
-        "create_stage_templating_and_study_write"
+        "create_work_items"
     ],
 );
 
@@ -193,7 +157,7 @@ extension_sql_file!(
     name = "create_phase_5a_maturity_gate",
     requires = [
         "create_phase_4g_ad_hoc_cost",
-        "create_stage_templating_and_study_write"
+        "create_work_items"
     ],
 );
 

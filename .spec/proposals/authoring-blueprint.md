@@ -70,16 +70,16 @@ instrument).
 | 01 | `01-graph.sql` | NEW — nodes/edges/walks; replaces AGE init; absorbs graph halves of 2-6a/2-6c + CITES machinery from create_studies |
 | 02 | `02-workstreams.sql` | 2-6a, 2-6b, 2-6c (re-authored on 01) — **DONE B1b** |
 | 03 | `03-watchman.sql` | 2-7a, 3a, 2-7b1, 2-7b2, 2-7b3, 2-7b4 — **DONE B2** (study_id→doc_id cols; tables born complete; estimate_chat_tokens reads config chars_per_token_default) |
-| 04 | `04-work-items.sql` | 3c1, 3c2, 3c2-5, 3c3(core half), 3c3-1, 3c3-3, 3c3-5, i1, i2, i3, h3-1(work_items half), h3-followup-2 — (6a + h3-1's docs half were absorbed into create_docs at B1b) |
+| 04 | `04-work-items.sql` | 3c1, 3c2, 3c2-5, 3c3(core half), 3c3-1, 3c3-3, 3c3-5 + 5e4§1(merged), i1, i2, i5(pulled forward), h3-1(work_items half) — **DONE B2** (promote_to_doc flag replaces 'study-write%' guard; promote via import_doc; chat_post_internal marker fix + tool_defs budget cols + perms source born in schema.rs; i3 + h3-followup-2 REASSIGNED to B3 — their substance lives in 6d/h1-6-2's subsystems: 10-sabbath births file_enqueued_at + enqueue_work_item_file final, 08-gates births on_maturity_verified final + render_file_destination) |
 | 05 | `05-mcp-bridge.sql` | 3e2-1(core), 3e2-2(core), 3e2-3(core), h1-5a, h1-7a |
 | 06 | `06-cost.sql` | 4a-cost-tracking, 4a-escalation-chain, 4g, es11, j10, j11, j12, an4, cv4 |
 | 07 | `07-steward.sql` | 4a-steward, 4b, 4c, 4d, 6b |
-| 08 | `08-gates.sql` | 5a, 5b, 5c, 5e4, h1-6-1, h1-6-2, h1-6-6, l28 |
+| 08 | `08-gates.sql` | 5a, 5b, 5c, 5e4(§1 already in 04), h1-6-1, h1-6-2, h1-6-6, l28, i3(on_maturity_verified final form), h3-followup-2(render_file_destination) |
 | 09 | `09-intents-covenants.sql` | 5d, 5d2, 5d3, 5d4, 5d5, pr1 (values_anchor + extensions/presiding INCLUDED) |
-| 10 | `10-sabbath-atonement.sql` | 5e, 5e2, 5e3, 6c, 6d, 6e, am1 |
+| 10 | `10-sabbath-atonement.sql` | 5e, 5e2, 5e3, 6c, 6d, 6e, am1, i3(work_items born with file_enqueued_at — no materialized_at; enqueue_work_item_file final form) |
 | 11 | `11-trust.sql` | 5f, 5f2, 5f3, 5f4, 5f5 |
 | 12 | `12-council.sql` | 5g, 5g2, 5g3, 5g4 |
-| 13 | `13-research-pipelines.sql` | h1-0, h1-1→generic example, h1-2, h1-7b, h2, h3-4, h3-5, h3-followup-3, i4, i5, i6, i7, pe2 |
+| 13 | `13-research-pipelines.sql` | h1-0, h1-1→generic example, h1-2, h1-7b, h2, h3-4, h3-5, h3-followup-3, i4, i6, i7, pe2 (i5 absorbed at B2 — origin CHECK born with agent_proposal) |
 | 14 | `14-fanout-brainstorm.sql` | j1, j2, j3, j4, j5, j6, j7, j8a, j8b, j8c, j9a, j9b, j9c |
 | 15 | `15-context-engine.sql` | k1–k9, l1, l3–l27, l29–l32, es1–es7, es9, ct2-1, ct2-2, ct2-3, ct2-7a, ct2-7a2, ct2-7b, ct2-7d (may split 15a/15b if unwieldy) |
 | 16 | `16-subagents.sql` | k4, l9, es8, es10, r11, ct2-5, ct2-7e |

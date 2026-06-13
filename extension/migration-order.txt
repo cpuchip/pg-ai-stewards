@@ -13,14 +13,7 @@ verify-2-3.sql
 verify-2-7b1-inverse.sql
 verify-2-7b2-decision.sql
 verify-2-7b3-budget.sql
-3c1-pipelines-work-items.sql
-3c2-work-item-advance-trigger.sql
 verify-3c2-inverse.sql
-3c2-5-study-tools.sql
-3c3-stage-templating-and-study-write.sql
-3c3-1-trigger-bugfixes.sql
-3c3-3-agent-tool-perms-provenance.sql
-3c3-5-work-items-to-studies.sql
 3e2-1-mcp-bridge-schemas.sql
 3e2-2-mcp-proxy-dispatch.sql
 verify-3e2-2.sql
@@ -79,11 +72,8 @@ h3-5-enqueue-proposed-work-items.sql
 h3-followup-2-render-file-destination.sql
 h3-followup-3-revise-proposal-pipeline.sql
 h-ledger-1-schema-migrations.sql
-i1-projects-table.sql
-i2-projects-fk-constraint.sql
 i3-rename-work-items-materialized-at.sql
 i4-agent-proposal-pipeline.sql
-i5-allow-agent-proposal-origin.sql
 i6-schema-migration-claude-attest.sql
 i7-apply-agent-proposal-direct-file-queue.sql
 j1-fanout-machinery.sql

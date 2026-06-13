@@ -36,7 +36,7 @@ COMMENT ON COLUMN stewards.pipelines.file_content_jsonpath IS
 
 -- Seed suggestion for study-write — substrate-promoted studies typically
 -- want to land at study/substrate--<slug>.md (matches the existing
--- work_item_promote_to_study slug convention).
+-- work_item_promote_to_doc slug convention).
 UPDATE stewards.pipelines
    SET file_destination_template = 'study/substrate--<slug>.md'
  WHERE family IN ('study-write', 'study-write-qwen')
