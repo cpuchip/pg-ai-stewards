@@ -174,6 +174,18 @@ extension_sql_file!(
     requires = ["create_council"],
 );
 
+// 14-fanout-brainstorm — fan-out decomposition + the 12-lens brainstorm
+// library. catalog_default_* helpers (j8a), spawn_children (j3+j4+j8c
+// union), start_brainstorm (j12), check_and_dispatch_fanout_aggregator +
+// the one-shot / child-terminal triggers. on_maturity_verified's fanout
+// branches are folded into 08's single final form (calls these as
+// late-bound forward refs).
+extension_sql_file!(
+    "../14-fanout-brainstorm.sql",
+    name = "create_fanout_brainstorm",
+    requires = ["create_research_pipelines"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
