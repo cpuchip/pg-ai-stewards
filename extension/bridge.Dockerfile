@@ -24,6 +24,11 @@
 #                    see SECURITY.md for the trust model + hardening review)
 #   - fetch-md-mcp  (fetch a URL -> readable markdown; fetch_url / fetch_urls)
 #   - git-mcp       (general git ops, distinct from coder's sandbox-scoped git)
+#   - yt-mcp        (YouTube transcript + playlist tools via yt-dlp — OPT-IN,
+#                    built only with --build-arg WITH_YT=1, which also installs
+#                    a python3 + yt-dlp runtime. See docker-compose.yt.yaml and
+#                    examples/playlist-digester.sql. Omitted from the default
+#                    image so the generic core stays lean + python-free.)
 # Web search needs an operator API key, so it is "bring your own" (register a
 # web_search_exa server in an overlay — see the docs). Domain MCP servers
 # (your own docs / data tools) are likewise BYO.
@@ -47,12 +52,19 @@ COPY cmd/ ./cmd/
 
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 
+# Opt-in: the YouTube tool (yt-mcp) is compiled only when WITH_YT=1, so the
+# default image ships no YouTube surface. docker-compose.yt.yaml flips it on.
+ARG WITH_YT=0
+
 RUN go build -trimpath -ldflags="-s -w" -o /out/stewards-mcp  ./cmd/stewards-mcp  \
  && go build -trimpath -ldflags="-s -w" -o /out/fs-read-mcp   ./cmd/fs-read-mcp   \
  && go build -trimpath -ldflags="-s -w" -o /out/stewards-cli  ./cmd/stewards-cli  \
  && go build -trimpath -ldflags="-s -w" -o /out/coder-mcp     ./cmd/coder-mcp     \
  && go build -trimpath -ldflags="-s -w" -o /out/fetch-md-mcp  ./cmd/fetch-md-mcp  \
- && go build -trimpath -ldflags="-s -w" -o /out/git-mcp       ./cmd/git-mcp
+ && go build -trimpath -ldflags="-s -w" -o /out/git-mcp       ./cmd/git-mcp       \
+ && if [ "$WITH_YT" = "1" ]; then \
+        go build -trimpath -ldflags="-s -w" -o /out/yt-mcp ./cmd/yt-mcp ; \
+    fi
 
 # ---------------------------------------------------------------------
 # Stage 2 — runtime. Slim alpine + the substrate binaries.
@@ -70,14 +82,20 @@ FROM alpine:3.20
 # `chromium` binary on PATH; the default static fetch does NOT. We omit
 # chromium to keep the image lean — static fetch works, js:true degrades with
 # a clear error. Add `chromium` to this apk line if you want JS-rendered pages.
-RUN apk add --no-cache ca-certificates tzdata git github-cli docker-cli
+# Opt-in YouTube runtime: yt-mcp shells `yt-dlp`, which needs python3. Installed
+# only when WITH_YT=1 (pip pulls the LATEST yt-dlp — the alpine package lags and
+# breaks on YouTube changes). No ffmpeg: we fetch subtitles, never media.
+ARG WITH_YT=0
 
-COPY --from=builder /out/stewards-mcp  /usr/local/bin/stewards-mcp
-COPY --from=builder /out/fs-read-mcp   /usr/local/bin/fs-read-mcp
-COPY --from=builder /out/stewards-cli  /usr/local/bin/stewards-cli
-COPY --from=builder /out/coder-mcp     /usr/local/bin/coder-mcp
-COPY --from=builder /out/fetch-md-mcp  /usr/local/bin/fetch-md-mcp
-COPY --from=builder /out/git-mcp       /usr/local/bin/git-mcp
+RUN apk add --no-cache ca-certificates tzdata git github-cli docker-cli \
+ && if [ "$WITH_YT" = "1" ]; then \
+        apk add --no-cache python3 py3-pip \
+        && pip install --break-system-packages --no-cache-dir -U yt-dlp ; \
+    fi
+
+# Copy the whole build output so the optional yt-mcp binary comes along when it
+# was built (WITH_YT=1) and is simply absent otherwise.
+COPY --from=builder /out/ /usr/local/bin/
 
 # Default DSN points at the compose service name `pg`; compose overrides it.
 ENV STEWARDS_DSN="postgres://stewards:stewards@pg:5432/stewards?sslmode=disable"

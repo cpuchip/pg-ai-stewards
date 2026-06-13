@@ -1,0 +1,29 @@
+# Opt-in YouTube overlay — adds the yt-mcp transcript/playlist tools to the
+# bridge, for the playlist digester (examples/playlist-digester.sql).
+#
+#   # bring the stack up WITH youtube:
+#   docker compose -f docker-compose.yaml -f docker-compose.yt.yaml up -d --build
+#   # then register the yt server + the digest pipeline:
+#   docker compose exec -T pg psql -U stewards -d stewards < examples/playlist-digester.sql
+#   docker compose exec bridge stewards-mcp bridge refresh-tools
+#
+# This builds the bridge with WITH_YT=1 — adding the yt-mcp binary and a
+# python3 + yt-dlp runtime (the default `docker compose up` has neither, so the
+# generic core image stays lean and python-free). Downloaded transcripts land
+# in a named volume mounted at /yt.
+#
+# yt-dlp tracks YouTube's frequently-changing internals; if downloads start
+# failing, rebuild the bridge (`... up -d --build`) to pull a newer yt-dlp —
+# the Dockerfile pip-installs the latest on each build.
+services:
+  bridge:
+    build:
+      args:
+        WITH_YT: "1"
+    volumes:
+      # Writable store for downloaded transcripts. YT_DIR is set on the yt
+      # mcp_server row (examples/playlist-digester.sql) to /yt.
+      - yt-transcripts:/yt
+
+volumes:
+  yt-transcripts:
