@@ -428,9 +428,9 @@ es1's cancel-cascade).
   intents=0, mcp_servers = ONLY the two core daemons (fs-read + pg-ai-stewards);
   the smoke now ASSERTs no personal MCP leaks. **Remaining tail:** bgworker
   `_kind` enum is a deferrable Rust-typing refactor (work_queue.kind match arms;
-  not clean-room-critical). **CI follow-up:** Node-20 actions deprecation
-  (checkout@v4 / setup-go@v5) — bump to Node-24 majors before 2026-06-16
-  (non-fatal; go job green @37s). Then the **CUT** (Hinge first+third) + the
+  not clean-room-critical). **CI: GREEN** (first run `02343d1`: extension build +
+  virgin-smoke 4m54s + go build/vet; the Node-20 deprecation is resolved — bumped
+  to checkout@v6 + setup-go@v6, Node-24). Then the **CUT** (Hinge first+third) + the
   **coder wave** 20-coder.sql (Hinge second).
 
 B1b audit notes for later batches:
