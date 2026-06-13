@@ -200,13 +200,28 @@ extension_sql_file!(
 //                machinery (chunk_and_index, contextualize_leaf, the leaves
 //                table, retrieve_with_merge, render_judge_surface) and its
 //                orphaned helpers are simply not built (no build-then-drop).
-//   15b-context-surface — the live composition + judge surface (next).
+//   15b-context-surface — the live composition + judge surface: compose_messages
+//                FINAL (ct2-7a2 — folds k2→l13 + the §7 self-notes line), the
+//                CT2 state model / levers / self-notes / working tags, the
+//                judge-brief dispatch path (es7; intercept content-sha via
+//                built-in sha256 — pgcrypto-free), the heavyweight wrappers
+//                (the 3 study-corpus ones renamed → doc_*), tool-round caps
+//                (chat_post_internal final), the 5-arg dry_run_chat wrapper,
+//                and the work_item_cancel hard-stop cascade. compose_tools'
+//                final is deferred to 16 (its ct2-7e CASE gate calls
+//                self_prompt_on, a CREATE-time sql dep born there).
 // =====================================================================
 
 extension_sql_file!(
     "../15a-context-engrams.sql",
     name = "create_context_engrams",
     requires = ["create_fanout_brainstorm"],
+);
+
+extension_sql_file!(
+    "../15b-context-surface.sql",
+    name = "create_context_surface",
+    requires = ["create_context_engrams"],
 );
 
 // ---------------------------------------------------------------------------
