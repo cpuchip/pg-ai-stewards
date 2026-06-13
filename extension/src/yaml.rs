@@ -34,17 +34,18 @@ pub fn yaml_sha256(yaml: &str) -> String {
 /// Returned jsonb shape:
 ///
 ///   {
-///     "slug": "scripture-study",
+///     "slug": "<from YAML `slug:`, default 'default'>",
 ///     "purpose": <text>,
 ///     "values_hierarchy": [{key, description, source}, ...],  // preserves order
 ///     "non_goals": [],                                         // none in current YAML
-///     "scripture_anchor": null,
+///     "values_anchor": <text | null>,
 ///     "beneficiary": null
 ///   }
 ///
-/// The slug defaults to "scripture-study" since the root intent.yaml is
-/// the project-level intent. Future: support multi-intent YAML files
-/// keyed by intent_slug.
+/// The slug comes from the YAML `slug:` field, defaulting to the generic
+/// "default" (matching the stewards.config default_intent_slug seed). The
+/// OSS substrate is generic; the seed pack supplies the project's real
+/// intent slug. Future: support multi-intent YAML files keyed by slug.
 #[pg_extern]
 pub fn parse_yaml_intent(yaml: &str) -> pgrx::JsonB {
     let parsed: serde_yaml::Value = match serde_yaml::from_str(yaml) {
@@ -52,12 +53,30 @@ pub fn parse_yaml_intent(yaml: &str) -> pgrx::JsonB {
         Err(e) => return pgrx::JsonB(serde_json::json!({"error": format!("yaml parse: {}", e)})),
     };
 
+    // The intent slug comes from the YAML (`slug:`), defaulting to the
+    // generic "default" — which matches the stewards.config
+    // default_intent_slug seed. (Was hardcoded "scripture-study"; the OSS
+    // substrate is generic and the seed pack sets the real slug.)
+    let slug = parsed
+        .get("slug")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "default".to_string());
+
     let purpose = parsed
         .get("purpose")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .trim()
         .to_string();
+
+    // The governing anchor for the intent (was `scripture_anchor`;
+    // generalized to `values_anchor` for the OSS substrate). Optional.
+    let values_anchor = parsed
+        .get("values_anchor")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string());
 
     // values map → values_hierarchy ordered array. serde_yaml preserves
     // mapping order via its Mapping type when iterated directly.
@@ -122,13 +141,13 @@ pub fn parse_yaml_intent(yaml: &str) -> pgrx::JsonB {
         .unwrap_or_default();
 
     pgrx::JsonB(serde_json::json!({
-        "slug": "scripture-study",
+        "slug": slug,
         "purpose": purpose,
         "values_hierarchy": values_hierarchy,
         "non_goals": Vec::<String>::new(),
         "success_criteria": success_criteria,
         "beneficiary": serde_json::Value::Null,
-        "scripture_anchor": serde_json::Value::Null,
+        "values_anchor": values_anchor,
     }))
 }
 
