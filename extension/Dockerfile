@@ -50,7 +50,7 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      03-watchman.sql 04-work-items.sql 05-mcp-bridge.sql \
      06-cost.sql 07-steward.sql \
      08-gates.sql 09-intents-covenants.sql 10-sabbath-atonement.sql \
-     11-trust.sql 12-council.sql ./
+     11-trust.sql 12-council.sql 13-research-pipelines.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,

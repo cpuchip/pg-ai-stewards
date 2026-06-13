@@ -60,3 +60,54 @@ INSERT INTO stewards.config (key, value, description) VALUES
   ('chars_per_token.openai', '4.0'::jsonb,
    'OpenAI-format estimator.')
 ON CONFLICT (key) DO NOTHING;
+
+-- =====================================================================
+-- Migration ledger (relocated from h-ledger-1 at the B4 consolidation).
+--
+-- In the consolidated bundle the runtime manifest starts EMPTY — CREATE
+-- EXTENSION installs the whole core atomically, so the original
+-- chicken-and-egg ("the ledger file is itself one of the migrations")
+-- is gone. The table must instead be born by the bundle so the runtime
+-- runner (stewards-cli migrate) has somewhere to record overlay
+-- migrations and going-forward core hotfixes. It is pure infrastructure
+-- with no dependencies, so it lives here in the foundation file.
+--
+-- Columns:
+--   name        — base filename minus .sql (e.g. 'seed-workstreams')
+--   sha256      — hex of file contents at apply time (catches drift)
+--   applied_at  — when the runner recorded it
+--   notes       — 'backfilled', 'auto', 'manual', or freeform
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS stewards.schema_migrations (
+    name        text PRIMARY KEY,
+    sha256      text NOT NULL,
+    applied_at  timestamp with time zone NOT NULL DEFAULT now(),
+    notes       text
+);
+
+COMMENT ON TABLE stewards.schema_migrations IS
+'Tracks which runtime-tier .sql files the migrator has applied. stewards-cli migrate reads files in lexical order, checks this table, applies unrecorded ones one tx each, records on success. sha256 tracks file content at apply time; if a recorded file changes later, the migrator warns + skips (catches the silent-overwrite regression class). In the consolidated OSS core this table is born by CREATE EXTENSION (the runtime manifest starts empty); the runner records the overlay tier into it.';
+
+-- is_applied(name) → bool
+CREATE OR REPLACE FUNCTION stewards.migration_is_applied(p_name text)
+RETURNS boolean
+LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM stewards.schema_migrations WHERE name = p_name);
+$$;
+
+-- mark_applied(name, sha, notes) — idempotent; returns true if newly recorded
+CREATE OR REPLACE FUNCTION stewards.migration_mark_applied(
+    p_name text, p_sha256 text, p_notes text DEFAULT 'auto'
+) RETURNS boolean
+LANGUAGE plpgsql AS $$
+DECLARE
+    v_existed boolean;
+BEGIN
+    SELECT EXISTS (SELECT 1 FROM stewards.schema_migrations WHERE name = p_name) INTO v_existed;
+    INSERT INTO stewards.schema_migrations (name, sha256, notes)
+    VALUES (p_name, p_sha256, p_notes)
+    ON CONFLICT (name) DO NOTHING;
+    RETURN NOT v_existed;
+END;
+$$;

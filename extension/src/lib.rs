@@ -157,6 +157,23 @@ extension_sql_file!(
     requires = ["create_trust"],
 );
 
+// =====================================================================
+// Consolidation leg B4 (2026-06-13): research / planning / agent-write-back
+// pipeline seeds + their apply functions. Single final definitions.
+//   13-research-pipelines — research-write (4-stage), planning (5-stage),
+//                agent-proposal, revise-proposal, research-summary +
+//                enqueue_proposed_work_items / apply_agent_proposal (i7
+//                final, incl. i6 gate) / apply_revision. on_maturity_verified
+//                is NOT redefined here — 08 owns its single final form and
+//                calls these functions as wrapped forward refs.
+// =====================================================================
+
+extension_sql_file!(
+    "../13-research-pipelines.sql",
+    name = "create_research_pipelines",
+    requires = ["create_council"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
