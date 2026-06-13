@@ -4,8 +4,8 @@
 //
 // Phase 3e.1 (2026-05-08): initial version exposes two read-only tools
 // over the studies corpus:
-//   - study_search — full-text + kinds-filter search (wraps stewards.study_search_text)
-//   - study_get    — read a study by slug with line-range pagination (wraps stewards.study_get)
+//   - doc_search — full-text + kinds-filter search (wraps stewards.doc_search)
+//   - doc_get    — read a study by slug with line-range pagination (wraps stewards.doc_get)
 //
 // Future phases will add stewards_brain, stewards_work_item, gospel_passthrough,
 // and outbound MCP-client capability for consuming gospel-engine-v2.
@@ -99,7 +99,7 @@ func main() {
 
 	// Register tools. Each handler closes over the pool so it can run
 	// queries; the pool is already context-aware and goroutine-safe.
-	registerStudyTools(srv, pool)
+	registerDocTools(srv, pool)
 	registerInspectionTools(srv, pool)
 	registerEscalationTools(srv, pool)
 	registerExpandTools(srv, pool)

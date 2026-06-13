@@ -12,9 +12,9 @@
 --   1. parse_reference handles canonical anchor shapes.
 --   2. normalize_book maps LDS abbreviations to gospel-engine forms.
 --   3. enqueue_resolve is idempotent and errors are sticky.
---   4. refresh_study_refs is idempotent on re-call.
+--   4. refresh_doc_refs is idempotent on re-call.
 --   5. invalidate_ref + refresh round-trips a single ref.
---   6. study_citations_resolved joins citations to verse text.
+--   6. doc_citations_resolved joins citations to verse text.
 --   7. 404s from gospel-engine are cached as error rows (no retry).
 
 \set ON_ERROR_STOP 1
@@ -57,23 +57,23 @@ SELECT 'second call skips'    AS label,
 DELETE FROM stewards.work_queue WHERE payload->>'ref' = 'TestBook 99:99';
 DELETE FROM stewards.resolved_refs WHERE ref = 'TestBook 99:99';
 
-\echo === Test 4: refresh_study_refs is idempotent on second call ===
-SELECT stewards.refresh_study_refs('art-of-delegation') AS rerun_enqueued;
+\echo === Test 4: refresh_doc_refs is idempotent on second call ===
+SELECT stewards.refresh_doc_refs('art-of-delegation') AS rerun_enqueued;
 
 \echo === Test 5: invalidate + refresh round-trips a single ref ===
 SELECT stewards.invalidate_ref('Mosiah 18:8') AS invalidated;
-SELECT stewards.refresh_study_refs('art-of-delegation') AS new_after_invalidate;
+SELECT stewards.refresh_doc_refs('art-of-delegation') AS new_after_invalidate;
 SELECT pg_sleep(3);
 SELECT ref, length(content->>'text') AS chars, attempt_count
   FROM stewards.resolved_refs WHERE ref = 'Mosiah 18:8';
 
-\echo === Test 6: study_citations_resolved end-to-end ===
+\echo === Test 6: doc_citations_resolved end-to-end ===
 SELECT cited_uri,
        anchor_text,
        jsonb_array_length(resolved_verses) AS verse_count,
        (resolved_verses->0->>'ref') AS first_ref,
        left(resolved_verses->0->'content'->>'text', 60) AS first_text_preview
-  FROM stewards.study_citations_resolved('art-of-delegation')
+  FROM stewards.doc_citations_resolved('art-of-delegation')
  WHERE cited_kind = 'scripture'
  ORDER BY citation_count DESC
  LIMIT 5;

@@ -6,7 +6,7 @@
 --
 -- Schema: stewards.engram_embeddings table keyed by "<msg_id>:<engram_id>"
 -- (single-column text id matches bgworker's embed handler's UPDATE WHERE
--- id = $1 pattern). Vector dimension 768 (matches stewards.studies for
+-- id = $1 pattern). Vector dimension 768 (matches stewards.docs for
 -- shared semantic space).
 --
 -- Population: AFTER UPDATE trigger on stewards.messages.engrams parses

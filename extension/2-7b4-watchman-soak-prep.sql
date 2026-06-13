@@ -51,7 +51,7 @@ SELECT s.id,
        s.last_consolidated_at,
        (s.updated_at - coalesce(s.last_consolidated_at,
                                  'epoch'::timestamptz)) AS dirty_for
-  FROM stewards.studies s
+  FROM stewards.docs s
  WHERE (s.last_consolidated_at IS NULL
         OR s.updated_at > s.last_consolidated_at)
    AND coalesce(lower(s.frontmatter->>'watchman'), '')
@@ -123,7 +123,7 @@ BEGIN
                                             s.slug),
                                      E'\n'
                                      ORDER BY s.title)
-                            FROM stewards.studies s
+                            FROM stewards.docs s
                            WHERE s.frontmatter->>'workstream' = w.id),
                          '_(no declared proposals)_'
                      )
@@ -155,7 +155,7 @@ BEGIN
                      END
                  ) AS line
             FROM stewards.findings f
-            JOIN stewards.studies s ON s.id = f.study_id
+            JOIN stewards.docs s ON s.id = f.study_id
            WHERE f.acknowledged_at IS NULL
            ORDER BY array_position(ARRAY['high','medium','low'], f.severity),
                     f.created_at DESC
@@ -224,7 +224,7 @@ BEGIN
                                   AND f.acknowledged_at IS NULL)
                      )
                  ) AS line
-            FROM stewards.studies s
+            FROM stewards.docs s
            GROUP BY s.kind
            ORDER BY s.kind
       ) sub;

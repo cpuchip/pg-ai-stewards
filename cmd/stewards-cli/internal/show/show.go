@@ -14,11 +14,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Study calls stewards.study_show and prints the returned text.
+// Study calls stewards.doc_show and prints the returned text.
 func Study(ctx context.Context, pool *pgxpool.Pool, slug string, sim, cites, verseChars int) error {
 	var out string
 	err := pool.QueryRow(ctx,
-		`SELECT stewards.study_show($1, $2, $3, $4)`,
+		`SELECT stewards.doc_show($1, $2, $3, $4)`,
 		slug, sim, cites, verseChars,
 	).Scan(&out)
 	if err != nil {
@@ -34,7 +34,7 @@ func List(ctx context.Context, pool *pgxpool.Pool, kind string) error {
 	const baseQ = `
 SELECT slug, kind, title,
        coalesce(to_char(embedded_at, 'YYYY-MM-DD'), '(unembedded)') AS embedded
-  FROM stewards.studies
+  FROM stewards.docs
 `
 	q := baseQ
 	args := []any{}
@@ -75,8 +75,8 @@ func Refresh(ctx context.Context, pool *pgxpool.Pool, slug string) error {
 	var resolves, sim int
 	if slug == "" {
 		err := pool.QueryRow(ctx,
-			`SELECT stewards.refresh_all_study_refs(),
-                    stewards.refresh_all_study_similarity()`,
+			`SELECT stewards.refresh_all_doc_refs(),
+                    stewards.refresh_all_doc_similarity()`,
 		).Scan(&resolves, &sim)
 		if err != nil {
 			return err
@@ -85,8 +85,8 @@ func Refresh(ctx context.Context, pool *pgxpool.Pool, slug string) error {
 		return nil
 	}
 	err := pool.QueryRow(ctx,
-		`SELECT stewards.refresh_study_refs($1),
-                stewards.refresh_study_similarity($1)`,
+		`SELECT stewards.refresh_doc_refs($1),
+                stewards.refresh_doc_similarity($1)`,
 		slug,
 	).Scan(&resolves, &sim)
 	if err != nil {
@@ -110,7 +110,7 @@ func WorkstreamList(ctx context.Context, pool *pgxpool.Pool) error {
               -- Count via SQL view of the graph by joining frontmatter.
               -- Simpler: count studies whose frontmatter->>'workstream' = w.id.
               SELECT frontmatter->>'workstream' AS ws, COUNT(*) AS cnt
-                FROM stewards.studies
+                FROM stewards.docs
                WHERE frontmatter ? 'workstream'
                GROUP BY frontmatter->>'workstream'
           ) p ON p.ws = w.id
@@ -432,7 +432,7 @@ func WatchmanAcknowledge(ctx context.Context, pool *pgxpool.Pool,
 func WatchmanHistory(ctx context.Context, pool *pgxpool.Pool, slug string) error {
 	rows, err := pool.Query(ctx,
 		`SELECT event_at, event_type, detail, actor, extra
-           FROM stewards.study_history($1)`,
+           FROM stewards.doc_history($1)`,
 		slug,
 	)
 	if err != nil {
@@ -990,7 +990,7 @@ func printWatchmanPassDetail(ctx context.Context, pool *pgxpool.Pool, passID str
 		`SELECT s.slug, v.verdict, v.tokens_in, v.tokens_out,
 		        v.created_at, v.reasoning
 		   FROM stewards.verdicts v
-		   JOIN stewards.studies s ON s.id = v.study_id
+		   JOIN stewards.docs s ON s.id = v.study_id
 		  WHERE v.pass_id = $1
 		  ORDER BY v.created_at`,
 		passID,
@@ -1023,7 +1023,7 @@ func printWatchmanPassDetail(ctx context.Context, pool *pgxpool.Pool, passID str
 		        f.message, coalesce(f.suggested_action, ''),
 		        f.acknowledged_at IS NOT NULL AS acked
 		   FROM stewards.findings f
-		   LEFT JOIN stewards.studies s ON s.id = f.study_id
+		   LEFT JOIN stewards.docs s ON s.id = f.study_id
 		  WHERE f.pass_id = $1
 		  ORDER BY f.created_at`,
 		passID,

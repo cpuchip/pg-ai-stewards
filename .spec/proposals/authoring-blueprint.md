@@ -68,9 +68,9 @@ instrument).
 |---|---|---|
 | 00 | `00-config.sql` | NEW — `stewards.config` k/v (default_intent_slug, pressure tiers, provider chars/token rows) |
 | 01 | `01-graph.sql` | NEW — nodes/edges/walks; replaces AGE init; absorbs graph halves of 2-6a/2-6c + CITES machinery from create_studies |
-| 02 | `02-workstreams.sql` | 2-6a, 2-6b, 2-6c (re-authored on 01) |
+| 02 | `02-workstreams.sql` | 2-6a, 2-6b, 2-6c (re-authored on 01) — **DONE B1b** |
 | 03 | `03-watchman.sql` | 2-7a, 3a, 2-7b1, 2-7b2, 2-7b3, 2-7b4 |
-| 04 | `04-work-items.sql` | 3c1, 3c2, 3c2-5, 3c3(core half), 3c3-1, 3c3-3, 3c3-5, 6a, i1, i2, i3, h3-followup-2 |
+| 04 | `04-work-items.sql` | 3c1, 3c2, 3c2-5, 3c3(core half), 3c3-1, 3c3-3, 3c3-5, i1, i2, i3, h3-1(work_items half), h3-followup-2 — (6a + h3-1's docs half were absorbed into create_docs at B1b) |
 | 05 | `05-mcp-bridge.sql` | 3e2-1(core), 3e2-2(core), 3e2-3(core), h1-5a, h1-7a |
 | 06 | `06-cost.sql` | 4a-cost-tracking, 4a-escalation-chain, 4g, es11, j10, j11, j12, an4, cv4 |
 | 07 | `07-steward.sql` | 4a-steward, 4b, 4c, 4d, 6b |
@@ -102,10 +102,33 @@ after the hardening review.
    the substrate originally grew, but authored).
 
 Batch plan: **B1** = 00+01+02 (+schema.rs AGE-out/doc-rename + init/00
-age removal) — the riskiest, most creative batch. **B2** = 03–07.
-**B3** = 08–12. **B4** = 13–16. **B5** = 17–19 + seed_harness
-genericize + bgworker `_kind` enum. **B6** = tests/ + CI workflow +
-rename-map.tsv finalization + overlay copies updated to new names.
+age removal) — the riskiest, most creative batch. **B1a SHIPPED**
+(config + graph, `3602500`). **B1b SHIPPED** (02-workstreams re-authored
+relational; create_studies→create_docs with 6a + h3-1-docs-half
+absorbed; create_study_show→create_doc_show; resolver/similarity on
+the relational graph; AGE deleted from schema.rs, init/00, and the
+Dockerfile stage-2; doc_* rename swept through every downstream chain
+file, the runner-replay files, AND the Go daemons — tool names
+study_search/study_get/study_similar/study_citations → doc_*;
+todos.parent_kind values lowercased to workstream|doc|todo).
+**B2** = 03–07. **B3** = 08–12. **B4** = 13–16. **B5** = 17–19 +
+seed_harness genericize + bgworker `_kind` enum. **B6** = tests/ + CI
+workflow + rename-map.tsv finalization + overlay copies updated to new
+names (overlay note: init/01-seed-workstreams + any overlay migration
+touching study_* tools or AGE must re-author against doc_* + relational
+graph; import_workstream signature is unchanged).
+
+B1b audit notes for later batches:
+- `parse_gospel_links` kept as-is in core (markdown-link parser with a
+  gospel-library prefix); genericization candidate for B6 review.
+- Embed trigger still hardcodes provider 'lm_studio' +
+  'nomic-embed-text-v1.5' + 768 dims — config-table candidates at B5
+  (models subsystem), though vector(768) is a column type either way.
+- Watchman tables (verdicts/findings/etc.) keep their `study_id`
+  columns until B2 re-authors 03-watchman; Go queries already join
+  them against stewards.docs.
+- l6 wrapper tool names (investigate_study, summarize_study,
+  audit_studies) rename at B4 with 15-context-engine.
 
 ## Cross-checks before the leg closes
 

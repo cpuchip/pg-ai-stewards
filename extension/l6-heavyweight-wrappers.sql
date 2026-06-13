@@ -75,7 +75,7 @@ Be precise. Cite message ids and stage names. Output ONLY the markdown answer.$P
  'primary',
  $PROMPT$You are a study-summarization subagent. Given a study slug and optional focus, read the study and produce a focused digest.
 
-Tools available: study_get, expand_message.
+Tools available: doc_get, expand_message.
 
 Output format (markdown):
 - Study title + slug
@@ -91,7 +91,7 @@ Output ONLY the markdown digest.$PROMPT$,
  'primary',
  $PROMPT$You are a studies-investigation subagent. Given a query and optional focus, search the studies corpus and synthesize what the corpus knows about the topic.
 
-Tools available: study_search, study_get, study_similar, expand_message.
+Tools available: doc_search, doc_get, doc_similar, expand_message.
 
 Output format (markdown):
 - Direct synthesis answering the query (2-4 paragraphs)
@@ -106,7 +106,7 @@ Be precise. Cite study slugs. Output ONLY the markdown synthesis.$PROMPT$,
  'primary',
  $PROMPT$You are a studies-audit subagent. Given a query (which studies to audit) and an audit question, identify the matching studies and report on the question.
 
-Tools available: study_search, study_get, expand_message.
+Tools available: doc_search, doc_get, expand_message.
 
 Output format (markdown):
 - Audit summary (1 paragraph)
@@ -197,7 +197,7 @@ VALUES
 -- URL summary: ONLY fetch_url + expand_message
 ('subagent-url-summary', 'web_search', 'deny'),
 ('subagent-url-summary', 'fs_*',       'deny'),
-('subagent-url-summary', 'study_*',    'deny'),
+('subagent-url-summary', 'doc_*',    'deny'),
 ('subagent-url-summary', 'work_item_*','deny'),
 ('subagent-url-summary', 'spawn_subagent', 'deny'),
 ('subagent-url-summary', 'deep_research',  'deny'),
@@ -205,7 +205,7 @@ VALUES
 -- Files audit: ONLY fs_* + expand_message
 ('subagent-files-audit', 'fetch_url',   'deny'),
 ('subagent-files-audit', 'web_search',  'deny'),
-('subagent-files-audit', 'study_*',     'deny'),
+('subagent-files-audit', 'doc_*',     'deny'),
 ('subagent-files-audit', 'spawn_subagent', 'deny'),
 ('subagent-files-audit', 'deep_research',  'deny'),
 
@@ -213,16 +213,16 @@ VALUES
 ('subagent-session-investigate', 'fetch_url',  'deny'),
 ('subagent-session-investigate', 'web_search', 'deny'),
 ('subagent-session-investigate', 'fs_*',       'deny'),
-('subagent-session-investigate', 'study_*',    'deny'),
+('subagent-session-investigate', 'doc_*',    'deny'),
 ('subagent-session-investigate', 'spawn_subagent', 'deny'),
 ('subagent-session-investigate', 'deep_research',  'deny'),
 
--- Study summary: ONLY study_get + expand_message
+-- Study summary: ONLY doc_get + expand_message
 ('subagent-study-summary', 'fetch_url',  'deny'),
 ('subagent-study-summary', 'web_search', 'deny'),
 ('subagent-study-summary', 'fs_*',       'deny'),
-('subagent-study-summary', 'study_search','deny'),
-('subagent-study-summary', 'study_similar','deny'),
+('subagent-study-summary', 'doc_search','deny'),
+('subagent-study-summary', 'doc_similar','deny'),
 ('subagent-study-summary', 'work_item_*','deny'),
 ('subagent-study-summary', 'spawn_subagent', 'deny'),
 ('subagent-study-summary', 'deep_research',  'deny'),
@@ -235,11 +235,11 @@ VALUES
 ('subagent-study-investigate', 'spawn_subagent', 'deny'),
 ('subagent-study-investigate', 'deep_research',  'deny'),
 
--- Studies audit: study_search + study_get + expand_message
+-- Studies audit: doc_search + doc_get + expand_message
 ('subagent-studies-audit', 'fetch_url',  'deny'),
 ('subagent-studies-audit', 'web_search', 'deny'),
 ('subagent-studies-audit', 'fs_*',       'deny'),
-('subagent-studies-audit', 'study_similar','deny'),
+('subagent-studies-audit', 'doc_similar','deny'),
 ('subagent-studies-audit', 'work_item_*','deny'),
 ('subagent-studies-audit', 'spawn_subagent', 'deny'),
 ('subagent-studies-audit', 'deep_research',  'deny')
@@ -272,19 +272,19 @@ VALUES
  true),
 
 ('summarize_study',
- 'Read a substrate study by slug and return a focused digest. Delegates to a sub-agent with restricted tools (study_get + expand_message ONLY).',
+ 'Read a substrate study by slug and return a focused digest. Delegates to a sub-agent with restricted tools (doc_get + expand_message ONLY).',
  '{"type":"object","required":["slug"],"additionalProperties":false,"properties":{"slug":{"type":"string","description":"The study slug."},"focus":{"type":"string","description":"Optional focus."}}}'::jsonb,
  jsonb_build_object('kind','mcp_proxy','server','pg-ai-stewards','tool','summarize_study'),
  true),
 
 ('investigate_study',
- 'Search the studies corpus and synthesize what it knows about a topic. Delegates to a sub-agent with restricted tools (study_search + study_get + study_similar + expand_message).',
+ 'Search the studies corpus and synthesize what it knows about a topic. Delegates to a sub-agent with restricted tools (doc_search + doc_get + doc_similar + expand_message).',
  '{"type":"object","required":["query"],"additionalProperties":false,"properties":{"query":{"type":"string","description":"Search query."},"focus":{"type":"string","description":"Optional focus."}}}'::jsonb,
  jsonb_build_object('kind','mcp_proxy','server','pg-ai-stewards','tool','investigate_study'),
  true),
 
 ('audit_studies',
- 'Audit the studies corpus against a quality / completeness question. Delegates to a sub-agent with restricted tools (study_search + study_get + expand_message).',
+ 'Audit the studies corpus against a quality / completeness question. Delegates to a sub-agent with restricted tools (doc_search + doc_get + expand_message).',
  '{"type":"object","required":["query","question"],"additionalProperties":false,"properties":{"query":{"type":"string","description":"Search query to find studies to audit."},"question":{"type":"string","description":"The audit question."}}}'::jsonb,
  jsonb_build_object('kind','mcp_proxy','server','pg-ai-stewards','tool','audit_studies'),
  true)

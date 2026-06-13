@@ -86,7 +86,7 @@ func extractTitle(body, fallback string) string {
 	return fallback
 }
 
-// parseMarkdownStudy: pre-2.5 import_study() shape. Title is first H1;
+// parseMarkdownStudy: pre-2.5 import_doc() shape. Title is first H1;
 // frontmatter is collected from `*key: value*` italic lines in the
 // first 20 lines (legacy convention from existing study/ files).
 func parseMarkdownStudy(absPath, relPath, sourceRoot string) (*Doc, error) {

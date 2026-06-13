@@ -34,48 +34,48 @@ func toolError(format string, args ...any) *mcp.CallToolResult {
 	}
 }
 
-// registerStudyTools wires up the v1+v1.1 (Phase 3e.1, 3e.1.1) tool surface:
-// study_search, study_get, study_similar, study_citations.
-func registerStudyTools(srv *mcp.Server, pool *pgxpool.Pool) {
+// registerDocTools wires up the v1+v1.1 (Phase 3e.1, 3e.1.1) tool surface:
+// doc_search, doc_get, doc_similar, doc_citations.
+func registerDocTools(srv *mcp.Server, pool *pgxpool.Pool) {
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "study_search",
+		Name: "doc_search",
 		Description: "Full-text search the substrate's studies corpus. " +
 			"Returns matching slugs, titles, kinds, snippets, and ranks. " +
 			"Filter by kinds (e.g. ['study','journal','proposal']) to narrow " +
-			"to a specific document type. Use study_get afterward to read a " +
+			"to a specific document type. Use doc_get afterward to read a " +
 			"matched document by slug.",
-	}, makeStudySearch(pool))
+	}, makeDocSearch(pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "study_get",
+		Name: "doc_get",
 		Description: "Read a substrate study by slug, with optional line-range " +
 			"pagination for large documents. Returns the body, frontmatter, " +
-			"file path, and metadata as a single JSON object. Use study_search " +
+			"file path, and metadata as a single JSON object. Use doc_search " +
 			"first to find slugs by topic.",
-	}, makeStudyGet(pool))
+	}, makeDocGet(pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "study_similar",
+		Name: "doc_similar",
 		Description: "Find studies similar to a given slug, via the substrate's " +
 			"precomputed embedding edges. Returns related slugs with similarity " +
-			"scores and edge direction (in/out/both). Useful after study_get to " +
+			"scores and edge direction (in/out/both). Useful after doc_get to " +
 			"surface adjacent material the author may have cross-referenced.",
-	}, makeStudySimilar(pool))
+	}, makeDocSimilar(pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "study_citations",
+		Name: "doc_citations",
 		Description: "List the canonical sources (scriptures, talks, etc.) that a " +
 			"given study cites. Returns cited URIs grouped by kind, with anchor " +
 			"text and citation count per URI. The URIs are resolvable via " +
 			"gospel-engine-v2 (path semantics like 'eng/scriptures/bofm/mosiah/18.md#11').",
-	}, makeStudyCitations(pool))
+	}, makeDocCitations(pool))
 }
 
 // ---------------------------------------------------------------------
-// study_search
+// doc_search
 // ---------------------------------------------------------------------
 
-// StudySearchInput mirrors stewards.study_search_text(text, text[], int).
+// DocSearchInput mirrors stewards.doc_search(text, text[], int).
 //
 // jsonschema struct tags are description-only per jsonschema-go's For
 // documentation. The library reserves WORD= prefixes for future syntax,
@@ -83,14 +83,14 @@ func registerStudyTools(srv *mcp.Server, pool *pgxpool.Pool) {
 // future-compatibility rule. Use plain prose. Constraints (min, max,
 // enum) require manual *Schema construction; the substrate's own SQL
 // functions already enforce reasonable bounds, so we don't bother.
-type StudySearchInput struct {
+type DocSearchInput struct {
 	Query string   `json:"query" jsonschema:"natural-language search text (websearch_to_tsquery semantics)"`
 	Kinds []string `json:"kinds,omitempty" jsonschema:"optional filter on document kinds (study journal proposal phase-doc doc); empty matches all"`
 	Limit int      `json:"limit,omitempty" jsonschema:"max results, default 10, capped at 100"`
 }
 
-// StudySearchHit is one row returned by stewards.study_search_text.
-type StudySearchHit struct {
+// DocSearchHit is one row returned by stewards.doc_search.
+type DocSearchHit struct {
 	Slug    string  `json:"slug"`
 	Kind    string  `json:"kind"`
 	Title   string  `json:"title"`
@@ -98,23 +98,23 @@ type StudySearchHit struct {
 	Rank    float32 `json:"rank"`
 }
 
-// StudySearchOutput is the structured envelope. We wrap in a `results`
+// DocSearchOutput is the structured envelope. We wrap in a `results`
 // field rather than returning the array directly because MCP outputSchema
 // expects an object at the top level.
-type StudySearchOutput struct {
-	Results []StudySearchHit `json:"results"`
+type DocSearchOutput struct {
+	Results []DocSearchHit `json:"results"`
 	Count   int              `json:"count"`
 }
 
-func makeStudySearch(pool *pgxpool.Pool) func(
-	ctx context.Context, req *mcp.CallToolRequest, in StudySearchInput,
-) (*mcp.CallToolResult, StudySearchOutput, error) {
+func makeDocSearch(pool *pgxpool.Pool) func(
+	ctx context.Context, req *mcp.CallToolRequest, in DocSearchInput,
+) (*mcp.CallToolResult, DocSearchOutput, error) {
 	return func(
-		ctx context.Context, req *mcp.CallToolRequest, in StudySearchInput,
-	) (*mcp.CallToolResult, StudySearchOutput, error) {
+		ctx context.Context, req *mcp.CallToolRequest, in DocSearchInput,
+	) (*mcp.CallToolResult, DocSearchOutput, error) {
 		if in.Query == "" {
-			return toolError("study_search: 'query' is required and must be non-empty"),
-				StudySearchOutput{}, nil
+			return toolError("doc_search: 'query' is required and must be non-empty"),
+				DocSearchOutput{}, nil
 		}
 		if in.Limit <= 0 {
 			in.Limit = 10
@@ -128,29 +128,29 @@ func makeStudySearch(pool *pgxpool.Pool) func(
 
 		rows, err := pool.Query(ctx,
 			"SELECT slug, kind, title, snippet, rank "+
-				"FROM stewards.study_search_text($1, $2, $3)",
+				"FROM stewards.doc_search($1, $2, $3)",
 			in.Query, kinds, in.Limit)
 		if err != nil {
-			return toolError("study_search query: %v", err),
-				StudySearchOutput{}, nil
+			return toolError("doc_search query: %v", err),
+				DocSearchOutput{}, nil
 		}
 		defer rows.Close()
 
-		var results []StudySearchHit
+		var results []DocSearchHit
 		for rows.Next() {
-			var h StudySearchHit
+			var h DocSearchHit
 			if err := rows.Scan(&h.Slug, &h.Kind, &h.Title, &h.Snippet, &h.Rank); err != nil {
-				return toolError("study_search scan: %v", err),
-					StudySearchOutput{}, nil
+				return toolError("doc_search scan: %v", err),
+					DocSearchOutput{}, nil
 			}
 			results = append(results, h)
 		}
 		if err := rows.Err(); err != nil {
-			return toolError("study_search rows: %v", err),
-				StudySearchOutput{}, nil
+			return toolError("doc_search rows: %v", err),
+				DocSearchOutput{}, nil
 		}
 
-		out := StudySearchOutput{Results: results, Count: len(results)}
+		out := DocSearchOutput{Results: results, Count: len(results)}
 		// Returning (nil, out, nil) lets the SDK build the standard
 		// {content: [{type: text, text: <JSON>}], structuredContent: out,
 		// isError: false} envelope.
@@ -159,33 +159,33 @@ func makeStudySearch(pool *pgxpool.Pool) func(
 }
 
 // ---------------------------------------------------------------------
-// study_get
+// doc_get
 // ---------------------------------------------------------------------
 
-// StudyGetInput mirrors stewards.study_get(text, bool, int, int, int).
+// DocGetInput mirrors stewards.doc_get(text, bool, int, int, int).
 // The line-pagination defaults (offset=0, count=200, max_chars=20000)
 // match the substrate fn's own defaults; callers only need to provide
 // slug for the common case.
-type StudyGetInput struct {
+type DocGetInput struct {
 	Slug       string `json:"slug" jsonschema:"substrate study slug (kebab-case e.g. way-truth-life or substrate--ftc-wtl-meta-v3-kimi-tuned)"`
 	LineOffset int    `json:"line_offset,omitempty" jsonschema:"0-indexed line to start at, default 0"`
 	LineCount  int    `json:"line_count,omitempty" jsonschema:"max body lines, default 200, capped at 2000"`
 	MaxChars   int    `json:"max_chars,omitempty" jsonschema:"hard cap on body characters returned, default 20000, capped at 200000"`
 }
 
-// StudyGetOutput is the substrate fn's jsonb return value, decoded.
+// DocGetOutput is the substrate fn's jsonb return value, decoded.
 // We use map[string]any so the shape passes through whatever the
 // substrate decided to include without us having to mirror every key.
-type StudyGetOutput map[string]any
+type DocGetOutput map[string]any
 
-func makeStudyGet(pool *pgxpool.Pool) func(
-	ctx context.Context, req *mcp.CallToolRequest, in StudyGetInput,
-) (*mcp.CallToolResult, StudyGetOutput, error) {
+func makeDocGet(pool *pgxpool.Pool) func(
+	ctx context.Context, req *mcp.CallToolRequest, in DocGetInput,
+) (*mcp.CallToolResult, DocGetOutput, error) {
 	return func(
-		ctx context.Context, req *mcp.CallToolRequest, in StudyGetInput,
-	) (*mcp.CallToolResult, StudyGetOutput, error) {
+		ctx context.Context, req *mcp.CallToolRequest, in DocGetInput,
+	) (*mcp.CallToolResult, DocGetOutput, error) {
 		if in.Slug == "" {
-			return toolError("study_get: 'slug' is required"), nil, nil
+			return toolError("doc_get: 'slug' is required"), nil, nil
 		}
 		if in.LineCount == 0 {
 			in.LineCount = 200
@@ -196,23 +196,23 @@ func makeStudyGet(pool *pgxpool.Pool) func(
 
 		var raw []byte
 		err := pool.QueryRow(ctx,
-			"SELECT stewards.study_get($1, $2, $3, $4, $5)",
+			"SELECT stewards.doc_get($1, $2, $3, $4, $5)",
 			in.Slug, true /* include_body */, in.LineOffset, in.LineCount, in.MaxChars,
 		).Scan(&raw)
 		if err != nil {
-			return toolError("study_get query: %v (slug=%q)", err, in.Slug), nil, nil
+			return toolError("doc_get query: %v (slug=%q)", err, in.Slug), nil, nil
 		}
 
-		var out StudyGetOutput
+		var out DocGetOutput
 		if err := json.Unmarshal(raw, &out); err != nil {
-			return toolError("study_get decode: %v", err), nil, nil
+			return toolError("doc_get decode: %v", err), nil, nil
 		}
 		// The substrate fn returns NULL when the slug doesn't exist.
 		// pgx scans NULL jsonb into raw=nil → Unmarshal succeeds with
 		// out=nil. len() on a nil map returns 0, so this check covers
 		// both the truly-empty and the not-found cases.
 		if len(out) == 0 {
-			return toolError("study_get: no study with slug %q", in.Slug), nil, nil
+			return toolError("doc_get: no study with slug %q", in.Slug), nil, nil
 		}
 
 		return nil, out, nil
@@ -220,19 +220,19 @@ func makeStudyGet(pool *pgxpool.Pool) func(
 }
 
 // ---------------------------------------------------------------------
-// study_similar
+// doc_similar
 // ---------------------------------------------------------------------
 
-// StudySimilarInput mirrors stewards.study_similar(text, int).
-type StudySimilarInput struct {
+// DocSimilarInput mirrors stewards.doc_similar(text, int).
+type DocSimilarInput struct {
 	Slug  string `json:"slug" jsonschema:"substrate study slug to find neighbors of"`
 	Limit int    `json:"limit,omitempty" jsonschema:"max neighbors returned, default 10, capped at 100"`
 }
 
-// StudySimilarHit is one row from stewards.study_similar.
+// DocSimilarHit is one row from stewards.doc_similar.
 // `direction` is one of 'in' (cited by slug), 'out' (slug cites it),
 // or 'both' (mutual). Score is cosine similarity in [0, 1].
-type StudySimilarHit struct {
+type DocSimilarHit struct {
 	Slug      string  `json:"slug"`
 	Title     string  `json:"title"`
 	FilePath  string  `json:"file_path"`
@@ -240,20 +240,20 @@ type StudySimilarHit struct {
 	Direction string  `json:"direction"`
 }
 
-type StudySimilarOutput struct {
-	Results []StudySimilarHit `json:"results"`
+type DocSimilarOutput struct {
+	Results []DocSimilarHit `json:"results"`
 	Count   int               `json:"count"`
 }
 
-func makeStudySimilar(pool *pgxpool.Pool) func(
-	ctx context.Context, req *mcp.CallToolRequest, in StudySimilarInput,
-) (*mcp.CallToolResult, StudySimilarOutput, error) {
+func makeDocSimilar(pool *pgxpool.Pool) func(
+	ctx context.Context, req *mcp.CallToolRequest, in DocSimilarInput,
+) (*mcp.CallToolResult, DocSimilarOutput, error) {
 	return func(
-		ctx context.Context, req *mcp.CallToolRequest, in StudySimilarInput,
-	) (*mcp.CallToolResult, StudySimilarOutput, error) {
+		ctx context.Context, req *mcp.CallToolRequest, in DocSimilarInput,
+	) (*mcp.CallToolResult, DocSimilarOutput, error) {
 		if in.Slug == "" {
-			return toolError("study_similar: 'slug' is required"),
-				StudySimilarOutput{}, nil
+			return toolError("doc_similar: 'slug' is required"),
+				DocSimilarOutput{}, nil
 		}
 		if in.Limit <= 0 {
 			in.Limit = 10
@@ -261,48 +261,48 @@ func makeStudySimilar(pool *pgxpool.Pool) func(
 
 		rows, err := pool.Query(ctx,
 			"SELECT slug, title, file_path, score, direction "+
-				"FROM stewards.study_similar($1, $2)",
+				"FROM stewards.doc_similar($1, $2)",
 			in.Slug, in.Limit)
 		if err != nil {
-			return toolError("study_similar query: %v (slug=%q)", err, in.Slug),
-				StudySimilarOutput{}, nil
+			return toolError("doc_similar query: %v (slug=%q)", err, in.Slug),
+				DocSimilarOutput{}, nil
 		}
 		defer rows.Close()
 
-		var results []StudySimilarHit
+		var results []DocSimilarHit
 		for rows.Next() {
-			var h StudySimilarHit
+			var h DocSimilarHit
 			if err := rows.Scan(&h.Slug, &h.Title, &h.FilePath, &h.Score, &h.Direction); err != nil {
-				return toolError("study_similar scan: %v", err),
-					StudySimilarOutput{}, nil
+				return toolError("doc_similar scan: %v", err),
+					DocSimilarOutput{}, nil
 			}
 			results = append(results, h)
 		}
 		if err := rows.Err(); err != nil {
-			return toolError("study_similar rows: %v", err),
-				StudySimilarOutput{}, nil
+			return toolError("doc_similar rows: %v", err),
+				DocSimilarOutput{}, nil
 		}
 
-		return nil, StudySimilarOutput{Results: results, Count: len(results)}, nil
+		return nil, DocSimilarOutput{Results: results, Count: len(results)}, nil
 	}
 }
 
 // ---------------------------------------------------------------------
-// study_citations
+// doc_citations
 // ---------------------------------------------------------------------
 
-// StudyCitationsInput mirrors stewards.study_citations(text).
-type StudyCitationsInput struct {
+// DocCitationsInput mirrors stewards.doc_citations(text).
+type DocCitationsInput struct {
 	Slug string `json:"slug" jsonschema:"substrate study slug to list citations for"`
 }
 
-// StudyCitation is one row from stewards.study_citations.
+// DocCitation is one row from stewards.doc_citations.
 // study_slug is repeated per row (the substrate fn could in principle
 // be reused for graph walks across multiple studies, but for now it's
 // always the input slug). cited_kind is e.g. 'scripture', 'talk',
 // 'manual'. anchor_text is the displayed link text. citation_count is
 // how many times this URI is cited within the source study.
-type StudyCitation struct {
+type DocCitation struct {
 	StudySlug     string `json:"study_slug"`
 	CitedURI      string `json:"cited_uri"`
 	CitedKind     string `json:"cited_kind"`
@@ -310,46 +310,46 @@ type StudyCitation struct {
 	CitationCount int    `json:"citation_count"`
 }
 
-type StudyCitationsOutput struct {
-	Citations []StudyCitation `json:"citations"`
+type DocCitationsOutput struct {
+	Citations []DocCitation `json:"citations"`
 	Count     int             `json:"count"`
 }
 
-func makeStudyCitations(pool *pgxpool.Pool) func(
-	ctx context.Context, req *mcp.CallToolRequest, in StudyCitationsInput,
-) (*mcp.CallToolResult, StudyCitationsOutput, error) {
+func makeDocCitations(pool *pgxpool.Pool) func(
+	ctx context.Context, req *mcp.CallToolRequest, in DocCitationsInput,
+) (*mcp.CallToolResult, DocCitationsOutput, error) {
 	return func(
-		ctx context.Context, req *mcp.CallToolRequest, in StudyCitationsInput,
-	) (*mcp.CallToolResult, StudyCitationsOutput, error) {
+		ctx context.Context, req *mcp.CallToolRequest, in DocCitationsInput,
+	) (*mcp.CallToolResult, DocCitationsOutput, error) {
 		if in.Slug == "" {
-			return toolError("study_citations: 'slug' is required"),
-				StudyCitationsOutput{}, nil
+			return toolError("doc_citations: 'slug' is required"),
+				DocCitationsOutput{}, nil
 		}
 
 		rows, err := pool.Query(ctx,
 			"SELECT study_slug, cited_uri, cited_kind, anchor_text, citation_count "+
-				"FROM stewards.study_citations($1)",
+				"FROM stewards.doc_citations($1)",
 			in.Slug)
 		if err != nil {
-			return toolError("study_citations query: %v (slug=%q)", err, in.Slug),
-				StudyCitationsOutput{}, nil
+			return toolError("doc_citations query: %v (slug=%q)", err, in.Slug),
+				DocCitationsOutput{}, nil
 		}
 		defer rows.Close()
 
-		var results []StudyCitation
+		var results []DocCitation
 		for rows.Next() {
-			var c StudyCitation
+			var c DocCitation
 			if err := rows.Scan(&c.StudySlug, &c.CitedURI, &c.CitedKind, &c.AnchorText, &c.CitationCount); err != nil {
-				return toolError("study_citations scan: %v", err),
-					StudyCitationsOutput{}, nil
+				return toolError("doc_citations scan: %v", err),
+					DocCitationsOutput{}, nil
 			}
 			results = append(results, c)
 		}
 		if err := rows.Err(); err != nil {
-			return toolError("study_citations rows: %v", err),
-				StudyCitationsOutput{}, nil
+			return toolError("doc_citations rows: %v", err),
+				DocCitationsOutput{}, nil
 		}
 
-		return nil, StudyCitationsOutput{Citations: results, Count: len(results)}, nil
+		return nil, DocCitationsOutput{Citations: results, Count: len(results)}, nil
 	}
 }

@@ -10,9 +10,6 @@ verify-1-6-1.sql
 verify-2-1.sql
 verify-2-2.sql
 verify-2-3.sql
-2-6a-workstreams.sql
-2-6b-todos.sql
-2-6c-phases-context.sql
 2-7a-watchman-substrate.sql
 3a-watchman-pass.sql
 2-7b1-watchman-automation.sql
@@ -68,7 +65,6 @@ test-gate-e2e.sql
 5g2-convene-council.sql
 5g3-synthesize-and-resolve.sql
 5g4-bishop-and-suggest.sql
-6a-studies-file-path-nullable.sql
 6b-steward-retry-lessons.sql
 6c-quarantine-fires-atonement.sql
 6d-pending-file-writes.sql

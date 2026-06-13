@@ -71,21 +71,21 @@ func registerHeavyweightTools(srv *mcp.Server, pool *pgxpool.Pool) {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "summarize_study",
 		Description: "Read a substrate study by slug and return a focused digest. " +
-			"Delegates to a sub-agent restricted to study_get + expand_message ONLY. " +
+			"Delegates to a sub-agent restricted to doc_get + expand_message ONLY. " +
 			"Use for: pulling a known study's substance without the full text in active context.",
 	}, makeSummarizeStudy(pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "investigate_study",
 		Description: "Search the studies corpus and synthesize what it knows about a topic. " +
-			"Delegates to a sub-agent restricted to study_search / study_get / study_similar + expand_message. " +
+			"Delegates to a sub-agent restricted to doc_search / doc_get / doc_similar + expand_message. " +
 			"Use for: 'what has the corpus said about X?', cross-study syntheses, finding adjacent material.",
 	}, makeInvestigateStudy(pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "audit_studies",
 		Description: "Audit the studies corpus against a quality / completeness question. " +
-			"Delegates to a sub-agent restricted to study_search / study_get + expand_message. " +
+			"Delegates to a sub-agent restricted to doc_search / doc_get + expand_message. " +
 			"Use for: 'which studies on X lack a Becoming section?', 'are any studies contradicting Y?'.",
 	}, makeAuditStudies(pool))
 
@@ -288,7 +288,7 @@ func makeSummarizeStudy(pool *pgxpool.Pool) func(
 			return toolError("summarize_study: 'slug' is required"), SpawnSubagentOutput{}, nil
 		}
 		binding := fmt.Sprintf("Summarize the substrate study with slug: %s\n\n"+
-			"Use study_get to read it. Preserve key quotes verbatim with attribution.", in.Slug)
+			"Use doc_get to read it. Preserve key quotes verbatim with attribution.", in.Slug)
 		if in.Focus != "" {
 			binding += "\n\nFocus: " + in.Focus
 		}
@@ -320,7 +320,7 @@ func makeInvestigateStudy(pool *pgxpool.Pool) func(
 			return toolError("investigate_study: 'query' is required"), SpawnSubagentOutput{}, nil
 		}
 		binding := fmt.Sprintf("Investigate the studies corpus for: %s\n\n"+
-			"Use study_search to find relevant studies, study_get to read them, study_similar to surface "+
+			"Use doc_search to find relevant studies, doc_get to read them, doc_similar to surface "+
 			"adjacent material. Synthesize what the corpus knows; cite study slugs.", in.Query)
 		if in.Focus != "" {
 			binding += "\n\nFocus: " + in.Focus
@@ -356,7 +356,7 @@ func makeAuditStudies(pool *pgxpool.Pool) func(
 			return toolError("audit_studies: 'question' is required"), SpawnSubagentOutput{}, nil
 		}
 		binding := fmt.Sprintf("Audit studies matching: %s\n\nAudit question: %s\n\n"+
-			"Use study_search to find candidates, study_get to inspect. Produce a per-study finding table.",
+			"Use doc_search to find candidates, doc_get to inspect. Produce a per-study finding table.",
 			in.Query, in.Question)
 		costCap := in.CostCapMicro
 		if costCap == 0 {

@@ -4,11 +4,11 @@
 -- Tests:
 --   1. Row count + edge count baseline
 --   2. parse_gospel_links handles the link shapes we expect
---   3. import_study survives apostrophes, em-dashes, parentheses
+--   3. import_doc survives apostrophes, em-dashes, parentheses
 --      (the inverse hypothesis — these were the actual failure mode)
 --   4. Re-importing a study syncs edges (no duplicates, removed
 --      links disappear)
---   5. study_citations() round-trips the graph back to relational
+--   5. doc_citations() round-trips the graph back to relational
 --   6. Cross-study graph queries: which studies cite Mosiah 18?
 
 \set ON_ERROR_STOP 1
@@ -16,7 +16,7 @@ LOAD 'age';
 SET search_path = ag_catalog, public;
 
 \echo === Test 1: corpus loaded ===
-SELECT count(*) AS studies FROM stewards.studies;
+SELECT count(*) AS studies FROM stewards.docs;
 SELECT * FROM cypher('stewards_graph', $$
     MATCH (s:Study) RETURN count(s) AS study_vertices
 $$) AS (study_vertices agtype);
@@ -38,7 +38,7 @@ and a non-link reference to gospel-library/foo without brackets$$ AS body
 SELECT * FROM stewards.parse_gospel_links((SELECT body FROM sample));
 
 \echo === Test 3: apostrophes, em-dashes, parentheses survive ===
-SELECT stewards.import_study(
+SELECT stewards.import_doc(
     'verify-quote-test',
     'verify/quote-test.md',
     $$The Serpent's Craft — Title (with em-dash & parens)$$,
@@ -47,7 +47,7 @@ and [Mosiah 18:8-9](../gospel-library/eng/scriptures/bofm/mosiah/18.md)
 and a stray apostrophe: don't break.$$,
     '{}'::jsonb
 ) AS new_id;
-SELECT * FROM stewards.study_citations('verify-quote-test');
+SELECT * FROM stewards.doc_citations('verify-quote-test');
 
 \echo === Test 4: re-import is idempotent (edge count unchanged) ===
 SELECT count(*) AS edges_before FROM (
@@ -55,7 +55,7 @@ SELECT count(*) AS edges_before FROM (
         MATCH (s:Study {slug: 'verify-quote-test'})-[r:CITES]->() RETURN r
     $$) AS (r agtype)
 ) sub;
-SELECT stewards.import_study(
+SELECT stewards.import_doc(
     'verify-quote-test',
     'verify/quote-test.md',
     $$The Serpent's Craft — Title (with em-dash & parens)$$,
@@ -71,14 +71,14 @@ SELECT count(*) AS edges_after FROM (
 ) sub;
 
 \echo === Test 5: removing a link from the body removes the edge ===
-SELECT stewards.import_study(
+SELECT stewards.import_doc(
     'verify-quote-test',
     'verify/quote-test.md',
     $$The Serpent's Craft — Title$$,
     $$Body with only one link now: [Mosiah 18:8-9](../gospel-library/eng/scriptures/bofm/mosiah/18.md)$$,
     '{}'::jsonb
 ) AS shrunk_id;
-SELECT * FROM stewards.study_citations('verify-quote-test');
+SELECT * FROM stewards.doc_citations('verify-quote-test');
 
 \echo === Test 6: cross-study graph query — who cites Mosiah 18? ===
 SELECT * FROM cypher('stewards_graph', $$
@@ -88,7 +88,7 @@ SELECT * FROM cypher('stewards_graph', $$
 $$) AS (slug agtype, title agtype);
 
 \echo === Test 7: cleanup verify-quote-test ===
-DELETE FROM stewards.studies WHERE slug = 'verify-quote-test';
+DELETE FROM stewards.docs WHERE slug = 'verify-quote-test';
 SELECT * FROM cypher('stewards_graph', $$
     MATCH (s:Study {slug: 'verify-quote-test'}) DETACH DELETE s
 $$) AS (v agtype);
