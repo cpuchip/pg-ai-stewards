@@ -2,8 +2,10 @@
 # Derived 2026-06-12 from the upstream workspace's repaired manifest by
 # the P1 classification. As of B5 (2026-06-13) the ENTIRE migration chain
 # is consolidated into the authored subsystem files 00-19 (applied by
-# CREATE EXTENSION, NOT this manifest). What remains below is only the
-# verify-* / test-gate harness, to be re-authored under tests/ at B6.
+# CREATE EXTENSION, NOT this manifest). The verify-* / test-gate files below
+# are the historical per-migration harness, kept for reference; the
+# authoritative virgin-boot test now lives at tests/virgin-smoke.sql and is
+# run by CI (.github/workflows/ci.yml).
 inverse-test.sql
 verify-loop.sql
 verify-1-6-1-reaper-check.sql

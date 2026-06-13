@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  extension:
+    name: extension build + virgin smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the extension image
+        run: docker build -t stewards-oss-pg:ci extension/
+
+      - name: Start a virgin Postgres
+        run: |
+          docker run -d --name pg \
+            -e POSTGRES_USER=stewards \
+            -e POSTGRES_PASSWORD=ci \
+            -e POSTGRES_DB=stewards \
+            stewards-oss-pg:ci \
+            -c shared_preload_libraries=pg_ai_stewards
+
+      - name: Wait for readiness
+        run: |
+          ok=
+          for i in $(seq 1 60); do
+            if docker exec pg pg_isready -U stewards -d stewards >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then echo "::error::Postgres did not become ready"; docker logs pg; exit 1; fi
+
+      - name: Run the virgin-boot smoke (CREATE EXTENSION + clean-room asserts)
+        run: docker exec -i pg psql -U stewards -d stewards -v ON_ERROR_STOP=1 < tests/virgin-smoke.sql
+
+      - name: Teardown
+        if: always()
+        run: docker rm -f pg || true
+
+  go:
+    name: go build + vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: build
+        run: go build ./...
+      - name: vet
+        run: go vet ./...
