@@ -248,6 +248,12 @@ extension_sql_file!(
     requires = ["create_scheduler"],
 );
 
+extension_sql_file!(
+    "../20-coder.sql",
+    name = "create_coder",
+    requires = ["create_models"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
