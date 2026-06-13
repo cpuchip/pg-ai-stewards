@@ -291,7 +291,7 @@ es1's cancel-cascade).
   - **agents.kind value-seeds (ct2-7a)** are NULL-guarded UPDATEs targeting
     families born later (persona@17) or workspace-flavored (dev/debug) — no-ops
     on the virgin core; kind for example agents is a B5 seed-pass concern.
-- **B4/16 SHIPPED 2026-06-13** (OSS `<pending-16>`): `16-subagents.sql` —
+- **B4/16 SHIPPED 2026-06-13** (OSS `4ba752d`): `16-subagents.sql` —
   the sub-agent delegation surface + the §7.3 self-editable base prompt.
   l9 depth cap (subagent_depth_of/check_subagent_depth + enforcement trigger)
   · k4 spawn_subagent_create + tool · es8 consult_subagent_dispatch + tool ·
@@ -331,7 +331,35 @@ es1's cancel-cascade).
     ct2-7e form. self_prompt_on is created first (§7.1) because compose_tools is
     LANGUAGE sql, body-validated at CREATE. No later batch redefines compose_tools
     (grep-confirmed across the remaining manifest). schema.rs base → 16 final.
-- **B5** = 17–19 +
+- **B5/17 SHIPPED 2026-06-13** (OSS `<pending-17>`): `17-personas.sql` — the
+  chat-persona cognition + room-expression surface (the substrate half of the
+  persona-host; OSS v0.1 = core + persona-host). The generic `persona` agent +
+  persona-turn pipeline (r7) + two example provider pipelines (r8: lmstudio /
+  gemini) + ct2-7c persona/room facets (session_facets + set_session_facets +
+  the FINAL dispatch_facets / remember_tool / forget_tool, persona/room-aware) +
+  the persona_outbox + room_say (r16/r20) + room_react (r21). Virgin scratch
+  smoke FULLY GREEN (pgcrypto absent; 3 persona-turn pipelines @16000;
+  **compose_tools('persona') = EXACTLY [room_react, room_say]** — deny-* + 2
+  allows resolve; room_say-as-character + room_react rows; facets expose
+  persona/room; **16's on_one_shot persona-% arm auto-verifies a persona-turn
+  child** — the cross-batch proof). 9 files retired; manifest 39→30; ext dir 49
+  .sql; secret-scan clean. **DEVIATIONS (act+report):**
+  - **on_one_shot_pipeline_completed NOT authored** — r7/r8's redefinitions are
+    DEAD; r11/16 owns the final with the persona-% arm (smoke proves it fires).
+  - **r18+r19 max_tokens folded** into the 3 pipeline INSERTs (final 16000; the
+    1200→3000→16000 UPDATEs dropped — author the final state, not the steps).
+  - **r20 sub_persona + r21 react_emoji folded** into a born-complete
+    persona_outbox; room_say_tool authored once at its r20 final (as_character).
+  - **persona prompt evolution kept as the exact r7→r17→r21→r21b append/replace
+    sequence** (byte-faithful, not hand-reassembled — l13 lesson).
+  - **Overlay split:** r21's librarian/codewright/gamemaster room_react grants +
+    the gamemaster prompt nudges → overlay (those families are not in core),
+    mirroring r17's already-extracted codewright/librarian room_say grants. Core
+    grants room_say + room_react to `persona` only.
+  - **persona deny study_* → doc_*** (the canonical rename; rename-map row).
+- **B5/18–19 NEXT:** 18-scheduler (pe6/pe7) · 19-models (m1/m2/m4/m5/an1/zen1 +
+  the work_item_dispatch_stage dispatch-final deferred from 14 = j8a 4-layer +
+  j11 cap, accreting m2 capability-gate + r3 max-tokens) +
 seed_harness genericize + bgworker `_kind` enum. **B6** = tests/ + CI
 workflow + rename-map.tsv finalization + overlay copies updated to new
 names (overlay note: init/01-seed-workstreams + any overlay migration

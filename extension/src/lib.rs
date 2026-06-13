@@ -230,6 +230,12 @@ extension_sql_file!(
     requires = ["create_context_surface"],
 );
 
+extension_sql_file!(
+    "../17-personas.sql",
+    name = "create_personas",
+    requires = ["create_subagents"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
