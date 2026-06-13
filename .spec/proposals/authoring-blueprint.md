@@ -415,11 +415,17 @@ es1's cancel-cascade).
   go-version-file). README CI badge added. `.gitattributes` was already
   comprehensive (eol=lf); `*.exe` already gitignored (no binary tracked).
   migration-order.txt header repoints the harness to tests/.
-  **B6 REMAINING:** (1) **overlay re-author** (workspace repo) — the 33 overlay
-  migrations + init/01-seed-workstreams against doc_*/relational/config-keys
-  (import_workstream signature unchanged); (2) **rename-map.tsv finalize**
-  (workspace parity/) — fold all B1-B5 rename rows; (3) **classify the 20
-  live↔repo mismatches** via the verify-suite (needs live; read-only diff).
+  **B6 DONE this session (workspace):** (1) **overlay re-author** — h1-1/h3-2
+  (scripture_anchor→values_anchor), init-01-seed-workstreams (drop LOAD age +
+  ag_catalog search_path; import_workstream is relational), + pe7-seed-ai-news-7am
+  (the schedule B5/18 moved to overlay but never filed); **OVERLAY-REPLAY PROOF
+  GREEN** — 35/35 overlays apply on a virgin core (harness `parity/overlay-replay.sh`,
+  workspace `0cb5cd3`); both scheduled pipelines land. The ~15 other study_*-grep
+  overlays apply clean as-is (a pipeline NAMED 'study-write' is a valid operator
+  string, not a renamed-object reference). (2) **rename-map.tsv finalized** through
+  B5 (workspace `6bdeef9`). **B6 REMAINING — the one cutover-prep item left:**
+  (3) **classify the 20 live↔repo mismatches** via the verify-suite (needs the
+  LIVE substrate up; read-only function-def diff) — feeds the CUT dispositions.
   **VERIFIED DONE this session:** (4) **anatomy doc** is clean — no stale
   study_*/AGE, "overlay migrations" already correct, the one kimi-k2.6 is an
   illustrative payload value; (5) **seed_harness genericize** — virgin boot =
