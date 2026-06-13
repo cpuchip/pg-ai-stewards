@@ -423,9 +423,17 @@ es1's cancel-cascade).
   workspace `0cb5cd3`); both scheduled pipelines land. The ~15 other study_*-grep
   overlays apply clean as-is (a pipeline NAMED 'study-write' is a valid operator
   string, not a renamed-object reference). (2) **rename-map.tsv finalized** through
-  B5 (workspace `6bdeef9`). **B6 REMAINING — the one cutover-prep item left:**
-  (3) **classify the 20 live↔repo mismatches** via the verify-suite (needs the
-  LIVE substrate up; read-only function-def diff) — feeds the CUT dispositions.
+  B5 (workspace `6bdeef9`). (3) **20 live↔repo mismatches CLASSIFIED — GREEN,
+  ZERO DRIFT** (workspace `9566517`, `parity/mismatch-classification.md`): live
+  (`pg-ai-stewards-dev`, read-only) vs the rebuilt target (core+overlay); 101 raw
+  body-diffs normalize to 30 genuine, all accounted — deliberate clean-room
+  changes (AGE→relational, config genericization, consolidation finals, doc_*
+  renames, todos lowercase), false positives (formatting / END vs END;), one
+  rebuilt-fixes-live bug (provider_cap_refill RAISE %.2f), and ONE deferred-P2 gap
+  (work_item_advance code-pr revise loop → 20-coder). The rebuilt P1 substrate is
+  functionally equivalent to live minus deferred P2. **★ B6 / cutover-prep COMPLETE.**
+  Carry into the cut/coder: work_item_advance code-pr arm at the coder wave; the
+  work_item_promote_trigger unwrapped-PERFORM sabbath tension at cut planning.
   **VERIFIED DONE this session:** (4) **anatomy doc** is clean — no stale
   study_*/AGE, "overlay migrations" already correct, the one kimi-k2.6 is an
   illustrative payload value; (5) **seed_harness genericize** — virgin boot =
