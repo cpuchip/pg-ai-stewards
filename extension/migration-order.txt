@@ -10,15 +10,9 @@ verify-1-6-1.sql
 verify-2-1.sql
 verify-2-2.sql
 verify-2-3.sql
-2-7a-watchman-substrate.sql
-3a-watchman-pass.sql
-2-7b1-watchman-automation.sql
 verify-2-7b1-inverse.sql
-2-7b2-watchman-scheduler.sql
 verify-2-7b2-decision.sql
-2-7b3-watchman-budget.sql
 verify-2-7b3-budget.sql
-2-7b4-watchman-soak-prep.sql
 3c1-pipelines-work-items.sql
 3c2-work-item-advance-trigger.sql
 verify-3c2-inverse.sql
