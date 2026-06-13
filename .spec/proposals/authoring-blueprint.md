@@ -89,7 +89,7 @@ instrument).
 | — | `tests/` | verify-* + test-gate-e2e re-authored per subsystem (lesson #2) |
 
 P2 wave: cc*, cv*, r10, r12 → `20-coder.sql`.
-- **B6/coder SQL SURFACE SHIPPED 2026-06-13** (OSS `<pending-coder>`): `20-coder.sql`
+- **B6/coder SQL SURFACE SHIPPED 2026-06-13** (OSS `a943a95`): `20-coder.sql`
   consolidates the coder wave's SQL — a generic clean-room `dev` agent (the 17K
   personal dev/debug prompts stay overlay), the `coder` MCP server (inert: points
   at /usr/local/bin/coder-mcp, not yet built), code-write / code-pr (the 7-stage
