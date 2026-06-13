@@ -167,7 +167,7 @@ Given the prior context above, find external sources to fill the gaps and answer
 
 ## TOOL GUIDANCE
 
-You have `fetch_url` / `fetch_urls` (fetch a page as readable markdown), plus whatever web-search tools your operator has registered (e.g. `web_search_exa`, `news_search`, `yt_search`, `yt_get`). Use 1-2 search calls per round to cast wide; use `fetch_url` to read a specific high-value source. Parallel tool calls in one round = ONE round.
+You have `fetch_url` / `fetch_urls` (fetch a page as readable markdown) and `web_search_exa` (Exa web search — the default, works on the free tier out of the box), plus any other search tools your operator registered (`news_search`, `yt_search`, `yt_get`). Use 1-2 search calls per round to cast wide; use `fetch_url` to read a specific high-value source. Parallel tool calls in one round = ONE round.
 
 You can also still use `fs_*` and `doc_*` if the prior context surfaces a substrate document you want to read directly — but skip another full sweep; context_gather already did that.
 
