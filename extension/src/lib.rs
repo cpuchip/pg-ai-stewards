@@ -79,21 +79,9 @@ extension_sql_file!(
 );
 
 extension_sql_file!(
-    "../3e2-1-mcp-bridge-schemas.sql",
-    name = "create_mcp_bridge_schemas",
+    "../05-mcp-bridge.sql",
+    name = "create_mcp_bridge",
     requires = ["create_work_items"],
-);
-
-extension_sql_file!(
-    "../3e2-2-mcp-proxy-dispatch.sql",
-    name = "create_mcp_proxy_dispatch",
-    requires = ["create_mcp_bridge_schemas"],
-);
-
-extension_sql_file!(
-    "../3e2-3-mcp-tool-cache-promote.sql",
-    name = "create_mcp_tool_cache_promote",
-    requires = ["create_mcp_proxy_dispatch"],
 );
 
 // (OSS extraction 2026-06-12: four downstream seed migrations removed from
@@ -110,7 +98,7 @@ extension_sql_file!(
 extension_sql_file!(
     "../4a-cost-tracking.sql",
     name = "create_phase_4a_cost_tracking",
-    requires = ["create_mcp_tool_cache_promote"],
+    requires = ["create_mcp_bridge"],
 );
 
 extension_sql_file!(

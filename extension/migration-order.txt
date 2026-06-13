@@ -14,10 +14,7 @@ verify-2-7b1-inverse.sql
 verify-2-7b2-decision.sql
 verify-2-7b3-budget.sql
 verify-3c2-inverse.sql
-3e2-1-mcp-bridge-schemas.sql
-3e2-2-mcp-proxy-dispatch.sql
 verify-3e2-2.sql
-3e2-3-mcp-tool-cache-promote.sql
 4a-cost-tracking.sql
 4a-escalation-chain.sql
 verify-4a.sql
@@ -58,12 +55,10 @@ test-gate-e2e.sql
 6e-lesson-resolution-file-producers.sql
 h1-0-substrate-primitives.sql
 h1-2-research-write-pipeline.sql
-h1-5a-mcp-proxy-soft-fail.sql
 h1-5b-tighten-gather-template.sql
 h1-6-1-maturity-advance-hook.sql
 h1-6-2-verified-trigger.sql
 h1-6-6-strip-review-prefix.sql
-h1-7a-fs-read-pg-stewards-mcp-seed.sql
 h1-7b-research-grants-and-template.sql
 h2-context-gather-stage.sql
 h3-1-schema-migrations.sql
