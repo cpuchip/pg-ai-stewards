@@ -1120,7 +1120,7 @@ VALUES
 ),
 (
     'doc_citations',
-    'Return the canonical sources cited by a doc. Backed by CITES edges in the relational graph, parsed from markdown links during import. Returns cited_uri, cited_kind (scripture | talk | manual | other), anchor_text (the link text the doc used), and citation_count (how many times that uri appears).',
+    'Return the canonical sources cited by a doc. Backed by CITES edges in the relational graph, parsed from markdown links during import. Returns cited_uri, cited_kind (external | doc), anchor_text (the link text the doc used), and citation_count (how many times that uri appears).',
     '{
         "type": "object",
         "required": ["slug"],

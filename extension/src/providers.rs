@@ -2,7 +2,7 @@
 //!
 //! Reads `STEWARDS_PROVIDER_<NAME>_<FIELD>` env vars at postmaster
 //! startup and exposes the parsed registry to the bgworker via the
-//! `PROVIDER_REGISTRY` `OnceLock`. Also holds the gospel-engine
+//! `PROVIDER_REGISTRY` `OnceLock`. Also holds the external-resource
 //! resolver config in its own `OnceLock`.
 //!
 //! Extracted from lib.rs (Phase 3c.3.6 module split, 2026-05-08).
@@ -114,14 +114,18 @@ fn split_provider_key(rest: &str) -> Option<(String, String)> {
 /// startup and never reloads.
 pub(crate) static PROVIDER_REGISTRY: OnceLock<ProviderRegistry> = OnceLock::new();
 
-/// Phase 2.2 — gospel-engine resolver config. Read once from env at
-/// postmaster startup. URL has no trailing slash; token is bearer.
-/// Both Optional so the resolver can fail gracefully if env is unset
-/// (returns "GOSPEL_ENGINE_URL not set" which is stored in
-/// resolved_refs.error and visible to callers).
+/// External-resource resolver config. Read once from env at postmaster
+/// startup: `STEWARDS_RESOLVER_URL` is a URL template — a `{ref}`
+/// placeholder is substituted with the url-encoded reference (if the
+/// template has no `{ref}`, the encoded ref is appended). The optional
+/// `STEWARDS_RESOLVER_TOKEN` is sent as a bearer token. Both Optional so
+/// the resolver fails gracefully if env is unset (returns
+/// "STEWARDS_RESOLVER_URL not set", stored in resolved_refs.error and
+/// visible to callers). Generic on purpose — point it at any HTTP
+/// endpoint that resolves a reference string to a JSON document.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct GospelEngineConfig {
+pub(crate) struct ResolverConfig {
     pub(crate) url: Option<String>,
     pub(crate) token: Option<String>,
 }
-pub(crate) static GOSPEL_ENGINE_CONFIG: OnceLock<GospelEngineConfig> = OnceLock::new();
+pub(crate) static RESOLVER_CONFIG: OnceLock<ResolverConfig> = OnceLock::new();

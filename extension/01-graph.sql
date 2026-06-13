@@ -5,7 +5,7 @@
 -- Ratified design: plain tables + recursive CTEs give the substrate
 -- everything it used AGE for, with the full Postgres toolbox (indexes,
 -- RLS, partitioning) and none of the install friction. Prior art:
--- gospel-engine's SQLite edges; SQL:2023 PGQ; Facebook TAO.
+-- adjacency-list edge tables; SQL:2023 PGQ; Facebook TAO.
 --
 -- Design inputs (ratified 2026-06-12):
 --   - N-depth walks are a requirement: docs CHAIN (BUILDS_ON lineage).

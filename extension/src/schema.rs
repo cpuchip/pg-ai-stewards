@@ -278,8 +278,8 @@ extension_sql!(
     -- the resulting 768-dim vector back to NEW.embedding.
     --
     -- Provider name 'lm_studio' resolves to the registry entry
-    -- loaded from STEWARDS_PROVIDER_LM_STUDIO_*. Model name matches
-    -- gospel-engine-v2 exactly so vectors are comparable across DBs.
+    -- loaded from STEWARDS_PROVIDER_LM_STUDIO_*. Keep the embedding
+    -- model consistent across stacks so stored vectors stay comparable.
     CREATE FUNCTION stewards.enqueue_brain_embed() RETURNS trigger
     LANGUAGE plpgsql AS $func$
     BEGIN
@@ -577,7 +577,7 @@ extension_sql!(
 
     -- ============================================================
     -- Tool defs — what tools an agent can see. No variants in v1.
-    -- name follows '<prefix>_<rest>' convention (brain_*, gospel_*).
+    -- name follows '<prefix>_<rest>' convention (brain_*, doc_*).
     -- execute_target is jsonb describing dispatch. v1 supports:
     --   {"kind":"sql_fn","schema":"stewards","name":"brain_search_text"}
     -- Future kinds: 'http', 'subagent', 'mcp'.
@@ -939,16 +939,16 @@ extension_sql!(
     VALUES
         (
             'stewards-explore', '*',
-            'Read-only researcher over the brain and gospel corpus',
+            'Read-only researcher over the brain and document corpus',
             'primary',
-            E'You are a careful researcher with access to a Postgres-backed brain of notes and a corpus of scripture.\n\nYour job: when asked a question, search before answering. Cite the brain entry IDs (or scripture references) you actually consulted. If the brain has no entry on a topic, say so plainly — do not invent IDs.',
+            E'You are a careful researcher with access to a Postgres-backed brain of notes and a document corpus.\n\nYour job: when asked a question, search before answering. Cite the brain entry IDs (or source references) you actually consulted. If the brain has no entry on a topic, say so plainly — do not invent IDs.',
             0.2, NULL, 8
         ),
         (
             'stewards-explore', 'kimi-*',
             'Read-only researcher (Kimi tuning)',
             'primary',
-            E'You are a careful researcher with access to a Postgres-backed brain of notes and a corpus of scripture.\n\nYour job: when asked a question, search before answering. Cite the brain entry IDs (or scripture references) you actually consulted. If the brain has no entry on a topic, say so plainly — do not invent IDs.\n\nKimi-specific: be terse. Prefer 2-3 sentences over paragraphs. Skip throat-clearing.',
+            E'You are a careful researcher with access to a Postgres-backed brain of notes and a document corpus.\n\nYour job: when asked a question, search before answering. Cite the brain entry IDs (or source references) you actually consulted. If the brain has no entry on a topic, say so plainly — do not invent IDs.\n\nKimi-specific: be terse. Prefer 2-3 sentences over paragraphs. Skip throat-clearing.',
             0.2, NULL, 8
         )
     ON CONFLICT (family, model_match) DO NOTHING;
@@ -976,14 +976,14 @@ extension_sql!(
     VALUES
         (
             'source-verification', '*',
-            'Verify scripture and talk quotes against actual source files before quoting',
-            E'# Source Verification\n\nBefore using quotation marks around any scripture or talk text, you must have read the actual source row in this session. Training-data memory confabulates.\n\nIf you have not verified, paraphrase using indirect speech ("Paul teaches that...") rather than direct quotation.',
+            'Verify quotes against actual source files before quoting',
+            E'# Source Verification\n\nBefore using quotation marks around any quoted text, you must have read the actual source row in this session. Training-data memory confabulates.\n\nIf you have not verified, paraphrase using indirect speech ("the source argues that...") rather than direct quotation.',
             'MIT', '{"audience":"researcher"}'::jsonb
         ),
         (
-            'scripture-linking', '*',
-            'Format scripture and conference talk references as workspace-relative links',
-            E'# Scripture Linking\n\nScripture references should be cited by their canonical short form (e.g., "Moroni 7:45-48") and accompanied by the brain entry ID if one exists.',
+            'reference-linking', '*',
+            'Format source references as links to their canonical location',
+            E'# Reference Linking\n\nCite a source by a stable short form and link it to its canonical location; accompany it with the brain entry ID if one exists.',
             'MIT', '{"audience":"researcher"}'::jsonb
         )
     ON CONFLICT (family, model_match) DO NOTHING;
@@ -1351,11 +1351,11 @@ extension_sql!(
 // are typed CITES edges in the relational graph (01-graph.sql) — one
 // 'doc' node per doc row, one node per unique URI cited.
 //
-// URI scheme: we use the workspace-relative path of the cited source as
-// the canonical id. Examples (a scripture-corpus deployment):
-//   eng/scriptures/bofm/mosiah/18.md          (whole chapter)
-//   eng/scriptures/bofm/mosiah/18.md#11       (single verse)
-//   eng/general-conference/2024/04/<slug>.md  (talk)
+// URI scheme: the cited source's link target (a relative path or an
+// external URL), as written, is the canonical id. Examples:
+//   docs/architecture.md           (a doc in the corpus)
+//   docs/architecture.md#caching   (a section anchor)
+//   https://example.com/spec       (an external source)
 // ---------------------------------------------------------------------------
 extension_sql!(
     r#"
@@ -1479,60 +1479,46 @@ extension_sql!(
         FOR EACH ROW EXECUTE FUNCTION stewards.enqueue_doc_embed();
 
     -- ============================================================
-    -- Markdown link parser.
+    -- Markdown link parser (generic, domain-agnostic).
     --
-    -- parse_gospel_links(body) returns one row per gospel-library
-    -- link found in the markdown. Handles three shapes:
-    --   1. Workspace-relative: ../gospel-library/eng/scriptures/...
-    --   2. Workspace-relative: ../../gospel-library/eng/...
-    --   3. Workspace-absolute: /gospel-library/eng/...
-    -- For each match returns:
-    --   uri         text  -- canonical eng/<...>.md[#anchor] form
-    --   anchor_text text  -- the [text] portion (e.g. 'Mosiah 18:8-9')
-    --   kind        text  -- 'scripture' | 'talk' | 'manual' | 'other'
+    -- parse_doc_links(body) returns one row per markdown link found in
+    -- the body. For each match returns:
+    --   uri         text  -- the link target, as written
+    --   anchor_text text  -- the [text] portion
+    --   kind        text  -- 'external' (http/https) | 'doc' (else)
     --
-    -- Uses regexp_matches with the 'g' flag so all links in the body
-    -- are returned. Verse anchors (#11) are preserved when present.
+    -- Pure-fragment (#...), mailto:, and empty targets are skipped.
+    -- Uses regexp_matches with the 'g' flag so all links are returned.
+    -- import_doc consumes this to build the CITES edge graph. Operators
+    -- who want domain-specific link classification (e.g. scripture /
+    -- talk / manual) override this function in an overlay migration.
     -- ============================================================
-    CREATE FUNCTION stewards.parse_gospel_links(p_body text)
+    CREATE FUNCTION stewards.parse_doc_links(p_body text)
     RETURNS TABLE (uri text, anchor_text text, kind text)
     LANGUAGE plpgsql STABLE AS $func$
     DECLARE
         v_match text[];
-        v_path  text;
-        v_uri   text;
-        v_kind  text;
+        v_url   text;
     BEGIN
         FOR v_match IN
             SELECT regexp_matches(
                 p_body,
-                -- group 1: link text; group 2: full URL portion
-                E'\\[([^\\]]+)\\]\\(([^)]*gospel-library/[^)]+)\\)',
+                -- group 1: link text; group 2: link target
+                E'\\[([^\\]]+)\\]\\(([^)]+)\\)',
                 'g'
             )
         LOOP
-            v_path := v_match[2];
-            -- Strip leading ../ segments and any leading slash.
-            v_path := regexp_replace(v_path, '^(\.\./)+', '');
-            v_path := regexp_replace(v_path, '^/+', '');
-            -- Drop the gospel-library/ prefix to leave eng/...
-            v_path := regexp_replace(v_path, '^gospel-library/', '');
-            -- Some links use the bare path with a verse anchor as
-            -- ?id=... or #N — keep #N, drop ?id= variants.
-            v_path := regexp_replace(v_path, '\?id=[^#]*', '');
+            v_url := btrim(v_match[2]);
+            -- Skip pure-fragment, mailto, and empty targets.
+            CONTINUE WHEN v_url = '' OR left(v_url, 1) = '#'
+                       OR v_url LIKE 'mailto:%';
 
-            v_uri := v_path;
-
-            v_kind := CASE
-                WHEN v_uri LIKE 'eng/scriptures/%' THEN 'scripture'
-                WHEN v_uri LIKE 'eng/general-conference/%' THEN 'talk'
-                WHEN v_uri LIKE 'eng/manual/%' THEN 'manual'
-                ELSE 'other'
-            END;
-
-            uri := v_uri;
+            uri := v_url;
             anchor_text := v_match[1];
-            kind := v_kind;
+            kind := CASE
+                WHEN v_url ~* '^https?://' THEN 'external'
+                ELSE 'doc'
+            END;
             RETURN NEXT;
         END LOOP;
     END;
@@ -1544,8 +1530,8 @@ extension_sql!(
     -- - INSERT or UPDATE stewards.docs on slug conflict.
     -- - Upsert the 'doc' node, then for each unique source link in
     --   the body, upsert the cited node + a CITES edge. The cited
-    --   node's kind is the parsed link kind (scripture | talk |
-    --   manual | other); its ref is the canonical URI.
+    --   node's kind is the parsed link kind ('external' | 'doc');
+    --   its ref is the link target URI.
     -- - Existing CITES edges from this doc are deleted first
     --   (sync semantics: edges always reflect the current body).
     --
@@ -1594,7 +1580,7 @@ extension_sql!(
                    max(anchor_text) AS anchor_text,
                    max(kind)        AS kind,
                    count(*)::int    AS citation_count
-              FROM stewards.parse_gospel_links(p_body)
+              FROM stewards.parse_doc_links(p_body)
              GROUP BY uri
         LOOP
             PERFORM stewards.graph_edge_upsert(
@@ -1643,25 +1629,27 @@ extension_sql!(
 );
 
 // ---------------------------------------------------------------------------
-// Phase 2.2 — gospel-engine resolver
+// External-resource resolver (generic, config-driven)
 //
-// Citations carry only an anchor_text and a URI. To show actual verse
-// text in study views, we hit gospel-engine-v2's /api/get?ref=<ref>
-// over HTTP. Results cache in stewards.resolved_refs keyed by the
-// single-verse reference string ("Mosiah 18:8") so verse-range
-// citations decompose into reusable rows.
+// A doc's CITES edges carry only an anchor_text and a URI. To show the
+// actual content behind a citation, the operator configures an HTTP
+// endpoint via STEWARDS_RESOLVER_URL (a "{ref}" template) and the bridge
+// fetches it. Results cache in stewards.resolved_refs keyed by the
+// reference string so repeated citations reuse one fetched row.
 //
-// Bgworker handles the HTTP round-trip via a new 'resolve_ref' work
-// kind. The resolver only knows about scripture references for now —
-// talk URIs ("eng/general-conference/.../<slug>.md") cannot be parsed
-// from anchor_text alone and are left for a future sub-phase that
-// adds a path-based gospel-engine endpoint.
+// The bgworker handles the HTTP round-trip via the 'resolve_ref' work
+// kind (see tools.rs::resolve_ref). The core resolves whatever reference
+// string it is handed — it has no notion of what a reference *means*.
+// Domain-specific decomposition (e.g. a scripture verse range into one
+// row per verse) is layered in an overlay migration that overrides
+// refresh_doc_refs / doc_citations_resolved.
 // ---------------------------------------------------------------------------
 extension_sql!(
     r#"
-    -- Cache table. Key is the canonical single-verse reference string
-    -- in the form gospel-engine accepts: "Mosiah 18:8", "D&C 88:67",
-    -- "Abraham 3:22". Verse ranges fan out to one row per verse.
+    -- Cache table. Key is the reference string passed to the configured
+    -- resolver endpoint — whatever the operator's service accepts (a doc
+    -- URI, a wiki slug, a scripture verse, a SKU). content is the parsed
+    -- JSON response; error records a negative/soft-failed lookup.
     CREATE TABLE stewards.resolved_refs (
         ref          text PRIMARY KEY,
         content      jsonb,
@@ -1675,174 +1663,11 @@ extension_sql!(
         ON stewards.resolved_refs (ref) WHERE error IS NOT NULL;
 
     -- ============================================================
-    -- normalize_book(book) — map LDS-standard abbreviations to the
-    -- full names gospel-engine v2 stores in scriptures.reference.
-    --
-    -- Two normalizations:
-    --   1. Drop trailing dots: "Rom." -> "Rom" then look up.
-    --   2. Map BoM/NT/OT short forms to full names ("Rom" -> "Romans",
-    --      "3 Ne" -> "3 Nephi"). Also fixes "Psalm" -> "Psalms"
-    --      (common author error since the LDS scripture is plural).
-    --
-    -- Returns the input unchanged if no mapping applies, so genuinely
-    -- unknown books (or already-normalized ones) pass through.
-    -- ============================================================
-    CREATE FUNCTION stewards.normalize_book(p_book text)
-    RETURNS text
-    LANGUAGE sql IMMUTABLE AS $func$
-        SELECT CASE rtrim(p_book, '.')
-            -- OT
-            WHEN 'Gen'    THEN 'Genesis'
-            WHEN 'Ex'     THEN 'Exodus'
-            WHEN 'Lev'    THEN 'Leviticus'
-            WHEN 'Num'    THEN 'Numbers'
-            WHEN 'Deut'   THEN 'Deuteronomy'
-            WHEN 'Josh'   THEN 'Joshua'
-            WHEN 'Judg'   THEN 'Judges'
-            WHEN 'Sam'    THEN 'Samuel'
-            WHEN '1 Sam'  THEN '1 Samuel'
-            WHEN '2 Sam'  THEN '2 Samuel'
-            WHEN '1 Kgs'  THEN '1 Kings'
-            WHEN '2 Kgs'  THEN '2 Kings'
-            WHEN '1 Chr'  THEN '1 Chronicles'
-            WHEN '2 Chr'  THEN '2 Chronicles'
-            WHEN 'Neh'    THEN 'Nehemiah'
-            WHEN 'Esth'   THEN 'Esther'
-            WHEN 'Ps'     THEN 'Psalms'
-            WHEN 'Psalm'  THEN 'Psalms'   -- common singular/plural slip
-            WHEN 'Prov'   THEN 'Proverbs'
-            WHEN 'Eccl'   THEN 'Ecclesiastes'
-            WHEN 'Song'   THEN 'Song of Solomon'
-            WHEN 'Isa'    THEN 'Isaiah'
-            WHEN 'Jer'    THEN 'Jeremiah'
-            WHEN 'Lam'    THEN 'Lamentations'
-            WHEN 'Ezek'   THEN 'Ezekiel'
-            WHEN 'Dan'    THEN 'Daniel'
-            WHEN 'Hos'    THEN 'Hosea'
-            WHEN 'Obad'   THEN 'Obadiah'
-            WHEN 'Mic'    THEN 'Micah'
-            WHEN 'Nah'    THEN 'Nahum'
-            WHEN 'Hab'    THEN 'Habakkuk'
-            WHEN 'Zeph'   THEN 'Zephaniah'
-            WHEN 'Hag'    THEN 'Haggai'
-            WHEN 'Zech'   THEN 'Zechariah'
-            WHEN 'Mal'    THEN 'Malachi'
-            -- NT
-            WHEN 'Matt'   THEN 'Matthew'
-            WHEN 'Rom'    THEN 'Romans'
-            WHEN '1 Cor'  THEN '1 Corinthians'
-            WHEN '2 Cor'  THEN '2 Corinthians'
-            WHEN 'Gal'    THEN 'Galatians'
-            WHEN 'Eph'    THEN 'Ephesians'
-            WHEN 'Philip' THEN 'Philippians'
-            WHEN 'Phil'   THEN 'Philippians'
-            WHEN 'Col'    THEN 'Colossians'
-            WHEN '1 Thes' THEN '1 Thessalonians'
-            WHEN '2 Thes' THEN '2 Thessalonians'
-            WHEN '1 Tim'  THEN '1 Timothy'
-            WHEN '2 Tim'  THEN '2 Timothy'
-            WHEN 'Tit'    THEN 'Titus'
-            WHEN 'Philem' THEN 'Philemon'
-            WHEN 'Heb'    THEN 'Hebrews'
-            WHEN 'Jas'    THEN 'James'
-            WHEN '1 Pet'  THEN '1 Peter'
-            WHEN '2 Pet'  THEN '2 Peter'
-            WHEN '1 Jn'   THEN '1 John'
-            WHEN '2 Jn'   THEN '2 John'
-            WHEN '3 Jn'   THEN '3 John'
-            WHEN 'Rev'    THEN 'Revelation'
-            -- BoM
-            WHEN '1 Ne'   THEN '1 Nephi'
-            WHEN '2 Ne'   THEN '2 Nephi'
-            WHEN '3 Ne'   THEN '3 Nephi'
-            WHEN '4 Ne'   THEN '4 Nephi'
-            WHEN 'WofM'   THEN 'Words of Mormon'
-            WHEN 'Mosiah' THEN 'Mosiah'
-            WHEN 'Hel'    THEN 'Helaman'
-            WHEN 'Morm'   THEN 'Mormon'
-            WHEN 'Moro'   THEN 'Moroni'
-            -- D&C / PGP — already full forms
-            ELSE rtrim(p_book, '.')
-        END;
-    $func$;
-    --
-    -- Examples handled:
-    --   "Mosiah 18:8"        -> {"Mosiah 18:8"}
-    --   "Mosiah 18:8-9"      -> {"Mosiah 18:8", "Mosiah 18:9"}
-    --   "Mosiah 18:8\u20139" -> {"Mosiah 18:8", "Mosiah 18:9"}  (en-dash)
-    --   "D&C 88:67-68"       -> {"D&C 88:67", "D&C 88:68"}
-    --   "Mosiah 18:8, 11"    -> {"Mosiah 18:8", "Mosiah 18:11"}
-    --   "Mosiah 18"          -> {} (chapter-only; needs path endpoint)
-    --   "Maxwell 1991"       -> {} (not a scripture reference)
-    --
-    -- Returns empty when the text doesn't match the
-    -- "<book> <chap>:<verses>" shape. Callers use this to skip
-    -- talks and chapter-only links, both of which need different
-    -- resolution paths (deferred to 2.2.x).
-    -- ============================================================
-    CREATE FUNCTION stewards.parse_reference(p_text text)
-    RETURNS SETOF text
-    LANGUAGE plpgsql IMMUTABLE AS $func$
-    DECLARE
-        v_norm   text;
-        v_match  text[];
-        v_book   text;
-        v_chap   text;
-        v_verses text;
-        v_part   text;
-        v_lo     int;
-        v_hi     int;
-        v_v      int;
-    BEGIN
-        -- Normalize en/em dashes to hyphen; collapse whitespace.
-        v_norm := regexp_replace(p_text, '[\u2013\u2014]', '-', 'g');
-        v_norm := regexp_replace(v_norm, '\s+', ' ', 'g');
-        v_norm := trim(v_norm);
-
-        -- Match "<book> <chap>:<verselist>"
-        --   group 1 = book ("1 Nephi", "Mosiah", "D&C", "JS-H")
-        --   group 2 = chapter
-        --   group 3 = verse part
-        -- Book is: optional leading numeric prefix ("1 ", "2 ", "3 ",
-        -- "4 ") then a Letter, then any of letters / spaces / & / .
-        -- / hyphens. Trailing space + chapter:verses is required.
-        v_match := regexp_match(v_norm,
-            '^((?:[1-4] )?[A-Za-z][A-Za-z &\.\-]*?) (\d+):([\d, \-]+)$');
-        IF v_match IS NULL THEN
-            RETURN;
-        END IF;
-        v_book   := stewards.normalize_book(trim(v_match[1]));
-        v_chap   := v_match[2];
-        v_verses := v_match[3];
-
-        -- Iterate comma-separated parts; each is either "N" or "A-B".
-        FOR v_part IN
-            SELECT trim(p) FROM unnest(string_to_array(v_verses, ',')) AS p
-        LOOP
-            IF v_part ~ '^\d+-\d+$' THEN
-                v_lo := split_part(v_part, '-', 1)::int;
-                v_hi := split_part(v_part, '-', 2)::int;
-                IF v_hi < v_lo OR v_hi - v_lo > 100 THEN
-                    -- Defensive cap: a 100-verse range is pathological.
-                    CONTINUE;
-                END IF;
-                FOR v_v IN v_lo..v_hi LOOP
-                    RETURN NEXT format('%s %s:%s', v_book, v_chap, v_v);
-                END LOOP;
-            ELSIF v_part ~ '^\d+$' THEN
-                RETURN NEXT format('%s %s:%s', v_book, v_chap, v_part);
-            END IF;
-        END LOOP;
-    END;
-    $func$;
-
-    -- ============================================================
     -- enqueue_resolve(ref) — idempotent enqueue.
     --
     -- Skips if ref already has ANY cached row (success OR error).
-    -- Errors are sticky: a 404 from gospel-engine is almost always
-    -- a corpus gap (e.g. NT epistles at the time of writing), and
-    -- re-fetching every time a study is refreshed wastes work.
+    -- Errors are sticky: a 404 is usually a genuine gap in the
+    -- configured source, and re-fetching every refresh wastes work.
     -- Callers who want to force a retry should DELETE the row first
     -- (or call stewards.invalidate_ref(ref) once that lands).
     --
@@ -1874,7 +1699,7 @@ extension_sql!(
         INSERT INTO stewards.work_queue (kind, provider, payload)
         VALUES (
             'resolve_ref',
-            'gospel_engine',
+            'resolver',
             jsonb_build_object('ref', p_ref)
         )
         RETURNING id INTO v_id;
@@ -1907,9 +1732,11 @@ extension_sql!(
     $func$;
 
     -- ============================================================
-    -- refresh_doc_refs(slug) — for every CITES edge under the
-    -- doc, parse anchor_text into single-verse refs and enqueue
-    -- the unresolved ones. Returns count of newly enqueued items.
+    -- refresh_doc_refs(slug) — enqueue a resolve for every distinct
+    -- URI the doc cites that isn't cached yet. Returns count of newly
+    -- enqueued items. Generic: the cited URI itself is the reference
+    -- string handed to the resolver. An overlay can override this to
+    -- decompose anchor_text into finer references (e.g. verse ranges).
     --
     -- Idempotent — calling twice without intervening work just
     -- returns 0 the second time.
@@ -1920,34 +1747,29 @@ extension_sql!(
     DECLARE
         v_enqueued int := 0;
         v_link     record;
-        v_ref      text;
         v_id       bigint;
     BEGIN
         FOR v_link IN
-            SELECT cited_uri, anchor_text
+            SELECT DISTINCT cited_uri
               FROM stewards.doc_citations(p_slug)
         LOOP
-            FOR v_ref IN
-                SELECT * FROM stewards.parse_reference(v_link.anchor_text)
-            LOOP
-                v_id := stewards.enqueue_resolve(v_ref);
-                IF v_id IS NOT NULL THEN
-                    v_enqueued := v_enqueued + 1;
-                END IF;
-            END LOOP;
+            v_id := stewards.enqueue_resolve(v_link.cited_uri);
+            IF v_id IS NOT NULL THEN
+                v_enqueued := v_enqueued + 1;
+            END IF;
         END LOOP;
         RETURN v_enqueued;
     END;
     $func$;
 
     -- ============================================================
-    -- doc_citations_resolved(slug) — citations joined with
-    -- resolved verse text. One row per CITES edge (chapter-level),
-    -- with an aggregated array of resolved verse contents.
+    -- doc_citations_resolved(slug) — each citation joined with the
+    -- resolver's cached content for that cited URI. One row per CITES
+    -- edge; `resolved` is the resolved_refs row ({ref, content, error})
+    -- or an empty object when the URI hasn't been resolved yet.
     --
-    -- For talks and chapter-only refs (which parse_reference can't
-    -- decompose), resolved_verses is an empty array — UI should
-    -- show "open the source file" rather than verse text.
+    -- Generic: the cited URI is the resolver key. An overlay can
+    -- override this to aggregate finer references (e.g. verses).
     -- ============================================================
     CREATE FUNCTION stewards.doc_citations_resolved(p_slug text)
     RETURNS TABLE (
@@ -1955,45 +1777,22 @@ extension_sql!(
         cited_kind       text,
         anchor_text      text,
         citation_count   int,
-        resolved_verses  jsonb
+        resolved         jsonb
     )
-    LANGUAGE plpgsql STABLE AS $func$
-    BEGIN
-        RETURN QUERY
-        WITH cites AS (
-            SELECT * FROM stewards.doc_citations(p_slug)
-        ),
-        verses AS (
-            SELECT c.cited_uri,
-                   c.anchor_text,
-                   pr.ref,
-                   rr.content,
-                   rr.error
-              FROM cites c
-              CROSS JOIN LATERAL stewards.parse_reference(c.anchor_text) AS pr(ref)
-              LEFT JOIN stewards.resolved_refs rr ON rr.ref = pr.ref
-        )
-        SELECT
-            c.cited_uri,
-            c.cited_kind,
-            c.anchor_text,
-            c.citation_count,
-            coalesce(
-                (SELECT jsonb_agg(
-                    jsonb_build_object(
-                        'ref',     v.ref,
-                        'content', v.content,
-                        'error',   v.error
-                    ) ORDER BY v.ref
-                  )
-                  FROM verses v
-                 WHERE v.cited_uri = c.cited_uri
-                   AND v.anchor_text = c.anchor_text),
-                '[]'::jsonb
-            ) AS resolved_verses
-          FROM cites c
+    LANGUAGE sql STABLE AS $func$
+        SELECT c.cited_uri,
+               c.cited_kind,
+               c.anchor_text,
+               c.citation_count,
+               CASE WHEN rr.ref IS NULL THEN '{}'::jsonb
+                    ELSE jsonb_build_object(
+                             'ref',     rr.ref,
+                             'content', rr.content,
+                             'error',   rr.error)
+               END AS resolved
+          FROM stewards.doc_citations(p_slug) c
+          LEFT JOIN stewards.resolved_refs rr ON rr.ref = c.cited_uri
          ORDER BY c.citation_count DESC, c.cited_uri ASC;
-    END;
     $func$;
     "#,
     name = "create_resolver",

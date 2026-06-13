@@ -13,7 +13,7 @@
 //! Extracted from lib.rs as Phase 3c.3.6 v4 (2026-05-08).
 
 use crate::providers::{
-    GospelEngineConfig, ProviderRegistry, GOSPEL_ENGINE_CONFIG, PROVIDER_REGISTRY,
+    ProviderRegistry, ResolverConfig, PROVIDER_REGISTRY, RESOLVER_CONFIG,
 };
 use crate::tools::{resolve_ref, tool_dispatch};
 use crate::types::WorkOutcome;
@@ -55,23 +55,25 @@ pub extern "C-unwind" fn _PG_init() {
     }
     let _ = PROVIDER_REGISTRY.set(registry);
 
-    // Phase 2.2 — read gospel-engine config from env. Trim trailing
-    // slashes from URL so {url}/api/get?... composes cleanly.
-    let ge_cfg = GospelEngineConfig {
-        url: std::env::var("GOSPEL_ENGINE_URL")
+    // External-resource resolver config from env. STEWARDS_RESOLVER_URL is
+    // a URL template (a "{ref}" placeholder is substituted with the
+    // url-encoded reference; if absent, the encoded ref is appended).
+    // STEWARDS_RESOLVER_TOKEN, if set, is sent as a bearer token. Taken
+    // literally — the operator owns the full template, so no slash munging.
+    let resolver_cfg = ResolverConfig {
+        url: std::env::var("STEWARDS_RESOLVER_URL")
             .ok()
-            .map(|s| s.trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty()),
-        token: std::env::var("GOSPEL_ENGINE_TOKEN")
+        token: std::env::var("STEWARDS_RESOLVER_TOKEN")
             .ok()
             .filter(|s| !s.is_empty()),
     };
     pgrx::log!(
-        "stewards: gospel-engine url={} token={}",
-        ge_cfg.url.as_deref().unwrap_or("<unset>"),
-        if ge_cfg.token.is_some() { "yes" } else { "no" }
+        "stewards: resolver url={} token={}",
+        resolver_cfg.url.as_deref().unwrap_or("<unset>"),
+        if resolver_cfg.token.is_some() { "yes" } else { "no" }
     );
-    let _ = GOSPEL_ENGINE_CONFIG.set(ge_cfg);
+    let _ = RESOLVER_CONFIG.set(resolver_cfg);
 
     // Phase 3e.2.a — register N dispatcher workers. Each worker runs
     // the same tick loop but claims rows independently via FOR UPDATE
