@@ -242,6 +242,12 @@ extension_sql_file!(
     requires = ["create_personas"],
 );
 
+extension_sql_file!(
+    "../19-models.sql",
+    name = "create_models",
+    requires = ["create_scheduler"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
