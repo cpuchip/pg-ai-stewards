@@ -88,8 +88,26 @@ instrument).
 | 19 | `19-models.sql` | m1, m2, m4, m5, an1, zen1, j8a? (fallback chain → here if cleaner) |
 | — | `tests/` | verify-* + test-gate-e2e re-authored per subsystem (lesson #2) |
 
-P2 wave (NOT in this chain yet): cc*, cv*, r10, r12 → `20-coder.sql`
-after the hardening review.
+P2 wave: cc*, cv*, r10, r12 → `20-coder.sql`.
+- **B6/coder SQL SURFACE SHIPPED 2026-06-13** (OSS `<pending-coder>`): `20-coder.sql`
+  consolidates the coder wave's SQL — a generic clean-room `dev` agent (the 17K
+  personal dev/debug prompts stay overlay), the `coder` MCP server (inert: points
+  at /usr/local/bin/coder-mcp, not yet built), code-write / code-pr (the 7-stage
+  final clone→plan→plan_review→implement→verify→review→pr, taken from the live
+  final per l13) / code-deploy (prepare = always-escalate Hinge) pipelines,
+  stage_models + maturity, research_codebase (r10 clean + r12 active), the scoped
+  dev grants + the read-only research-codebase deny-list (study_*→doc_*). Two
+  GRAFTS onto core finals (not pastes): work_item_advance (08 body + cv6 review +
+  cv11 plan_review loop-backs, maturity hook preserved) and work_item_dispatch_stage
+  (19 r3 body + cv7/cv10 review model-immunity). Virgin smoke FULLY GREEN incl. the
+  grafts e2e (review REVISE→implement / PASSES→pr; deploy prepare→awaiting_review
+  Hinge; dispatch critic uses input.review_model not the override). lib.rs:
+  create_coder requires create_models. **★ INERT until the Go binary** — no working
+  coder ships from the SQL. **REMAINING (the Hinge ②): the coder-mcp Go server
+  extraction (cmd/coder-mcp → OSS module + Dockerfile cross-compile to
+  /usr/local/bin/coder-mcp) + the HARDENING REVIEW** (sandbox isolation, bridge-side
+  token, repo allow-list, resource caps) — a focused fresh pass, the public-ship
+  gate. cv4 minimax-m3 (a model seed) → overlay with the other model seeds.
 
 ## Verification loop (per batch)
 
