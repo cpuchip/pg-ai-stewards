@@ -357,7 +357,7 @@ es1's cancel-cascade).
     mirroring r17's already-extracted codewright/librarian room_say grants. Core
     grants room_say + room_react to `persona` only.
   - **persona deny study_* → doc_*** (the canonical rename; rename-map row).
-- **B5/18 SHIPPED 2026-06-13** (OSS `<pending-18>`): `18-scheduler.sql` —
+- **B5/18 SHIPPED 2026-06-13** (OSS `9d9a0f4`): `18-scheduler.sql` —
   cron-style scheduled pipeline dispatch. pe6 (scheduled_pipelines table + the
   plpgsql cron engine: cron_field_values + cron_next_after + the compute-next-due
   trigger) + pe7 (scheduled_pipelines_fire dispatcher + watchman_scheduler_fire
@@ -371,10 +371,40 @@ es1's cancel-cascade).
   output path with stale AGE/study refs); core ships the machinery, not a specific
   schedule (the B2 operator-seeds rule). watchman_scheduler_fire is a within-chain
   re-author (03 → 18).
-- **B5/19 NEXT:** 19-models (m1/m2/m4/m5/an1/zen1 + the work_item_dispatch_stage
-  dispatch-final deferred from 14 = j8a 4-layer + j11 cap, accreting m2
-  capability-gate + r3 max-tokens) +
-seed_harness genericize + bgworker `_kind` enum. **B6** = tests/ + CI
+- **B5/19 SHIPPED 2026-06-13** (OSS `<pending-19>`) — ★ **THE AUTHORED CHAIN IS
+  COMPLETE (00→19); the migration manifest now carries ZERO migration entries
+  (verify/test harness only).** `19-models.sql` — the model capability registry
+  + auto-probe + the work_item_dispatch_stage FINAL (deferred from 14). m1
+  (model_capability table, born complete with an1's api_format col; model_usable
+  / first_usable_model / model_catalog) · an1 (model_api_format + the work_queue
+  api_format stamp trigger) · m2 (pick_usable_model + model_substitutions.reason
+  + the reason-aware trigger_log_model_substitution FINAL over 15a's l29) · m4
+  (probe + verdict trigger) · m5 (probe scheduler on the watchman cadence) · r3's
+  dispatch FINAL = the accreted J.8.a 4-layer resolution + M.2 capability
+  substitution + J.11 spend-cap gate + R.3 max_tokens/tools_disabled. Virgin
+  smoke FULLY GREEN (pgcrypto absent; 9 fns + view + 3 triggers; unrowed defaults
+  usable+openai; pick_usable_model → catalog default; api_format stamp; **probe
+  round-trip** enqueue→done→verdict; **dispatch capability substitution e2e** —
+  unusable stage.model → kimi-k2.6 + logged reason; **dispatch max_tokens** 8000;
+  no operator seeds in core). 9 files retired; manifest 28→19 (verify/test only);
+  ext dir 40 .sql; secret-scan clean. **DEVIATIONS (act+report):**
+  - **work_item_dispatch_stage FINAL = r3's body** (chronological/manifest last
+    of j8a→j11→m2→r3; carries all 4 layers verbatim). j8a/j11/m2's earlier
+    dispatch redefinitions collapse into it; j8a's catalog_default_* helpers (14)
+    + j11's provider_spend_caps machinery (06) are already authored — only their
+    dispatch logic lands here.
+  - **ALL model seeds → OVERLAY** — m1's capability verdicts, an1's
+    anthropic-format rows, and ALL of zen1 (the opencode_zen Claude catalog + $18
+    cap) are operator/provider-specific; core ships the machinery (unrowed →
+    usable+openai; the M.4 auto-probe fills verdicts at runtime).
+  - **model_substitutions.reason** added by ALTER (the table is born in 15a) +
+    the trigger re-authored to the m2 reason-aware final (within-chain: 15a l29 → 19).
+  - **an1's api_format column folded into the m1 table CREATE** (born complete;
+    an1's ALTER + CHECK-DO-block dropped).
+- **B5 tail (carry-forward, NOT SQL-chain):** seed_harness genericize + bgworker
+  `_kind` enum are schema.rs/Rust-side cleanups (the bgworker was consolidated at
+  the daemon leg); assess them against the module at B6, not as authored-SQL.
+  **B6** = tests/ + CI
 workflow + rename-map.tsv finalization + overlay copies updated to new
 names (overlay note: init/01-seed-workstreams + any overlay migration
 touching study_* tools or AGE must re-author against doc_* + relational

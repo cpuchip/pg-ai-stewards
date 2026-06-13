@@ -1,7 +1,9 @@
 # OSS core migration manifest — fresh-DB replay order (NOT lexical).
 # Derived 2026-06-12 from the upstream workspace's repaired manifest by
-# the P1 classification (core + split-core entries; the generated
-# extension bundle is NOT a manifest entry — CREATE EXTENSION applies it).
+# the P1 classification. As of B5 (2026-06-13) the ENTIRE migration chain
+# is consolidated into the authored subsystem files 00-19 (applied by
+# CREATE EXTENSION, NOT this manifest). What remains below is only the
+# verify-* / test-gate harness, to be re-authored under tests/ at B6.
 inverse-test.sql
 verify-loop.sql
 verify-1-6-1-reaper-check.sql
@@ -21,12 +23,3 @@ verify-4b.sql
 verify-4c.sql
 verify-5a.sql
 test-gate-e2e.sql
-j8a-dispatch-fallback-chain.sql
-j11-provider-spend-caps.sql
-m1-model-capability.sql
-m2-capability-dispatch-gate.sql
-m4-model-autoprobe.sql
-m5-autoprobe-schedule.sql
-r3-dispatch-max-tokens.sql
-an1-api-format.sql
-zen1-opencode-zen-provider.sql
