@@ -39,7 +39,7 @@ SELECT
 \echo '=== E. diagnose_failure: tool_error patterns ==='
 \echo '    Expected: tool_error for all'
 SELECT
-    stewards.diagnose_failure('tool not found: gospel_search', 0)        AS r1,
+    stewards.diagnose_failure('tool not found: web_lookup', 0)           AS r1,
     stewards.diagnose_failure('schema validation failed', 0)             AS r2,
     stewards.diagnose_failure('function arguments missing', 0)           AS r3;
 

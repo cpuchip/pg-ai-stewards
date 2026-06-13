@@ -26,18 +26,18 @@ SELECT stewards.enqueue('echo', 'echo', '{"hello": "world"}'::jsonb) AS enqueued
 -- trigger fired (work_queue should have a kind='embed' row), and
 -- confirm full-text search finds it.
 SELECT stewards.brain_upsert(
-    'study',
-    'Charity is the pure love of Christ',
-    'Moroni 7:47 — pure love of Christ. The fruit of the tree of life. Connected to the great commandment.',
-    '{"references": "Moroni 7:47; 1 Ne 11:21-25; Matt 22:37-40", "insight": "Charity is fruit, not effort."}'::jsonb,
-    ARRAY['charity', 'love', 'moroni']
+    'ideas',
+    'The water cycle is a closed loop',
+    'Water evaporates from surfaces, condenses into clouds, and returns as precipitation — a continuous loop driven by solar energy.',
+    '{"references": "general science", "insight": "It is a closed loop, not a one-way flow."}'::jsonb,
+    ARRAY['water', 'cycle', 'evaporation']
 ) AS new_brain_entry_id;
 
 SELECT 'embed work queued: ' || count(*)::text AS ok
     FROM stewards.work_queue WHERE kind = 'embed';
 
-SELECT 'fts hits for charity: ' || count(*)::text AS ok
-    FROM stewards.brain_search_text('charity');
+SELECT 'fts hits for water: ' || count(*)::text AS ok
+    FROM stewards.brain_search_text('water');
 
 -- Graph smoke test: the relational graph ships inside the extension.
 SELECT 'graph ready: ' || count(*)::text || ' tables' AS ok

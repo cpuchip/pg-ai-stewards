@@ -25,7 +25,7 @@ RETURNING id AS fake_chat_id \gset
 
 INSERT INTO stewards.messages (session_id, role, content, model)
 VALUES ('mode-4-reaper', 'user',
-        'Use brain_search_text to find anything about Moroni 7.', 'kimi-k2.6');
+        'Use brain_search_text to find anything about the water cycle.', 'kimi-k2.6');
 
 INSERT INTO stewards.messages (
     session_id, role, content, model, tool_calls,
@@ -38,7 +38,7 @@ VALUES (
         'type', 'function',
         'function', jsonb_build_object(
             'name', 'brain_search_text',
-            'arguments', '{"query":"Moroni 7","limit":3}'))),
+            'arguments', '{"query":"the water cycle","limit":3}'))),
     'tool_calls',
     :fake_chat_id,
     -- Moonshot requires reasoning_content on assistant messages
@@ -46,10 +46,10 @@ VALUES (
     -- this comes from the real provider response; in this test
     -- harness we synthesize a placeholder so the continuation
     -- chat can serialize cleanly.
-    'I should call brain_search_text to find entries about Moroni 7.',
+    'I should call brain_search_text to find entries about the water cycle.',
     jsonb_build_array(jsonb_build_object(
         'type', 'reasoning.text',
-        'text', 'I should call brain_search_text to find entries about Moroni 7.')));
+        'text', 'I should call brain_search_text to find entries about the water cycle.')));
 
 INSERT INTO stewards.work_queue (kind, provider, status, payload, claimed_at)
 VALUES (

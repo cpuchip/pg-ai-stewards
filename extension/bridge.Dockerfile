@@ -20,8 +20,9 @@
 #   - fs-read-mcp   (path-scoped filesystem read, spawned on demand)
 #   - stewards-cli  (migrations / ad-hoc CLI inside the container)
 # Generic utilities (fetch-md, git) arrive in M2; coder-mcp in M1 behind
-# the hardening-review Hinge. Domain MCP servers (gospel, webster, …) are
-# "bring your own" — register them in an overlay and add their binary here.
+# the hardening-review Hinge. Domain MCP servers (your own search / docs /
+# data tools) are "bring your own" — register one in an overlay and add its
+# binary here.
 # =====================================================================
 
 # ---------------------------------------------------------------------
