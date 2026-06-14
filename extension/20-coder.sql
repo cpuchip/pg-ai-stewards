@@ -249,6 +249,13 @@ BEGIN
         IF (NEW.input->>'review_feedback') IS NULL THEN
             NEW.input := COALESCE(NEW.input, '{}'::jsonb) || jsonb_build_object('review_feedback', '');
         END IF;
+        -- acceptance_criteria is referenced by plan_review/review; default it
+        -- to '' so a code-pr created without explicit criteria doesn't hit a
+        -- NULL template path (the criteria is optional — the binding_question
+        -- is the primary spec; the critic judges against it when empty).
+        IF (NEW.input->>'acceptance_criteria') IS NULL THEN
+            NEW.input := COALESCE(NEW.input, '{}'::jsonb) || jsonb_build_object('acceptance_criteria', '');
+        END IF;
     END IF;
 
     RETURN NEW;
