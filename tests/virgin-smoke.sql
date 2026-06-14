@@ -188,4 +188,24 @@ BEGIN
     RAISE NOTICE 'OK 5: spine runs e2e (intent→work_item→dispatch); capability substitution + logging work';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→19) is sound =='
+-- ── 6. compact_context (M5) ships in core, as a tools-off judge ──────────
+DO $$
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='compact_context_surface')
+       AND EXISTS (SELECT 1 FROM pg_proc WHERE proname='compact_context_apply'),
+        'compact_context surface + apply functions must ship in core';
+    -- the compactor is a TOOLS-OFF judge (it returns a verdict; the substrate acts)
+    ASSERT EXISTS (SELECT 1 FROM stewards.agents
+                    WHERE family='compactor' AND context_tools_enabled = false),
+        'the compactor agent must ship tools-off (judges, not executes)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.pipelines WHERE family='compact-context'),
+        'the compact-context pipeline must ship in core';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='compact_context' AND active),
+        'the compact_context tool_def must ship active';
+    -- the ≥threshold nudge knob is seeded
+    ASSERT EXISTS (SELECT 1 FROM stewards.config WHERE key='compact_context_suggest_tokens'),
+        'the compact_context_suggest_tokens nudge threshold must be seeded';
+    RAISE NOTICE 'OK 6: compact_context ships (tools-off compactor + surface/apply + tool_def + nudge config)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→21) is sound =='
