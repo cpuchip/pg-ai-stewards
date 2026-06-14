@@ -33,6 +33,18 @@ The short version:
   verification). Start there; everything else in the substrate is built
   out of turns.
 
+## Documentation
+
+| Guide | What it gets you |
+|-------|------------------|
+| [Anatomy of a Turn](docs/anatomy-of-a-turn.md) | The turn pipeline end to end — read this first. |
+| [Wiring up models](docs/wiring-up-models.md) | From fresh install to "agents can call a model" (free → paid → local). |
+| [Wiring up MCP servers](docs/wiring-up-mcp-servers.md) | Give agents tools — stdio + remote-HTTP MCP, deny-by-default grants, worked examples (exa, yt, [gospel-engine](https://github.com/cpuchip/gospel-engine), [dnd-tools](https://github.com/cpuchip/dnd-tools)). |
+| [Personas + ai-chattermax](docs/personas-and-chattermax.md) | Put a durable-mind persona in a live chat room; the D&D holodeck as a tool-using example. |
+
+Copy-paste starters (model catalog, content digesters) live in
+[`examples/`](examples/).
+
 ## License
 
 [Apache-2.0](LICENSE). Use it, deploy it, build on it — someone will live
