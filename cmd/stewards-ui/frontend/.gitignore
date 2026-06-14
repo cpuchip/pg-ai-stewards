@@ -1,0 +1,8 @@
+# npm install output
+node_modules/
+
+# Vite build output. The Docker build produces the real dist in the node
+# stage; a committed stub index.html keeps `go build` (the go:embed) working
+# outside Docker. Ignore everything else under dist/.
+dist/*
+!dist/index.html
