@@ -106,6 +106,7 @@ func main() {
 	registerSpawnSubagentTools(srv, pool)
 	registerConsultSubagentTools(srv, pool)
 	registerHeavyweightTools(srv, pool)
+	registerCompactContextTool(srv, pool)
 	registerBrainstormTools(srv, pool)
 	registerModelTools(srv, pool)
 	registerRedlineTools(srv, pool)

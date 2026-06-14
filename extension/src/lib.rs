@@ -254,6 +254,12 @@ extension_sql_file!(
     requires = ["create_models"],
 );
 
+extension_sql_file!(
+    "../21-compact-context.sql",
+    name = "create_compact_context",
+    requires = ["create_coder"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
