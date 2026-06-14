@@ -1,7 +1,10 @@
 # pg-ai-stewards — local stack.
 #
-#   docker compose up -d                 # the substrate: Postgres+extension + MCP bridge
+#   docker compose up -d                 # the substrate: Postgres+extension + MCP bridge + web UI
 #   docker compose --profile personas up # also start the persona-host sidecar
+#
+# The web UI comes up at http://127.0.0.1:8081/ (local-only) — substrate
+# observability plus a few write islands (create work / ratify / trust).
 #
 # Boots on a virgin machine: the pg service installs the extension on first
 # boot (extension/init/), the bridge connects and brokers tool calls. Copy
@@ -79,6 +82,26 @@ services:
       # the safe default, not a misconfiguration. Change :ro to :rw only if you
       # want the substrate to write files into your tree on its own.
       - ${WORKSPACE_DIR:-./workspace}:/workspace:ro
+    restart: unless-stopped
+
+  ui:
+    build:
+      context: .
+      dockerfile: extension/ui.Dockerfile
+    image: stewards-oss-ui:latest
+    container_name: stewards-oss-ui
+    depends_on:
+      pg:
+        condition: service_healthy
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      STEWARDS_DSN: "postgres://${POSTGRES_USER:-stewards}:${POSTGRES_PASSWORD:-stewards}@pg:5432/${POSTGRES_DB:-stewards}?sslmode=disable"
+    ports:
+      # Local-only: bind 127.0.0.1 so the substrate UI is never exposed on
+      # the network. Host 8081 offsets from a workspace dev UI on 8080.
+      - "127.0.0.1:${UI_PORT:-8081}:8080"
     restart: unless-stopped
 
   persona-host:
