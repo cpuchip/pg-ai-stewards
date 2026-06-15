@@ -99,6 +99,15 @@ BEGIN
     IF v_id = '' THEN
         RETURN '{"ok": false, "note": "video_id is required"}'::jsonb;
     END IF;
+    -- Deterministic floor: a real YouTube id is exactly 11 chars of
+    -- [A-Za-z0-9_-]. Reject anything else so a failed yt_playlist listing
+    -- (or a run that should have emitted "NOTHING NEW") can't publish a
+    -- placeholder digest like "(unknown)". The model can misbehave; the
+    -- write boundary still refuses garbage.
+    IF v_id !~ '^[A-Za-z0-9_-]{11}$' THEN
+        RETURN jsonb_build_object('ok', false,
+            'note', format('video_id %L is not a valid YouTube id — not publishing. A failed listing or "NOTHING NEW" should stop before publish.', v_id));
+    END IF;
     IF p_body IS NULL OR length(trim(p_body)) < 100 THEN
         RETURN '{"ok": false, "note": "digest body too short to publish"}'::jsonb;
     END IF;
