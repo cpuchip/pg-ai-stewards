@@ -269,4 +269,53 @@ BEGIN
     RAISE NOTICE 'OK 7: reflect-steward surface ships (kill switch + verbs + capacity-gated drain + scheduler gate)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→22) is sound =='
+-- ── 8. reflect-watchman (23) self-presiding guard ships + ACTS ───────────────
+DO $$
+DECLARE v_breach text;
+BEGIN
+    -- the threshold configs
+    ASSERT (SELECT count(*) FROM stewards.config WHERE key IN
+            ('reflect_guard_enabled','reflect_guard_max_in_flight','reflect_guard_max_proposals_pending',
+             'reflect_guard_max_consecutive_failures','reflect_guard_spend_window_hours','reflect_guard_spend_cap_micro')) = 6,
+        'all reflect-guard threshold configs must be seeded';
+    -- the guard surface: signals + tick + trips verb + the accounting ledger
+    ASSERT (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+             WHERE n.nspname='stewards'
+               AND p.proname IN ('reflect_guard_signals','reflect_watchman_tick','reflect_guard_trips')) = 3,
+        'the guard functions (signals/tick/trips) must ship';
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='reflect_guard_log'),
+        'the reflect_guard_log accounting ledger must ship';
+    -- reflect_status surfaces the guard; the heartbeat runs the guard
+    ASSERT (stewards.reflect_status() ? 'guard'),
+        'reflect_status must surface the guard signals';
+    ASSERT (SELECT prosrc LIKE '%reflect_watchman_tick%' FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+             WHERE n.nspname='stewards' AND p.proname='watchman_scheduler_fire'),
+        'watchman_scheduler_fire must call reflect_watchman_tick each tick';
+    -- nominal on a virgin system: no breach, no action
+    ASSERT (stewards.reflect_guard_signals()->>'would_trip') = 'false',
+        'a virgin system must not trip the guard';
+    ASSERT stewards.reflect_watchman_tick() IS NULL,
+        'the tick must be a no-op (NULL) when nominal';
+
+    -- INVERSE: force a breach (cap in_flight at 0 → value 0 >= 0 trips), prove it ACTS.
+    PERFORM stewards.config_set('reflect_guard_max_in_flight', '0'::jsonb, NULL);
+    v_breach := stewards.reflect_watchman_tick();
+    ASSERT v_breach IS NOT NULL, 'a forced breach must return a non-null breach';
+    ASSERT stewards.config_get_text('autonomy_paused','x') = 'true',
+        'a breach must auto-pause autonomy (the emergency force)';
+    ASSERT (SELECT count(*) FROM stewards.reflect_guard_log) = 1,
+        'a breach must be accounted for — exactly one reflect_guard_log row';
+    -- idempotent: ticking again while paused is a no-op (no log spam, no re-trip)
+    ASSERT stewards.reflect_watchman_tick() IS NULL,
+        'the tick must be a no-op once autonomy is already paused';
+    ASSERT (SELECT count(*) FROM stewards.reflect_guard_log) = 1,
+        'an already-paused system must not re-log trips';
+
+    -- restore virgin state (resume + reset threshold + clear the test trip)
+    PERFORM stewards.reflect_resume();
+    PERFORM stewards.config_set('reflect_guard_max_in_flight', '8'::jsonb, NULL);
+    DELETE FROM stewards.reflect_guard_log;
+    RAISE NOTICE 'OK 8: self-presiding watchman guard ships + acts (auto-pause + accounting + idempotent; inverse-proven)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→23) is sound =='

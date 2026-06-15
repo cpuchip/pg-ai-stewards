@@ -3,7 +3,7 @@
 ## `virgin-smoke.sql` — the authoritative virgin-boot test
 
 Installs the extension on a fresh Postgres and asserts the clean-room
-invariants of the authored chain (`extension/00-config.sql` → `19-models.sql`).
+invariants of the authored chain (`extension/00-config.sql` → `23-reflect-watchman.sql`).
 It uses plpgsql `ASSERT`, so any regression makes `psql` exit non-zero — the
 test fails loudly rather than printing a wrong value.
 
@@ -14,7 +14,7 @@ What it proves:
    relational).
 2. **The `doc_*` rename is complete** — zero `study_*` functions, tables, or
    `study_id` columns; `stewards.docs` exists.
-3. **Every authored subsystem (00→19) has a representative object**, and the
+3. **Every authored subsystem (00→23) has a representative object**, and the
    dispatch FINAL (`work_item_dispatch_stage`) carries all four accreted layers
    (resolution + capability substitution + spend-cap gate + per-call max_tokens).
 4. **No operator / personal seeds leaked into core** — the configured-at-runtime

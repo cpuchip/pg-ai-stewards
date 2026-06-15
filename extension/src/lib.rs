@@ -266,6 +266,16 @@ extension_sql_file!(
     requires = ["create_compact_context"],
 );
 
+// 23: the substrate's self-presiding guard — a deterministic watchman tick
+// wired into watchman_scheduler_fire (later-file-wins) that auto-pauses the
+// reflect-steward on a runaway signal and logs every trip. Re-authors
+// reflect_status + watchman_scheduler_fire, so it follows 22.
+extension_sql_file!(
+    "../23-reflect-watchman.sql",
+    name = "create_reflect_watchman",
+    requires = ["create_reflect_steward"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
