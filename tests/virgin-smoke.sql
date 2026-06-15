@@ -243,6 +243,12 @@ BEGIN
     ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='reflect_approvals')
        AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='reflect_intent_paused'),
         'reflect_approvals + reflect_intent_paused tables must ship';
+    -- the gathered-source dedup ledger + its tools (the "don't re-scrub" memory)
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='intent_source_ledger'),
+        'the per-intent gathered-source ledger must ship';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='intent_sources_recent' AND active)
+       AND EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='intent_source_record' AND active),
+        'the dedup tools (intent_sources_recent/record) must ship active';
     -- the scheduler gates on the kill switch (re-authored fire carries the check)
     ASSERT (SELECT prosrc LIKE '%autonomy_paused%' FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
              WHERE n.nspname='stewards' AND p.proname='scheduled_pipelines_fire'),

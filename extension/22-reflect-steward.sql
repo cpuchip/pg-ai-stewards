@@ -383,5 +383,100 @@ END;
 $func$;
 
 -- =====================================================================
+-- The intent knowledge pool's dedup/provenance layer — "don't re-scrub".
+--
+-- The knowledge itself lives in stewards.docs (FTS + vector, global-readable so
+-- gatherers can do meta-studies across intents). This ledger is the missing
+-- piece: a per-intent record of which external sources/queries have been
+-- gathered, when, and the one-line finding + the doc it landed in. The gatherer
+-- checks intent_sources_recent BEFORE crawling (skip what's fresh) and calls
+-- intent_source_record AFTER — so each cycle builds the pool UP instead of
+-- re-scrubbing the same sites. Time-aware: a source older than the freshness
+-- window is fair to re-gather (new reviews appear). This is the gatherer's half
+-- of the Zion pool; the persona reads the docs side.
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS stewards.intent_source_ledger (
+    intent_slug  text NOT NULL,
+    source_key   text NOT NULL,   -- normalized source/query id: a URL, "bbb-complaints", "query:work-corpus billing"
+    gathered_at  timestamptz NOT NULL DEFAULT now(),
+    finding      text,            -- one-line gist (so a skip still informs the plan)
+    doc_slug     text,            -- the doc the finding was published into
+    gather_count int NOT NULL DEFAULT 1,
+    PRIMARY KEY (intent_slug, source_key)
+);
+COMMENT ON TABLE stewards.intent_source_ledger IS
+'reflect-steward dedup/provenance: which external sources/queries an intent has gathered, when, the one-line finding, and the doc it landed in. Gatherer checks intent_sources_recent before crawling and intent_source_record after — builds the knowledge pool up instead of re-scrubbing.';
+
+-- helper: derive the caller's intent slug from the injected _session_id.
+CREATE OR REPLACE FUNCTION stewards.session_intent_slug(p_session_id text)
+RETURNS text LANGUAGE sql STABLE AS $$
+    SELECT i.slug FROM stewards.work_items w JOIN stewards.intents i ON i.id = w.intent_id
+     WHERE p_session_id = ANY(w.session_ids) ORDER BY w.id DESC LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION stewards.intent_sources_recent(p_intent_slug text, p_window_days int DEFAULT 10)
+RETURNS TABLE(source_key text, gathered_at timestamptz, finding text, doc_slug text)
+LANGUAGE sql STABLE AS $$
+    SELECT source_key, gathered_at, finding, doc_slug
+      FROM stewards.intent_source_ledger
+     WHERE intent_slug = p_intent_slug
+       AND gathered_at > now() - make_interval(days => greatest(p_window_days, 0))
+     ORDER BY gathered_at DESC;
+$$;
+
+-- tool: "what have we gathered recently for my intent?" (skip those — they're fresh)
+CREATE OR REPLACE FUNCTION stewards.intent_sources_recent_tool(p_args jsonb)
+RETURNS text LANGUAGE plpgsql AS $FN$
+DECLARE
+    v_intent text := COALESCE(stewards.session_intent_slug(p_args->>'_session_id'), p_args->>'intent');
+    v_window int  := COALESCE(NULLIF(p_args->>'window_days','')::int, 10);
+    v_rows   jsonb;
+BEGIN
+    IF v_intent IS NULL THEN
+        RETURN '{"error":"could not resolve the intent for this session; pass intent explicitly"}';
+    END IF;
+    SELECT jsonb_agg(jsonb_build_object('source', source_key, 'gathered_at', gathered_at,
+                                        'finding', finding, 'doc', doc_slug))
+      INTO v_rows FROM stewards.intent_sources_recent(v_intent, v_window);
+    RETURN jsonb_build_object(
+        'intent', v_intent, 'window_days', v_window,
+        'already_gathered_recently', COALESCE(v_rows, '[]'::jsonb),
+        'note', 'Skip sources/queries listed here — they are fresh. Their findings are already in the docs pool (doc_search). Gather only NEW sources, and call intent_source_record after each.'
+    )::text;
+END $FN$;
+
+-- tool: "I gathered this source; record it" (after publishing the finding)
+CREATE OR REPLACE FUNCTION stewards.intent_source_record_tool(p_args jsonb)
+RETURNS text LANGUAGE plpgsql AS $FN$
+DECLARE
+    v_intent text := COALESCE(stewards.session_intent_slug(p_args->>'_session_id'), p_args->>'intent');
+    v_source text := btrim(COALESCE(p_args->>'source', p_args->>'source_key', ''));
+BEGIN
+    IF v_intent IS NULL THEN RETURN '{"error":"could not resolve intent for this session"}'; END IF;
+    IF v_source = '' THEN RETURN '{"error":"source (a url/source name/query) is required"}'; END IF;
+    INSERT INTO stewards.intent_source_ledger (intent_slug, source_key, finding, doc_slug)
+    VALUES (v_intent, v_source, p_args->>'finding', p_args->>'doc_slug')
+    ON CONFLICT (intent_slug, source_key) DO UPDATE
+        SET gathered_at = now(),
+            finding     = COALESCE(EXCLUDED.finding, stewards.intent_source_ledger.finding),
+            doc_slug    = COALESCE(EXCLUDED.doc_slug, stewards.intent_source_ledger.doc_slug),
+            gather_count = stewards.intent_source_ledger.gather_count + 1;
+    RETURN jsonb_build_object('ok', true, 'intent', v_intent, 'source', v_source,
+                              'note', 'recorded — future cycles will skip this while it is fresh')::text;
+END $FN$;
+
+INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, active) VALUES
+( 'intent_sources_recent',
+  'Before you crawl or run a web query, call this to see which sources/queries this intent already gathered recently (within the freshness window). SKIP those — they are fresh and their findings are already in the docs pool (use doc_search to read them). Gather only NEW sources.',
+  '{"type":"object","properties":{"window_days":{"type":"integer","description":"freshness window; default 10"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"intent_sources_recent_tool"}'::jsonb, true ),
+( 'intent_source_record',
+  'After you gather a NEW source (and publish its finding), call this to record it so future cycles skip it while fresh. Pass source (the url/source name/query), a one-line finding, and the doc_slug you published it into.',
+  '{"type":"object","required":["source"],"properties":{"source":{"type":"string"},"finding":{"type":"string"},"doc_slug":{"type":"string"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"intent_source_record_tool"}'::jsonb, true )
+ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, args_schema=EXCLUDED.args_schema,
+    execute_target=EXCLUDED.execute_target, active=true;
+
+-- =====================================================================
 -- End of 22-reflect-steward.sql
 -- =====================================================================

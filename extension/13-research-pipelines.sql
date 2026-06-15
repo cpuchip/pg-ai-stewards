@@ -149,7 +149,10 @@ INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, sourc
   ('research', 'context_fold_tag',     'allow', 'manual'),
   ('research', 'context_mute_tag',     'allow', 'manual'),
   ('research', 'context_pin_tag',      'allow', 'manual'),
-  ('research', 'context_expand_tag',   'allow', 'manual')
+  ('research', 'context_expand_tag',   'allow', 'manual'),
+  -- the gathered-source dedup ledger (22): check before crawl, record after.
+  ('research', 'intent_sources_recent', 'allow', 'manual'),
+  ('research', 'intent_source_record',  'allow', 'manual')
 ON CONFLICT (agent_family, tool_pattern) DO NOTHING;
 
 -- =====================================================================
