@@ -509,6 +509,14 @@ BEGIN
         END IF;
     END IF;
 
+    -- Always expose today's date to stage templates ({{input.today}}). The
+    -- template resolver hard-fails on a missing field, and planning-family
+    -- templates reference input.today — inject it so manual + scheduled launches
+    -- never trip on it. (Surfaced by the reflect-steward P0 dry-run.)
+    IF NOT (p_input ? 'today') THEN
+        p_input := p_input || jsonb_build_object('today', to_char(current_date, 'YYYY-MM-DD'));
+    END IF;
+
     INSERT INTO stewards.work_items
         (pipeline_family, current_stage, slug, input, actor, token_budget, intent_id)
     VALUES
