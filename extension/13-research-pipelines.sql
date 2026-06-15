@@ -124,7 +124,32 @@ INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, sourc
   ('research', 'watchman_pass_show',   'allow', 'manual'),
   ('research', 'watchman_passes_list', 'allow', 'manual'),
   ('research', 'web_search_exa',       'allow', 'manual'),
-  ('research', 'fetch_url',            'allow', 'manual')
+  ('research', 'fetch_url',            'allow', 'manual'),
+  -- Sense the intent's knowledge pool: the substrate self-surface read tools.
+  ('research', 'doc_search',           'allow', 'manual'),
+  ('research', 'doc_get',              'allow', 'manual'),
+  ('research', 'doc_similar',          'allow', 'manual'),
+  -- Context self-management + durable memory. A reflect-steward cycle (and a
+  -- digest of a huge book/transcript) can build long context; give research the
+  -- tools to fold/mute/pin/compress its own window, commission a compactor, and
+  -- keep durable notes across cycles. The self-editable BASE-prompt tool
+  -- (propose_prompt_change) is deliberately NOT granted — that stays gated.
+  ('research', 'compact_context',      'allow', 'manual'),
+  ('research', 'remember',             'allow', 'manual'),
+  ('research', 'forget',               'allow', 'manual'),
+  ('research', 'expand_message',       'allow', 'manual'),
+  ('research', 'summarize_my_context', 'allow', 'manual'),
+  ('research', 'context_mute',         'allow', 'manual'),
+  ('research', 'context_compress',     'allow', 'manual'),
+  ('research', 'context_pin',          'allow', 'manual'),
+  ('research', 'context_unpin',        'allow', 'manual'),
+  ('research', 'context_expand',       'allow', 'manual'),
+  ('research', 'context_set_tag',      'allow', 'manual'),
+  ('research', 'context_clear_tag',    'allow', 'manual'),
+  ('research', 'context_fold_tag',     'allow', 'manual'),
+  ('research', 'context_mute_tag',     'allow', 'manual'),
+  ('research', 'context_pin_tag',      'allow', 'manual'),
+  ('research', 'context_expand_tag',   'allow', 'manual')
 ON CONFLICT (agent_family, tool_pattern) DO NOTHING;
 
 -- =====================================================================
@@ -563,7 +588,7 @@ $T$Binding question: {{input.binding_question}}
 
 ## YOUR TASK — review the plan + the proposed work
 
-You are the review_plan gate. Verify BOTH the plan document AND the JSON array of proposed work_items. Output a JSON verdict (schema below). The substrate uses this to decide: pass → verified maturity → trigger fires materialization + work_item proposals; revise → propose_work stage re-runs with your feedback.
+You are the review_plan gate. Verify BOTH the plan document AND the JSON array of proposed work_items, then emit a one-line `REVIEW:` verdict (format below). The substrate uses it to decide: passes → verified maturity → trigger fires materialization + work_item proposals; revised → the plan stays at `planned` for revision with your feedback.
 
 ## CHECKS — both must pass
 
@@ -586,28 +611,24 @@ You are the review_plan gate. Verify BOTH the plan document AND the JSON array o
 ## HARD CONSTRAINTS
 
 - **No external tools.** Pure verification.
-- **Output ONLY the JSON verdict.** No prose.
+- Your **first line** is the verdict the substrate gates on. It must be exactly
+  `REVIEW: passes` or `REVIEW: revised` — nothing before it. (The substrate's
+  review-verify gate only promotes the plan to `verified` maturity — which fires
+  the work_item proposals — when the output starts with that prefix.)
 
 ## OUTPUT FORMAT
 
-```json
-{
-  "verdict": "pass" | "revise",
-  "json_validation": {
-    "valid": true | false,
-    "issues": ["array of issue strings — empty if valid"]
-  },
-  "plan_quality": {
-    "assumptions_surfaced": true | false,
-    "risks_concrete": true | false,
-    "converged_on_one_direction": true | false,
-    "next_steps_map_to_proposed_work": true | false,
-    "work_items_appropriately_sized": true | false,
-    "issues": ["any concrete improvements needed"]
-  },
-  "feedback_for_revise": "If verdict=revise: one paragraph telling propose_work specifically what to fix. Empty if pass."
-}
-```$T$;
+(a) If BOTH checks pass — first line exactly:
+
+REVIEW: passes
+
+then a blank line, then a one-line confirmation (e.g. "5 work_items, all valid; plan converges, risks named, items appropriately sized").
+
+(b) If EITHER check fails — first line exactly:
+
+REVIEW: revised
+
+then a blank line, then a short, specific list of what propose_work (or synthesize) must fix. Do not output anything before the `REVIEW:` line.$T$;
 
 v_stages := jsonb_build_array(
     jsonb_build_object('name','context_gather','next','explore',
