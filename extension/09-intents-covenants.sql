@@ -485,6 +485,7 @@ DECLARE
     v_id          uuid;
     v_intent_id   uuid := p_intent_id;
     v_slug        text;
+    v_project     text;
 BEGIN
     SELECT stewards.pipeline_first_stage_name(p_pipeline_family)
       INTO v_first_stage;
@@ -517,10 +518,21 @@ BEGIN
         p_input := p_input || jsonb_build_object('today', to_char(current_date, 'YYYY-MM-DD'));
     END IF;
 
+    -- Default the project (knowledge-pool tag) to the intent's slug, so docs this
+    -- work produces are scopeable by project_neighborhood (22). project_association
+    -- FKs to stewards.projects, so only tag when a project with that slug is
+    -- REGISTERED — else leave NULL (untagged/global, the safe default; a fresh core
+    -- ships no projects). Several intents can pour into one registered project by
+    -- passing project_association explicitly. (Knowledge-scope design, 2026-06-15.)
+    SELECT slug INTO v_project FROM stewards.intents WHERE id = v_intent_id;
+    IF v_project IS NOT NULL AND NOT EXISTS (SELECT 1 FROM stewards.projects WHERE slug = v_project) THEN
+        v_project := NULL;
+    END IF;
+
     INSERT INTO stewards.work_items
-        (pipeline_family, current_stage, slug, input, actor, token_budget, intent_id)
+        (pipeline_family, current_stage, slug, input, actor, token_budget, intent_id, project_association)
     VALUES
-        (p_pipeline_family, v_first_stage, p_slug, p_input, p_actor, p_token_budget, v_intent_id)
+        (p_pipeline_family, v_first_stage, p_slug, p_input, p_actor, p_token_budget, v_intent_id, v_project)
     RETURNING id INTO v_id;
 
     RETURN v_id;

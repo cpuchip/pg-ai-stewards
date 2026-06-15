@@ -249,6 +249,14 @@ BEGIN
     ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='intent_sources_recent' AND active)
        AND EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='intent_source_record' AND active),
         'the dedup tools (intent_sources_recent/record) must ship active';
+    -- project-neighborhood knowledge scoping (controlled bleed)
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='project_neighborhood'),
+        'the project_neighborhood table must ship';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='pool_search' AND active),
+        'the scoped pool_search tool must ship active';
+    -- core ships NO neighborhood rows (operator data) — a fresh project is isolated
+    ASSERT (SELECT count(*) FROM stewards.project_neighborhood) = 0,
+        'project_neighborhood must be empty in core (cross-pollination is operator config)';
     -- the scheduler gates on the kill switch (re-authored fire carries the check)
     ASSERT (SELECT prosrc LIKE '%autonomy_paused%' FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
              WHERE n.nspname='stewards' AND p.proname='scheduled_pipelines_fire'),

@@ -478,5 +478,87 @@ ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, args_schema=E
     execute_target=EXCLUDED.execute_target, active=true;
 
 -- =====================================================================
+-- Project neighborhoods — controlled knowledge bleed across the pool.
+--
+-- The pool (stewards.docs) is tagged by project (project_association; defaulted
+-- to the intent's slug in work_item_create). A project reads its OWN docs plus
+-- any projects in its neighborhood — so you isolate one project (e.g. a work
+-- project) while letting others cross-pollinate (e.g. research + books). The
+-- scope is enforced by pool_search (it resolves the caller's project from the
+-- session, not the model's choice); global doc_search remains as an explicit
+-- meta escape hatch. Neighborhood rows are operator data — seed them in an
+-- overlay (a fresh project reads only itself until you connect it).
+-- =====================================================================
+CREATE TABLE IF NOT EXISTS stewards.project_neighborhood (
+    project       text NOT NULL,   -- the reading project
+    reads_project text NOT NULL,   -- a project it may ALSO read (besides itself)
+    PRIMARY KEY (project, reads_project)
+);
+COMMENT ON TABLE stewards.project_neighborhood IS
+'reflect-steward knowledge scope: a project reads its own docs + the reads_project rows here. Default (no rows) = isolated. e.g. (ai,books)+(books,ai) lets research + books cross-pollinate while a work project stays walled off.';
+
+CREATE OR REPLACE FUNCTION stewards.project_neighbors(p_project text)
+RETURNS text[] LANGUAGE sql STABLE AS $$
+    SELECT CASE WHEN p_project IS NULL OR p_project = '' THEN NULL
+           ELSE array(SELECT DISTINCT x FROM (
+                  SELECT p_project AS x
+                  UNION
+                  SELECT reads_project FROM stewards.project_neighborhood WHERE project = p_project
+                ) u WHERE x IS NOT NULL) END;
+$$;
+COMMENT ON FUNCTION stewards.project_neighbors(text) IS
+'The set of projects p_project may read: itself + its project_neighborhood rows. NULL/empty input → NULL (pool_search treats that as global / unscoped).';
+
+-- pool_search: doc search scoped to the caller's project neighborhood (enforced).
+CREATE OR REPLACE FUNCTION stewards.pool_search_tool(p_args jsonb)
+RETURNS text LANGUAGE plpgsql AS $FN$
+DECLARE
+    v_sess      text := p_args->>'_session_id';
+    v_query     text := p_args->>'query';
+    v_limit     int  := COALESCE(NULLIF(p_args->>'limit','')::int, 10);
+    v_project   text;
+    v_neighbors text[];
+    v_rows      jsonb;
+BEGIN
+    IF v_query IS NULL OR btrim(v_query) = '' THEN RETURN '{"error":"query required"}'; END IF;
+    SELECT w.project_association INTO v_project
+      FROM stewards.work_items w
+     WHERE v_sess = ANY(w.session_ids) ORDER BY w.id DESC LIMIT 1;
+    IF v_project IS NULL THEN v_project := p_args->>'project'; END IF;  -- fallback for direct callers
+    v_neighbors := stewards.project_neighbors(v_project);
+
+    SELECT jsonb_agg(jsonb_build_object('slug', slug, 'kind', kind, 'title', title,
+                                        'project', project_association, 'snippet', snippet) ORDER BY rank DESC)
+      INTO v_rows
+      FROM (
+        SELECT s.slug, s.kind, s.title, s.project_association,
+               ts_headline('english', coalesce(s.body, ''), q, 'MaxWords=20, MinWords=10') AS snippet,
+               ts_rank(s.body_tsv, q) AS rank
+          FROM stewards.docs s, websearch_to_tsquery('english', v_query) q
+         WHERE s.body_tsv @@ q
+           -- enforced scope: if the caller has a project, restrict to its neighborhood;
+           -- a caller with no project (untagged / a meta intent) searches globally.
+           AND (v_neighbors IS NULL OR s.project_association = ANY(v_neighbors))
+         ORDER BY rank DESC
+         LIMIT greatest(v_limit, 1)
+      ) r;
+
+    RETURN jsonb_build_object('project', v_project, 'neighborhood', v_neighbors,
+        'results', COALESCE(v_rows, '[]'::jsonb),
+        'note', CASE WHEN v_neighbors IS NULL
+                     THEN 'no project scope — searched the whole pool (meta).'
+                     ELSE 'scoped to this project''s neighborhood; other projects are walled off.' END)::text;
+END $FN$;
+
+INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, active)
+VALUES (
+  'pool_search',
+  'Search the knowledge pool (docs) SCOPED to your project''s neighborhood — your own project plus any it is connected to. Use this for normal reading so you stay on-topic and do not bleed across walled-off projects. (Global doc_search exists for deliberate cross-project meta-studies.) Args: query (required), limit.',
+  '{"type":"object","required":["query"],"properties":{"query":{"type":"string"},"limit":{"type":"integer"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"pool_search_tool"}'::jsonb, true)
+ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, args_schema=EXCLUDED.args_schema,
+    execute_target=EXCLUDED.execute_target, active=true;
+
+-- =====================================================================
 -- End of 22-reflect-steward.sql
 -- =====================================================================
