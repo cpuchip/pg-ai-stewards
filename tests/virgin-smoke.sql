@@ -225,4 +225,32 @@ BEGIN
     RAISE NOTICE 'OK 6: compact_context ships (tools-off compactor + surface/apply + tool_def + nudge config)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→21) is sound =='
+-- ── 7. reflect-steward (22) operator surface ships in core ───────────────────
+DO $$
+BEGIN
+    -- kill switch: global flag + the verbs + the capacity-gated drain
+    ASSERT EXISTS (SELECT 1 FROM stewards.config WHERE key='autonomy_paused'),
+        'the global kill switch config autonomy_paused must be seeded';
+    ASSERT EXISTS (SELECT 1 FROM stewards.config WHERE key='reflect_max_concurrent'),
+        'the drain capacity cap reflect_max_concurrent must be seeded';
+    ASSERT (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+             WHERE n.nspname='stewards'
+               AND p.proname IN ('reflect_pause','reflect_resume','reflect_pause_intent',
+                   'reflect_resume_intent','reflect_status','reflect_proposals',
+                   'reflect_approve','reflect_decline','reflect_steer','reflect_drain_approved')) = 10,
+        'all reflect-steward verbs + the drain must ship in core';
+    -- the queue + control tables
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='reflect_approvals')
+       AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='reflect_intent_paused'),
+        'reflect_approvals + reflect_intent_paused tables must ship';
+    -- the scheduler gates on the kill switch (re-authored fire carries the check)
+    ASSERT (SELECT prosrc LIKE '%autonomy_paused%' FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+             WHERE n.nspname='stewards' AND p.proname='scheduled_pipelines_fire'),
+        'scheduled_pipelines_fire must gate on autonomy_paused';
+    -- core ships NO scheduled reflect runs (operator/overlay data); paused by default
+    ASSERT stewards.config_get_text('autonomy_paused','x') = 'false',
+        'autonomy_paused must default to false (off, but no schedules seeded in core)';
+    RAISE NOTICE 'OK 7: reflect-steward surface ships (kill switch + verbs + capacity-gated drain + scheduler gate)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→22) is sound =='

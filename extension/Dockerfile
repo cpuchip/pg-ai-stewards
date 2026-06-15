@@ -54,7 +54,8 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      14-fanout-brainstorm.sql 15a-context-engrams.sql \
      15b-context-surface.sql 16-subagents.sql \
      17-personas.sql 18-scheduler.sql \
-     19-models.sql 20-coder.sql 21-compact-context.sql ./
+     19-models.sql 20-coder.sql 21-compact-context.sql \
+     22-reflect-steward.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,

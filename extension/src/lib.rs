@@ -260,6 +260,12 @@ extension_sql_file!(
     requires = ["create_coder"],
 );
 
+extension_sql_file!(
+    "../22-reflect-steward.sql",
+    name = "create_reflect_steward",
+    requires = ["create_compact_context"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

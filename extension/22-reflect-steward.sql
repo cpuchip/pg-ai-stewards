@@ -1,0 +1,387 @@
+-- =====================================================================
+-- 22-reflect-steward.sql — the reflect-steward operator surface
+-- =====================================================================
+-- The reflect-steward is the `planning` pipeline pointed at an intent on a
+-- schedule: it senses the intent's knowledge pool, brainstorms, and PROPOSES
+-- work (parked agent_planning work_items). This file adds the control surface a
+-- human needs to run that safely:
+--
+--   • a kill switch — global (autonomy_paused) AND per-intent (decommission a
+--     runaway intent while the rest keep running);
+--   • an approval queue with a CAPACITY-GATED drain — approving a proposal does
+--     NOT dispatch it; the drain dispatches approved proposals as capacity
+--     allows, so a big proposal batch never floods the workers;
+--   • check-in verbs (status / proposals / approve / decline / steer) the human
+--     (or the CLI/skill that drives on their behalf) calls.
+--
+-- The schedule + drain are gated by autonomy_paused, so one command stops all
+-- new autonomous work. (In-flight stages still finish — to halt those too, use
+-- the emergency-stop bleed-stoppers; autonomy_paused governs the SOURCE.)
+--
+-- Generic core: the machinery is intent-agnostic. The named intents (and their
+-- scheduled_pipelines rows) are operator data — seed those in an overlay.
+-- requires create_models (19) for scheduled_pipelines; create_subagents for the
+-- planning pipeline it drives.
+-- =====================================================================
+
+-- ── config: the global kill switch + the drain's concurrency cap ─────────────
+SELECT stewards.config_set('autonomy_paused', 'false'::jsonb,
+    'Global reflect-steward kill switch. true = the scheduler dispatches no new scheduled pipelines and the approved-proposal drain dispatches nothing. In-flight work still finishes (use the emergency-stop brakes for that).');
+SELECT stewards.config_set('reflect_max_concurrent', '2'::jsonb,
+    'Capacity gate: the most reflect-approved proposals the drain will have in flight at once. Approved proposals beyond this wait in the queue until running ones finish.');
+
+-- ── approval queue: a proposal the human said yes to (drain dispatches it) ────
+CREATE TABLE IF NOT EXISTS stewards.reflect_approvals (
+    work_item_id  uuid PRIMARY KEY REFERENCES stewards.work_items(id) ON DELETE CASCADE,
+    approved_by   text NOT NULL DEFAULT 'human',
+    approved_at   timestamptz NOT NULL DEFAULT now(),
+    dispatched_at timestamptz   -- set by the drain when it actually launches it
+);
+COMMENT ON TABLE stewards.reflect_approvals IS
+'reflect-steward: proposals the human approved. dispatched_at NULL = waiting for capacity; the capacity-gated drain (reflect_drain_approved) launches them as running work drops below reflect_max_concurrent.';
+
+-- ── per-intent pause: decommission a runaway intent without a global stop ────
+CREATE TABLE IF NOT EXISTS stewards.reflect_intent_paused (
+    intent_slug text PRIMARY KEY,
+    paused_at   timestamptz NOT NULL DEFAULT now(),
+    reason      text
+);
+COMMENT ON TABLE stewards.reflect_intent_paused IS
+'reflect-steward per-intent kill switch: an intent here is skipped by the drain (its approved proposals do not dispatch). reflect_pause_intent also disables its scheduled_pipelines rows so no new cycles fire.';
+
+-- ── steering: a human note that shapes the intent's next reflect cycle ───────
+CREATE TABLE IF NOT EXISTS stewards.reflect_steering (
+    id          bigserial PRIMARY KEY,
+    intent_slug text NOT NULL,
+    note        text NOT NULL,
+    created_by  text NOT NULL DEFAULT 'human',
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    applied_at  timestamptz   -- set when a reflect cycle has folded it in
+);
+CREATE INDEX IF NOT EXISTS reflect_steering_unapplied_idx
+    ON stewards.reflect_steering (intent_slug, created_at) WHERE applied_at IS NULL;
+COMMENT ON TABLE stewards.reflect_steering IS
+'reflect-steward: human steering notes per intent. The reflect launch can fold unapplied notes into the binding question so a check-in suggestion shapes the next cycle.';
+
+-- =====================================================================
+-- Kill switch — global
+-- =====================================================================
+CREATE OR REPLACE FUNCTION stewards.reflect_pause(p_reason text DEFAULT NULL)
+RETURNS text LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM stewards.config_set('autonomy_paused', 'true'::jsonb, NULL);
+    RETURN 'PAUSED: all scheduled pipelines + the approved-proposal drain are halted'
+        || COALESCE(' (' || p_reason || ')', '')
+        || '. In-flight work finishes on its own. reflect_resume() to lift.';
+END $$;
+
+CREATE OR REPLACE FUNCTION stewards.reflect_resume()
+RETURNS text LANGUAGE plpgsql AS $$
+BEGIN
+    PERFORM stewards.config_set('autonomy_paused', 'false'::jsonb, NULL);
+    RETURN 'RESUMED: scheduled pipelines + drain will run on the next tick.';
+END $$;
+
+-- =====================================================================
+-- Kill switch — per-intent (decommission a runaway intent)
+-- =====================================================================
+CREATE OR REPLACE FUNCTION stewards.reflect_pause_intent(p_intent_slug text, p_reason text DEFAULT NULL)
+RETURNS text LANGUAGE plpgsql AS $$
+DECLARE v_intent uuid; v_disabled int;
+BEGIN
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug = p_intent_slug;
+    IF v_intent IS NULL THEN RETURN 'no such intent: ' || p_intent_slug; END IF;
+
+    INSERT INTO stewards.reflect_intent_paused (intent_slug, reason)
+    VALUES (p_intent_slug, p_reason)
+    ON CONFLICT (intent_slug) DO UPDATE SET paused_at = now(), reason = EXCLUDED.reason;
+
+    UPDATE stewards.scheduled_pipelines SET enabled = false, updated_at = now()
+     WHERE intent_id = v_intent AND enabled = true;
+    GET DIAGNOSTICS v_disabled = ROW_COUNT;
+
+    RETURN format('intent %s PAUSED: %s schedule(s) disabled; its approved proposals will not dispatch. reflect_resume_intent to lift.',
+        p_intent_slug, v_disabled);
+END $$;
+
+CREATE OR REPLACE FUNCTION stewards.reflect_resume_intent(p_intent_slug text)
+RETURNS text LANGUAGE plpgsql AS $$
+DECLARE v_intent uuid; v_enabled int;
+BEGIN
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug = p_intent_slug;
+    IF v_intent IS NULL THEN RETURN 'no such intent: ' || p_intent_slug; END IF;
+
+    DELETE FROM stewards.reflect_intent_paused WHERE intent_slug = p_intent_slug;
+    UPDATE stewards.scheduled_pipelines SET enabled = true, updated_at = now()
+     WHERE intent_id = v_intent AND enabled = false;
+    GET DIAGNOSTICS v_enabled = ROW_COUNT;
+
+    RETURN format('intent %s RESUMED: %s schedule(s) re-enabled.', p_intent_slug, v_enabled);
+END $$;
+
+-- =====================================================================
+-- The capacity-gated drain — dispatch approved proposals as capacity allows.
+-- Called every tick from watchman_scheduler_fire. Honors the global pause and
+-- per-intent pause; never exceeds reflect_max_concurrent in flight.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION stewards.reflect_drain_approved()
+RETURNS int LANGUAGE plpgsql AS $$
+DECLARE
+    v_cap       int;
+    v_in_flight int;
+    v_row       record;
+    v_launched  int := 0;
+BEGIN
+    -- Global kill switch.
+    IF stewards.config_get_text('autonomy_paused', 'false') = 'true' THEN
+        RETURN 0;
+    END IF;
+
+    v_cap := COALESCE(NULLIF(stewards.config_get_text('reflect_max_concurrent', '2'), '')::int, 2);
+
+    -- In flight = approved + dispatched + not yet terminal.
+    SELECT count(*) INTO v_in_flight
+      FROM stewards.reflect_approvals a
+      JOIN stewards.work_items w ON w.id = a.work_item_id
+     WHERE a.dispatched_at IS NOT NULL
+       AND w.status NOT IN ('completed', 'failed', 'cancelled');
+
+    -- Launch approved-but-undispatched proposals, oldest first, until the cap.
+    FOR v_row IN
+        SELECT a.work_item_id, w.intent_id, w.slug
+          FROM stewards.reflect_approvals a
+          JOIN stewards.work_items w ON w.id = a.work_item_id
+         WHERE a.dispatched_at IS NULL
+           AND w.status = 'pending'
+           -- skip paused intents
+           AND NOT EXISTS (
+               SELECT 1 FROM stewards.reflect_intent_paused p
+                JOIN stewards.intents i ON i.slug = p.intent_slug
+               WHERE i.id = w.intent_id)
+         ORDER BY a.approved_at
+    LOOP
+        EXIT WHEN v_in_flight >= v_cap;
+        BEGIN
+            PERFORM stewards.work_item_dispatch_stage(v_row.work_item_id);
+            UPDATE stewards.reflect_approvals SET dispatched_at = now()
+             WHERE work_item_id = v_row.work_item_id;
+            v_in_flight := v_in_flight + 1;
+            v_launched  := v_launched + 1;
+            RAISE NOTICE 'reflect_drain_approved: launched % (%/% in flight)', v_row.slug, v_in_flight, v_cap;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'reflect_drain_approved: dispatch failed for %: %', v_row.slug, SQLERRM;
+        END;
+    END LOOP;
+
+    RETURN v_launched;
+END $$;
+COMMENT ON FUNCTION stewards.reflect_drain_approved() IS
+'reflect-steward: dispatch approved-but-undispatched proposals oldest-first up to reflect_max_concurrent in flight, skipping when autonomy_paused or the proposal''s intent is paused. Called each tick from watchman_scheduler_fire.';
+
+-- =====================================================================
+-- Check-in verbs (the human / the CLI-skill that drives for them)
+-- =====================================================================
+
+-- reflect_status — one glance: paused?, capacity, queue depths, recent runs.
+CREATE OR REPLACE FUNCTION stewards.reflect_status()
+RETURNS jsonb LANGUAGE sql STABLE AS $$
+    SELECT jsonb_build_object(
+        'autonomy_paused', stewards.config_get_text('autonomy_paused','false') = 'true',
+        'max_concurrent',  stewards.config_get_text('reflect_max_concurrent','2'),
+        'in_flight', (SELECT count(*) FROM stewards.reflect_approvals a JOIN stewards.work_items w ON w.id=a.work_item_id
+                       WHERE a.dispatched_at IS NOT NULL AND w.status NOT IN ('completed','failed','cancelled')),
+        'approved_waiting', (SELECT count(*) FROM stewards.reflect_approvals a JOIN stewards.work_items w ON w.id=a.work_item_id
+                              WHERE a.dispatched_at IS NULL AND w.status='pending'),
+        'proposals_pending', (SELECT count(*) FROM stewards.work_items w
+                               WHERE w.origin='agent_planning' AND w.status='pending'
+                                 AND NOT EXISTS (SELECT 1 FROM stewards.reflect_approvals a WHERE a.work_item_id=w.id)),
+        'intents_paused', (SELECT COALESCE(jsonb_agg(intent_slug), '[]'::jsonb) FROM stewards.reflect_intent_paused),
+        'recent_reflect_runs', (SELECT COALESCE(jsonb_agg(jsonb_build_object('slug',slug,'status',status,'maturity',maturity,'at',to_char(updated_at,'MM-DD HH24:MI')) ORDER BY updated_at DESC), '[]'::jsonb)
+                                 FROM (SELECT slug,status,maturity,updated_at FROM stewards.work_items
+                                        WHERE pipeline_family='planning' AND actor IN ('scheduler','reflect-steward')
+                                        ORDER BY updated_at DESC LIMIT 5) r)
+    );
+$$;
+
+-- reflect_proposals — the parked queue awaiting your call.
+CREATE OR REPLACE FUNCTION stewards.reflect_proposals()
+RETURNS TABLE(slug text, intent text, pipeline text, status text, approved boolean, binding_question text)
+LANGUAGE sql STABLE AS $$
+    SELECT w.slug, i.slug, w.pipeline_family, w.status,
+           EXISTS(SELECT 1 FROM stewards.reflect_approvals a WHERE a.work_item_id=w.id) AS approved,
+           w.input->>'binding_question'
+      FROM stewards.work_items w
+      LEFT JOIN stewards.intents i ON i.id = w.intent_id
+     WHERE w.origin='agent_planning' AND w.status='pending'
+     ORDER BY i.slug, w.slug;
+$$;
+
+-- reflect_approve — say yes. Does NOT dispatch; the drain launches it as capacity allows.
+CREATE OR REPLACE FUNCTION stewards.reflect_approve(p_slug text, p_by text DEFAULT 'human')
+RETURNS text LANGUAGE plpgsql AS $$
+DECLARE v_id uuid; v_status text;
+BEGIN
+    SELECT id, status INTO v_id, v_status FROM stewards.work_items
+     WHERE slug = p_slug AND origin = 'agent_planning';
+    IF v_id IS NULL THEN RETURN 'no proposal with slug ' || p_slug; END IF;
+    IF v_status <> 'pending' THEN
+        RETURN format('proposal %s is %s, not pending — nothing to approve', p_slug, v_status);
+    END IF;
+    INSERT INTO stewards.reflect_approvals (work_item_id, approved_by)
+    VALUES (v_id, p_by) ON CONFLICT (work_item_id) DO NOTHING;
+    RETURN format('approved %s — queued; the drain dispatches it when in-flight work drops below the cap.', p_slug);
+END $$;
+
+-- reflect_decline — say no (cancel the proposal).
+CREATE OR REPLACE FUNCTION stewards.reflect_decline(p_slug text, p_why text DEFAULT NULL)
+RETURNS text LANGUAGE plpgsql AS $$
+DECLARE v_id uuid;
+BEGIN
+    SELECT id INTO v_id FROM stewards.work_items
+     WHERE slug = p_slug AND origin = 'agent_planning';
+    IF v_id IS NULL THEN RETURN 'no proposal with slug ' || p_slug; END IF;
+    PERFORM stewards.work_item_cancel(v_id, 'declined' || COALESCE(': ' || p_why, ''));
+    DELETE FROM stewards.reflect_approvals WHERE work_item_id = v_id;  -- in case it was approved then reversed
+    RETURN format('declined %s%s', p_slug, COALESCE(' (' || p_why || ')', ''));
+END $$;
+
+-- reflect_steer — drop a note that shapes the intent's next cycle.
+CREATE OR REPLACE FUNCTION stewards.reflect_steer(p_intent_slug text, p_note text, p_by text DEFAULT 'human')
+RETURNS text LANGUAGE plpgsql AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM stewards.intents WHERE slug = p_intent_slug) THEN
+        RETURN 'no such intent: ' || p_intent_slug;
+    END IF;
+    IF p_note IS NULL OR length(btrim(p_note)) = 0 THEN RETURN 'note required'; END IF;
+    INSERT INTO stewards.reflect_steering (intent_slug, note, created_by)
+    VALUES (p_intent_slug, btrim(p_note), p_by);
+    RETURN format('steering noted for %s — folds into its next reflect cycle.', p_intent_slug);
+END $$;
+
+-- =====================================================================
+-- Scheduler integration: gate firing on the global kill switch, and drain the
+-- approval queue each tick. Re-authors the two 18-scheduler functions to their
+-- final form (later-file-wins; the bodies are 18's verbatim plus these hooks).
+-- =====================================================================
+
+-- scheduled_pipelines_fire: bail at the top when autonomy is paused.
+CREATE OR REPLACE FUNCTION stewards.scheduled_pipelines_fire()
+RETURNS int
+LANGUAGE plpgsql AS $func$
+DECLARE
+    v_row             stewards.scheduled_pipelines%ROWTYPE;
+    v_child_slug      text;
+    v_work_item_id    uuid;
+    v_now             timestamptz := now();
+    v_missed_cutoff   timestamptz;
+    v_dispatched      int := 0;
+    v_skipped_missed  int := 0;
+    v_next_due        timestamptz;
+BEGIN
+    -- Global kill switch (22): when paused, fire no scheduled pipelines.
+    IF stewards.config_get_text('autonomy_paused', 'false') = 'true' THEN
+        RETURN 0;
+    END IF;
+
+    FOR v_row IN
+        SELECT *
+          FROM stewards.scheduled_pipelines
+         WHERE enabled = true
+           AND next_due_at IS NOT NULL
+           AND next_due_at <= v_now
+         ORDER BY next_due_at
+         FOR UPDATE SKIP LOCKED
+    LOOP
+        v_missed_cutoff := v_row.next_due_at + (v_row.missed_window_hours || ' hours')::interval;
+
+        IF v_now > v_missed_cutoff THEN
+            v_next_due := stewards.cron_next_after(v_row.cron_pattern, v_now);
+            UPDATE stewards.scheduled_pipelines
+               SET next_due_at = v_next_due, updated_at = v_now
+             WHERE id = v_row.id;
+            RAISE NOTICE 'scheduled_pipelines_fire: skipping missed run for % (due % older than % hours); advanced to %',
+                v_row.slug, v_row.next_due_at, v_row.missed_window_hours, v_next_due;
+            v_skipped_missed := v_skipped_missed + 1;
+            CONTINUE;
+        END IF;
+
+        v_child_slug := v_row.slug || '--' ||
+            to_char(v_row.next_due_at AT TIME ZONE 'UTC', 'YYYY-MM-DD-HH24MI');
+
+        BEGIN
+            v_work_item_id := stewards.work_item_create(
+                p_pipeline_family => v_row.pipeline_family,
+                p_input           => v_row.input_template,
+                p_slug            => v_child_slug,
+                p_actor           => 'scheduler',
+                p_token_budget    => NULL,
+                p_intent_id       => v_row.intent_id
+            );
+            PERFORM stewards.work_item_dispatch_stage(v_work_item_id);
+
+            v_next_due := stewards.cron_next_after(v_row.cron_pattern, v_now);
+            UPDATE stewards.scheduled_pipelines
+               SET last_dispatched_at = v_now, next_due_at = v_next_due, updated_at = v_now
+             WHERE id = v_row.id;
+
+            RAISE NOTICE 'scheduled_pipelines_fire: dispatched %/% as work_item %; next_due_at=%',
+                v_row.slug, v_child_slug, v_work_item_id, v_next_due;
+            v_dispatched := v_dispatched + 1;
+
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'scheduled_pipelines_fire: dispatch failed for %: % (next tick will retry)',
+                v_row.slug, SQLERRM;
+        END;
+    END LOOP;
+
+    IF v_dispatched > 0 OR v_skipped_missed > 0 THEN
+        RAISE NOTICE 'scheduled_pipelines_fire: dispatched=% missed_skipped=%', v_dispatched, v_skipped_missed;
+    END IF;
+
+    RETURN v_dispatched;
+END;
+$func$;
+
+-- watchman_scheduler_fire: after firing schedules, drain the approval queue.
+CREATE OR REPLACE FUNCTION stewards.watchman_scheduler_fire()
+RETURNS text
+LANGUAGE plpgsql AS $func$
+DECLARE
+    v_reason          text;
+    v_cfg             stewards.watchman_config%ROWTYPE;
+    v_pass_id         text;
+    v_pipelines_fired int;
+    v_drained         int;
+BEGIN
+    BEGIN
+        v_pipelines_fired := stewards.scheduled_pipelines_fire();
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'watchman_scheduler_fire: scheduled_pipelines_fire raised: %', SQLERRM;
+    END;
+
+    -- 22: drain the reflect-steward approval queue (capacity-gated, pause-aware).
+    BEGIN
+        v_drained := stewards.reflect_drain_approved();
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'watchman_scheduler_fire: reflect_drain_approved raised: %', SQLERRM;
+    END;
+
+    v_reason := stewards.watchman_should_fire();
+    IF v_reason IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT * INTO v_cfg FROM stewards.watchman_config WHERE id = 1;
+
+    v_pass_id := stewards.watchman_pass_start(
+        p_limit => v_cfg.schedule_pass_limit, p_provider => NULL, p_model => NULL,
+        p_agent_family => NULL, p_actor => 'scheduler', p_trigger => v_reason, p_token_budget => NULL);
+
+    RAISE NOTICE 'watchman scheduler fired (%): pass_id=%', v_reason, v_pass_id;
+    RETURN v_pass_id;
+END;
+$func$;
+
+-- =====================================================================
+-- End of 22-reflect-steward.sql
+-- =====================================================================
