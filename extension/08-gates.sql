@@ -1030,6 +1030,7 @@ DECLARE
     v_rendered      text;
     v_agent_ok      boolean;
     v_spawn_n       int;
+    v_doc_slug      text;
 BEGIN
     IF NEW.maturity <> 'verified' OR OLD.maturity = 'verified' THEN
         RETURN NEW;
@@ -1107,6 +1108,33 @@ BEGIN
                     v_pwid, NEW.id;
             EXCEPTION WHEN OTHERS THEN
                 RAISE NOTICE 'on_maturity_verified: enqueue_work_item_file failed: %', SQLERRM;
+            END;
+
+            -- Also publish the finding to the searchable docs pool (not just a
+            -- file): the digesters do both, but auto_materialize pipelines only
+            -- wrote the file — so the knowledge pool never compounded. import_doc
+            -- is idempotent by slug; we then tag it with the work_item's project
+            -- so pool_search/doc_search (and the next cycle) can find it.
+            BEGIN
+                v_doc_slug := stewards.import_doc(
+                    NEW.slug,
+                    NEW.file_destination,
+                    left(COALESCE(NEW.input->>'binding_question', NEW.slug), 200),
+                    stewards.extract_work_item_file_content(NEW.id),
+                    jsonb_build_object('source_type', NEW.pipeline_family,
+                                       'work_item_id', NEW.id::text,
+                                       'intent_id', NEW.intent_id::text),
+                    'doc');
+                -- import_doc returns the doc's id, not its slug — tag by the
+                -- slug we passed in (= NEW.slug) so the project FK is set.
+                IF v_doc_slug IS NOT NULL AND NEW.project_association IS NOT NULL THEN
+                    UPDATE stewards.docs SET project_association = NEW.project_association
+                     WHERE slug = NEW.slug;
+                END IF;
+                RAISE NOTICE 'on_maturity_verified: published doc % to pool (project=%) for work_item=%',
+                    v_doc_slug, NEW.project_association, NEW.id;
+            EXCEPTION WHEN OTHERS THEN
+                RAISE NOTICE 'on_maturity_verified: import_doc to pool failed: %', SQLERRM;
             END;
         END IF;
     END IF;

@@ -254,6 +254,8 @@ BEGIN
         'the project_neighborhood table must ship';
     ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='pool_search' AND active),
         'the scoped pool_search tool must ship active';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='intent_work_survey' AND active),
+        'the council/anti-dup intent_work_survey tool must ship active';
     -- core ships NO neighborhood rows (operator data) — a fresh project is isolated
     ASSERT (SELECT count(*) FROM stewards.project_neighborhood) = 0,
         'project_neighborhood must be empty in core (cross-pollination is operator config)';

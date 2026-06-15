@@ -560,5 +560,63 @@ ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, args_schema=E
     execute_target=EXCLUDED.execute_target, active=true;
 
 -- =====================================================================
+-- The council moment, baked in — survey existing work before proposing.
+--
+-- Cold starts reproduce each other: a reflect run that can't see its siblings'
+-- pending proposals re-proposes the same plan (we watched one intent accrue 13
+-- near-duplicate proposals). This is the substrate's own Council Moment
+-- (Abraham 4:26 — "took counsel among themselves" before acting) given to the
+-- autonomous steward: before proposing, see what is already proposed / in
+-- flight / done for THIS intent, with provenance, and either propose something
+-- genuinely new or refine an existing item (don't duplicate). The gatherer calls
+-- this in its first (situational-awareness) stage.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION stewards.intent_work_survey_tool(p_args jsonb)
+RETURNS text LANGUAGE plpgsql AS $FN$
+DECLARE
+    v_sess   text := p_args->>'_session_id';
+    v_intent uuid;
+    v_slug   text;
+BEGIN
+    SELECT w.intent_id, i.slug INTO v_intent, v_slug
+      FROM stewards.work_items w JOIN stewards.intents i ON i.id = w.intent_id
+     WHERE v_sess = ANY(w.session_ids) ORDER BY w.id DESC LIMIT 1;
+    IF v_intent IS NULL THEN
+        v_slug := p_args->>'intent';
+        SELECT id INTO v_intent FROM stewards.intents WHERE slug = v_slug;
+    END IF;
+    IF v_intent IS NULL THEN RETURN '{"error":"could not resolve the intent for this session"}'; END IF;
+
+    RETURN jsonb_build_object(
+        'intent', v_slug,
+        'already_proposed', (
+            SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                       'slug', slug, 'pipeline', pipeline_family,
+                       'binding_question', left(input->>'binding_question', 160)) ORDER BY created_at DESC), '[]'::jsonb)
+              FROM stewards.work_items
+             WHERE intent_id = v_intent AND origin = 'agent_planning' AND status = 'pending'),
+        'in_flight', (
+            SELECT COALESCE(jsonb_agg(jsonb_build_object('slug', slug, 'stage', current_stage) ORDER BY created_at DESC), '[]'::jsonb)
+              FROM stewards.work_items
+             WHERE intent_id = v_intent AND status IN ('in_progress', 'awaiting_review')),
+        'recently_done', (
+            SELECT COALESCE(jsonb_agg(jsonb_build_object('slug', slug, 'maturity', maturity) ORDER BY updated_at DESC), '[]'::jsonb)
+              FROM (SELECT slug, maturity, updated_at FROM stewards.work_items
+                     WHERE intent_id = v_intent AND status = 'completed'
+                     ORDER BY updated_at DESC LIMIT 15) d),
+        'note', 'COUNCIL MOMENT — these are already proposed / running / done for this intent (slugs are your provenance). Do NOT re-propose any of them. Propose only genuinely NEW next-steps, or explicitly refine/extend an existing one by citing its slug. Cold starts tend to duplicate; this is how you avoid it.'
+    )::text;
+END $FN$;
+
+INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, active)
+VALUES (
+  'intent_work_survey',
+  'Call this FIRST, before proposing anything. Returns what is already proposed (pending), in flight, and recently done for this intent — with slugs as provenance. Use it to avoid re-proposing duplicate work (cold starts repeat themselves): propose only NEW next-steps, or refine an existing item by citing its slug. This is your council moment.',
+  '{"type":"object","properties":{}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"intent_work_survey_tool"}'::jsonb, true)
+ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, args_schema=EXCLUDED.args_schema,
+    execute_target=EXCLUDED.execute_target, active=true;
+
+-- =====================================================================
 -- End of 22-reflect-steward.sql
 -- =====================================================================
