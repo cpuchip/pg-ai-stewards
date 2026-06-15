@@ -1291,7 +1291,18 @@ CREATE OR REPLACE FUNCTION stewards.work_item_promote_trigger()
 RETURNS trigger LANGUAGE plpgsql AS $func$
 BEGIN
     IF NEW.status = 'completed' AND coalesce(OLD.status, '') <> 'completed' THEN
-        PERFORM stewards.work_item_promote_to_doc(NEW.id);
+        -- Promotion is a SIDE-EFFECT of completion, not part of it. Wrap it so a
+        -- promote_to_doc failure logs loud but never aborts the completion — an
+        -- unattended sabbath that completes many items must not be rolled back by
+        -- one item's promotion hiccup. Matches the wrapped-side-effect pattern in
+        -- reflect_drain_approved (22) + watchman_scheduler_fire (23). A systemic
+        -- promotion failure still surfaces (the WARNING + the guard's consecutive-
+        -- failure signal); it just can't take the primary state transition with it.
+        BEGIN
+            PERFORM stewards.work_item_promote_to_doc(NEW.id);
+        EXCEPTION WHEN OTHERS THEN
+            RAISE WARNING 'work_item_promote_trigger: promote_to_doc failed for % (completion kept): %', NEW.id, SQLERRM;
+        END;
     END IF;
     RETURN NEW;
 END;
