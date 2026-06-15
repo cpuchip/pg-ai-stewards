@@ -79,11 +79,42 @@ COMMENT ON COLUMN stewards.work_items.revision_applied_at IS
 'h3-followup-3 (13-research-pipelines): set by apply_revision when a revise-proposal work_item has been merged into its parent proposal. NULL = not yet applied (or rejected). Idempotency guard.';
 
 -- ---------------------------------------------------------------------
--- Research agent-family tool grants (h1-7b). The 'research' family is the
--- generic creative/research example agent the seed pack ships. These are
--- substrate-generic tools (filesystem-read, prior-work inspection); the
--- escalation WRITE tools are deliberately NOT granted (operator surface).
+-- The generic `research` agent — core-seeded so a virgin install's own
+-- research/planning pipelines (below) actually run.
+--
+-- Before 2026-06-15 this family was referenced by every pipeline in this
+-- file (and granted tools, below) but the AGENT ROW was never seeded, so a
+-- fresh CREATE EXTENSION failed at dispatch with "no agent variant
+-- resolved: family=research". The example digesters had drifted onto a
+-- second name (`stewards-explore`) that nothing shipped either. Both now
+-- unify on this one generic agent. (Surfaced by the reflect-steward P0
+-- dry-run; see .spec/proposals/reflect-steward-p0-dryrun-report.md.)
 -- ---------------------------------------------------------------------
+INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature)
+VALUES (
+  'research', '*',
+  'Generic research/explore agent: gathers via tools, reads sources faithfully, '
+    || 'synthesizes grounded output. The agent the research, planning, and digester '
+    || 'pipelines run on.',
+  'primary',
+  $RESEARCH$You are a research agent in an autonomous stewardship substrate. You gather information with your tools, read sources faithfully, and synthesize what you find into clear, grounded output.
+
+Principles:
+- Discover with your tools; do not rely on memory. Search and read before you conclude.
+- Ground every claim in a source you actually retrieved. Quote or cite; never invent a fact, a complaint, or a quote.
+- Depth over breadth: understand the strongest signal before moving on.
+- Follow your pipeline stage's instructions for output format and tool budget exactly.
+
+You are one stage in a multi-stage pipeline. Do your stage's job and hand off cleanly.$RESEARCH$,
+  0.4)
+ON CONFLICT (family, model_match) DO UPDATE
+   SET description = EXCLUDED.description, prompt = EXCLUDED.prompt, active = true;
+
+-- Research agent-family tool grants (h1-7b). Internal surface = filesystem-read
+-- + prior-work inspection; web_search_exa + fetch_url give it external reach
+-- (exa-search ships as a core default server, so the generic research agent can
+-- actually research the web out of the box). Escalation WRITE tools are
+-- deliberately NOT granted (operator surface).
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
   ('research', 'fs_read',              'allow', 'manual'),
   ('research', 'fs_list',              'allow', 'manual'),
@@ -91,7 +122,9 @@ INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, sourc
   ('research', 'work_item_list',       'allow', 'manual'),
   ('research', 'work_item_show',       'allow', 'manual'),
   ('research', 'watchman_pass_show',   'allow', 'manual'),
-  ('research', 'watchman_passes_list', 'allow', 'manual')
+  ('research', 'watchman_passes_list', 'allow', 'manual'),
+  ('research', 'web_search_exa',       'allow', 'manual'),
+  ('research', 'fetch_url',            'allow', 'manual')
 ON CONFLICT (agent_family, tool_pattern) DO NOTHING;
 
 -- =====================================================================

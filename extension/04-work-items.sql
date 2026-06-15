@@ -1310,7 +1310,7 @@ VALUES (
     jsonb_build_array(
         jsonb_build_object(
             'name',         'echo',
-            'agent_family', 'stewards-explore',
+            'agent_family', 'research',
             'model',        'kimi-k2.6',
             'provider',     'opencode_go',
             'next',         null,

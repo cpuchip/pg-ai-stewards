@@ -139,11 +139,11 @@ ON CONFLICT (name) DO UPDATE SET
 
 -- Grant the book tools + fetch_url + web_search_exa to the research agent.
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
-    ('stewards-explore','book_next','allow','manual'),
-    ('stewards-explore','book_publish','allow','manual'),
-    ('stewards-explore','book_add','allow','manual'),
-    ('stewards-explore','fetch_url','allow','manual'),
-    ('stewards-explore','web_search_exa','allow','manual')
+    ('research','book_next','allow','manual'),
+    ('research','book_publish','allow','manual'),
+    ('research','book_add','allow','manual'),
+    ('research','fetch_url','allow','manual'),
+    ('research','web_search_exa','allow','manual')
 ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET
     action = EXCLUDED.action, source = COALESCE(EXCLUDED.source, stewards.agent_tool_perms.source);
 
@@ -157,7 +157,7 @@ INSERT INTO stewards.pipelines (
     'Read a book the way we read scripture: read (find + fetch the text) -> digest -> critique(null-case) -> recommend, then book_publish saves a study doc + brain entry. Single-pass v1 (short books). Uses the research agent.',
     jsonb_build_array(
         jsonb_build_object('name','read','next','digest',
-            'model','kimi-k2.6','provider','opencode_go','agent_family','stewards-explore',
+            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
             'input_template',
               'You are the READ stage of the book digester.' || E'\n\n' ||
@@ -165,7 +165,7 @@ INSERT INTO stewards.pipelines (
               '2. Get the FULL public-domain text. If source_url is given, `fetch_url` it. Otherwise `web_search_exa` for "<title> <author> full text Project Gutenberg" (or Standard Ebooks) and `fetch_url` the plain-text page.' || E'\n' ||
               '3. Output the full book text (or as much as you fetched), prefixed with a line: BOOK: <title> by <author>. The next stage digests it. Do NOT digest yourself.' ),
         jsonb_build_object('name','digest','next','critique',
-            'model','kimi-k2.6','provider','opencode_go','agent_family','stewards-explore',
+            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
             'auto_advance',true,'tools_disabled',true,
             'input_template',
               'You are the DIGEST stage. Here is the book text from the read stage:' || E'\n\n' ||
@@ -177,7 +177,7 @@ INSERT INTO stewards.pipelines (
               '- **Themes** — the recurring ideas.' || E'\n\n' ||
               'Be faithful to the text. Quote only what is actually there.' ),
         jsonb_build_object('name','critique','next','recommend',
-            'model','qwen3.7-plus','provider','opencode_go','agent_family','stewards-explore',
+            'model','qwen3.7-plus','provider','opencode_go','agent_family','research',
             'auto_advance',true,'tools_disabled',true,
             'input_template',
               'You are the CRITIQUE / null-case stage. The book text and the digest:' || E'\n\n' ||
@@ -185,7 +185,7 @@ INSERT INTO stewards.pipelines (
               'DIGEST:' || E'\n' || '{{stage_results.digest.output}}' || E'\n\n' ||
               'Pressure-test the digest: What did it flatten or miss? Is any claim unfaithful to the text? What is the STRONGEST objection to the book''s argument (the null case)? Return the digest, corrected where it was wrong, with a new "## Tensions & objections" section. Keep the good parts verbatim.' ),
         jsonb_build_object('name','recommend','next',NULL,
-            'model','kimi-k2.6','provider','opencode_go','agent_family','stewards-explore',
+            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
             'input_template',
               'You are the RECOMMEND stage — the final one. The refined digest:' || E'\n\n' ||

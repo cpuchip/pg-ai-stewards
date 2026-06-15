@@ -101,6 +101,23 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------
+-- 3b. The generic `research` agent is core-seeded + web-capable. Its
+-- pipelines (planning, research-write, research-summary, echo-test) name
+-- agent_family='research'; without the agent row a virgin dispatch fails
+-- "no agent variant resolved". (Regression guard for the 2026-06-15 fix.)
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM stewards.agents
+                    WHERE family='research' AND model_match='*' AND active),
+        'the generic research agent must be core-seeded (planning/research/echo-test run on it)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                    WHERE agent_family='research' AND tool_pattern='web_search_exa' AND action='allow'),
+        'the research agent must be granted web_search_exa (external research out of the box)';
+    RAISE NOTICE 'OK 3b: generic research agent seeded + web-capable';
+END $$;
+
+-- ---------------------------------------------------------------------
 -- 4. Clean-room: no operator / personal seeds leaked into core.
 -- ---------------------------------------------------------------------
 DO $$

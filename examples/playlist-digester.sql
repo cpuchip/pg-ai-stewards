@@ -15,7 +15,7 @@
 --
 -- Also import the model catalog first (examples/models.sql) with a provider
 -- configured. Models: kimi-k2.6 (doer), qwen3.7-plus (critic, NOT -max — ~2x
--- the cost). Uses the stewards-explore agent (has the web + book/playlist tools).
+-- the cost). Uses the research agent (has the web + book/playlist tools).
 
 -- ── the yt MCP server (opt-in; bridge must be built WITH_YT=1) ───────────────
 INSERT INTO stewards.mcp_servers (name, description, transport, command, args, url, env, enabled)
@@ -187,12 +187,12 @@ ON CONFLICT (name) DO UPDATE SET
 
 -- Grant the playlist tools + the yt MCP tools to the explore agent.
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
-    ('stewards-explore','playlist_next','allow','manual'),
-    ('stewards-explore','playlist_publish','allow','manual'),
-    ('stewards-explore','playlist_add','allow','manual'),
-    ('stewards-explore','yt_playlist','allow','manual'),
-    ('stewards-explore','yt_download','allow','manual'),
-    ('stewards-explore','yt_get','allow','manual')
+    ('research','playlist_next','allow','manual'),
+    ('research','playlist_publish','allow','manual'),
+    ('research','playlist_add','allow','manual'),
+    ('research','yt_playlist','allow','manual'),
+    ('research','yt_download','allow','manual'),
+    ('research','yt_get','allow','manual')
 ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET
     action = EXCLUDED.action, source = COALESCE(EXCLUDED.source, stewards.agent_tool_perms.source);
 
@@ -203,10 +203,10 @@ INSERT INTO stewards.pipelines (
     auto_materialize_on_verified
 ) VALUES (
     'playlist-digest',
-    'Digest the next unseen video on a watched playlist: read (find new video + fetch transcript) -> digest -> critique(null-case) -> recommend, then playlist_publish saves a study doc + brain entry. Single-pass v1. Uses the stewards-explore agent.',
+    'Digest the next unseen video on a watched playlist: read (find new video + fetch transcript) -> digest -> critique(null-case) -> recommend, then playlist_publish saves a study doc + brain entry. Single-pass v1. Uses the research agent.',
     jsonb_build_array(
         jsonb_build_object('name','read','next','digest',
-            'model','kimi-k2.6','provider','opencode_go','agent_family','stewards-explore',
+            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
             'input_template',
               'You are the READ stage of the playlist digester.' || E'\n\n' ||
@@ -220,7 +220,7 @@ INSERT INTO stewards.pipelines (
               '   TITLE: <the video title>' || E'\n' ||
               '   then the full transcript. The next stage digests it — do NOT digest it yourself.' ),
         jsonb_build_object('name','digest','next','critique',
-            'model','kimi-k2.6','provider','opencode_go','agent_family','stewards-explore',
+            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
             'auto_advance',true,'tools_disabled',true,
             'input_template',
               'You are the DIGEST stage. If the text below is exactly "NO PLAYLISTS" or "NOTHING NEW", reply with that same word(s) and stop.' || E'\n\n' ||
@@ -233,7 +233,7 @@ INSERT INTO stewards.pipelines (
               '- **Themes** — the recurring ideas.' || E'\n\n' ||
               'Be faithful to the transcript. Quote only what is actually said.' ),
         jsonb_build_object('name','critique','next','recommend',
-            'model','qwen3.7-plus','provider','opencode_go','agent_family','stewards-explore',
+            'model','qwen3.7-plus','provider','opencode_go','agent_family','research',
             'auto_advance',true,'tools_disabled',true,
             'input_template',
               'You are the CRITIQUE / null-case stage. If the digest below is exactly "NO PLAYLISTS" or "NOTHING NEW", reply with that same word(s) and stop.' || E'\n\n' ||
@@ -241,7 +241,7 @@ INSERT INTO stewards.pipelines (
               'DIGEST:' || E'\n' || '{{stage_results.digest.output}}' || E'\n\n' ||
               'Pressure-test the digest: What did it flatten or miss? Is any claim unfaithful to what was actually said? What is the STRONGEST objection to the video''s thesis (the null case)? Return the digest (keep the VIDEO_ID/PLAYLIST/TITLE header), corrected where it was wrong, with a new "## Tensions & objections" section. Keep the good parts verbatim.' ),
         jsonb_build_object('name','recommend','next',NULL,
-            'model','kimi-k2.6','provider','opencode_go','agent_family','stewards-explore',
+            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
             'input_template',
               'You are the RECOMMEND stage — the final one. If the text below is exactly "NO PLAYLISTS" or "NOTHING NEW", reply with that same word(s) and do NOT publish.' || E'\n\n' ||
