@@ -251,3 +251,27 @@ INSERT INTO stewards.book_shelf (slug, title, author, source_url, position) VALU
     ('tao-te-ching',   'Tao Te Ching',   'Laozi',               NULL, 30),
     ('the-art-of-war', 'The Art of War', 'Sun Tzu',             NULL, 40)
 ON CONFLICT (slug) DO NOTHING;
+
+-- ── empty-shelf guard (the no-op the prompt asks for, made structural) ──────
+-- The read stage replies "SHELF EMPTY" when book_next returns null, but the LLM
+-- can't actually "stop" — auto_advance would still run digest/critique/recommend
+-- on nothing and pool a junk null-case report (we found 17 of them). This
+-- BEFORE-UPDATE guard cancels the work_item the instant read=SHELF EMPTY, so
+-- nothing downstream dispatches and maturity never reaches verified (no pool).
+-- Re-queue a book (book_add) and the schedule resumes normally.
+CREATE OR REPLACE FUNCTION stewards.book_digest_skip_empty_shelf()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.status NOT IN ('cancelled','failed','completed')
+       AND (NEW.stage_results->'read'->>'output') = 'SHELF EMPTY' THEN
+        NEW.status := 'cancelled';
+        NEW.last_failure_reason := 'shelf empty — no book to digest (skipped; nothing pooled)';
+    END IF;
+    RETURN NEW;
+END $$;
+DROP TRIGGER IF EXISTS work_items_book_digest_skip_empty ON stewards.work_items;
+CREATE TRIGGER work_items_book_digest_skip_empty
+    BEFORE UPDATE OF stage_results ON stewards.work_items
+    FOR EACH ROW
+    WHEN (NEW.pipeline_family = 'book-digest')
+    EXECUTE FUNCTION stewards.book_digest_skip_empty_shelf();
