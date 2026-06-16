@@ -55,6 +55,61 @@ stewards.skills (
 default, so (per Claude Code's own guidance) it must say *what the skill does AND
 when to reach for it*. Bad descriptions = skills never loaded or loaded wrongly.
 
+### 1b. Skill groups — the multi-tier catalog (the engram move)
+
+A flat catalog doesn't scale: with dozens of skills, even one frontmatter line
+each becomes a tax on every prompt. So skills belong to **groups**, and the
+catalog renders in **three tiers** — the same graduated-rendering idea the context
+engine uses for engrams (a spent block collapses to a summary; expand to see more):
+
+```
+stewards.skill_groups (
+  slug        text PRIMARY KEY,    -- 'storytelling', 'tool-use', 'voice'
+  name        text NOT NULL,
+  summary     text NOT NULL,       -- ONE line; the tier-0 default ("the engram")
+  applies_to  text,                -- agent_family glob; NULL=none
+  active      boolean NOT NULL DEFAULT true
+)
+-- stewards.skills gains:  group_slug text REFERENCES stewards.skill_groups(slug)
+```
+
+| Tier | What's in the prompt | Cost | Lever to expand |
+|------|----------------------|------|-----------------|
+| **0 — group summary** (default) | one line per applicable *group* | ~N_groups lines | `skill_group_open(slug)` |
+| **1 — skill frontmatter** (group opened) | the when-to-use line per skill *in that group* | ~N_skills_in_group lines | `skill_load(slug)` |
+| **2 — skill body** (loaded) | the full instructions | the body's tokens | `skill_unload` / `skill_group_close` |
+
+Default context cost is just the group summaries (a handful of lines) no matter how
+large the library. The model **opens a group** when a task is in its territory (now
+it sees that group's skills), then **loads** the one skill it needs. Closing a group
+or unloading a skill collapses it back. Michael's framing exactly: an unneeded group
+*is* engrammed down to its one-line summary; you can carry a lot of varied skills
+across many tiers and still pay almost nothing until you reach for them.
+
+Session state grows one table: `stewards.session_skill_groups (session_id, slug,
+opened_at)` alongside `session_skills`. `compose_system_prompt` renders tier-0 for
+all applicable groups, tier-1 for opened groups, tier-2 for loaded skills.
+
+### Where this pays off (the first groups)
+
+The richest near-term use is **persona craft**, especially the fiction/gamemaster
+personas running D&D campaigns:
+
+- **`storytelling` group** — `believable-villains` (motivation from the inside, no
+  evil-for-evil's-sake), `therefore-but-not-and-then` (causal scene-to-scene
+  momentum for a campaign), `character-voice` (distinct dialogue per NPC),
+  `emotional-resonance`, `sacrifice-and-loss`. These already exist as harness-side
+  `.claude/skills/*` — strong candidates to import as the first substrate skill
+  group (see D5).
+- **`tool-use` group** — how to use a given MCP/CLI/Docker tool well (the
+  instruction layer Michael flagged: skills teach *how to wield* a capability; the
+  grant gives the capability).
+- **`voice` group** — prose/voicing guides (e.g. a persona's house style).
+
+A gamemaster persona carries only the one-line "storytelling: narrative-craft
+skills for scenes, villains, pacing" until a scene needs a villain — then it opens
+the group and loads `believable-villains` for that beat.
+
 ### 2. The catalog — cheap, always visible
 
 `compose_system_prompt` gains a **SKILLS** section listing the skills whose
@@ -83,11 +138,15 @@ levers:
   context space" real.
 - `skill_unload(slug)` — deactivate; body dropped from the next compose.
 
+Plus the **group** levers (tier-0 ↔ tier-1, §1b):
+- `skill_group_open(slug)` — reveal a group's skills' frontmatter.
+- `skill_group_close(slug)` — collapse the group back to its one-line summary.
+
 Session state mirrors `session_facets`:
 
 ```
-stewards.session_skills (session_id text, slug text, loaded_at timestamptz,
-                         PRIMARY KEY (session_id, slug))
+stewards.session_skills        (session_id text, slug text, loaded_at  timestamptz, PRIMARY KEY (session_id, slug))
+stewards.session_skill_groups  (session_id text, slug text, opened_at  timestamptz, PRIMARY KEY (session_id, slug))
 ```
 
 ### 4. Body injection — the context-lever pattern
@@ -151,10 +210,14 @@ frees spent message-context also reclaims spent skill-context. (P2; the manual
 
 ## Phasing
 
-- **P0 — the lever works.** `stewards.skills` + `session_skills` tables; the SKILLS
-  catalog in `compose_system_prompt`; `skill_load`/`skill_unload` tools + the
-  budget gate; body injection. Seed 1–2 skills, prove an agent loads → uses →
-  unloads, with the token delta visible. virgin-smoke assertion.
+- **P0 — the lever + the tiers work.** `stewards.skills` + `skill_groups` +
+  `session_skills` + `session_skill_groups` tables; the 3-tier SKILLS catalog in
+  `compose_system_prompt` (group summaries → opened-group frontmatter → loaded
+  bodies); `skill_group_open/close` + `skill_load/unload` tools + the budget gate.
+  Seed one group (e.g. `storytelling` with `believable-villains` +
+  `therefore-but-not-and-then`), prove a gamemaster persona opens the group →
+  loads a skill → uses it → collapses, with the token delta visible at each tier.
+  virgin-smoke assertion.
 - **P1 — authoring + import.** `SKILL.md` frontmatter format + `stewards-cli import
   --source skill:`. Migrate a real procedure (e.g. source-verification) to a skill.
 - **P2 — judge integration.** compact_context can unload stale skills; optional TTL.
@@ -168,3 +231,8 @@ frees spent message-context also reclaims spent skill-context. (P2; the manual
 - **D3** — budget-gate behavior: refuse (recommended) vs. evict-oldest.
 - **D4** — humans-author-only for P0 (no persona `skill_propose` yet)?
 - **D5** — shared authoring format with the harness-side `.claude/.github` skills, or substrate-only?
+- **D6** — skill **groups + the 3-tier catalog** (§1b): in P0 (it's the whole
+  "save more context" value, and the engram pattern is already proven in the
+  context engine), or flat skills in P0 and groups in P1? **Lean:** groups in P0 —
+  the tiering is cheap to build on top of the lever and is the reason the library
+  can grow without taxing every prompt.
