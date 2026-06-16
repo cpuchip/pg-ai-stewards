@@ -234,6 +234,46 @@ frees spent message-context also reclaims spent skill-context. (P2; the manual
   (write once, target either runtime).
 - **D6** ✓ **groups + the 3-tier catalog ship in P0** (it's the context-savings value).
 
+## BUILT 2026-06-16 (P0 shipped, clean-image-proven)
+
+**Council-moment finding (the proposal assumed too little already existed):** the
+core ALREADY had a flat skills surface — `stewards.skills` (family/model_match/
+**description**/**body**/license, in schema.rs), a `skill_permission` gate, and a
+`<available_skills>` catalog rendered by `compose_system_prompt` (09). It even
+ships two real skills (`reference-linking`, `source-verification`) and a one-shot
+fetch tool named `skill` (`load_skill_tool` — returns a body as the tool *result*,
+ephemeral, ungoverned). So P0 was the **delta**, not a from-scratch build:
+
+- `extension/24-skills.sql` (new): `skill_groups` table + `skills.group_family`
+  column + `session_skills` / `session_skill_groups`; `render_skills_block` (the
+  3-tier render: tier-0 group summaries → tier-1 frontmatter → tier-2 loaded
+  bodies); the four levers `skill_group_open/close` + `skill_load/unload` (sql_fn
+  tools, `_session_id`-injected); the `skill_loaded_budget_tokens` config + the
+  **refuse-over-budget** gate; and a later-file-wins re-author of `compose_tools`
+  to surface the skill_* levers only when the agent has a skill surface (placed in
+  24 because `compose_tools` is LANGUAGE sql → it validates the `skill_groups`
+  ref at CREATE, so it can't live in 16).
+- `09-intents-covenants.sql`: the inline flat catalog → one call to
+  `render_skills_block` (late-bound forward ref, safe).
+- The persistent lever (`skill_load`, body injected into the system prompt every
+  turn until unload, budgeted) is the ratified improvement OVER the pre-existing
+  one-shot `skill` fetch; both coexist (different tool names). Whether to retire
+  the one-shot `skill`/`load_skill_tool` is a follow-up for Michael.
+
+**First group:** `overlays/skills-storytelling.sql` — `storytelling` (applies_to
+`fiction`), seeded from the harness `.claude/skills/*` (believable-villains,
+character-voice, emotional-resonance, sacrifice-and-loss, worldbuilding-fiction)
++ the new `therefore-but-not-and-then` (authored from the D&D craft study). The
+fiction agent's prompt already names these by slug, so they now resolve.
+
+**Proven:** virgin-smoke OK 9 (00→24; tiers + budget refusal, inverse incl. the
+skill-deny gate); overlay-clobber-check PASS (3 overrides / 0 clobbers); e2e on
+the `fiction` agent — 6 skills (~12k chars) collapse to ONE summary line at tier 0,
+open→frontmatter, load believable-villains→body injected (2470 tok), 2nd load→3380
+used, budget cap 100→`character-voice` refused. **Live-DB deploy batched with the
+corpus #178 core change** (one image rebake + ordered apply). P1 (stewards-cli
+import) + retire-or-keep the one-shot `skill` tool = follow-ups.
+
 **Build note:** P0 is a new core chain file (`24-skills.sql`) — tables + the four
 levers + the budget gate are clean/additive, but the catalog injection requires
 **re-authoring `compose_system_prompt`** (the presiding-render fn, 16/ct2-7e

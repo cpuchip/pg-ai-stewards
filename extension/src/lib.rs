@@ -276,6 +276,18 @@ extension_sql_file!(
     requires = ["create_reflect_steward"],
 );
 
+// 24: skills — on-demand, agent-managed instruction modules. The base skills
+// table + flat catalog already exist (schema.rs / 09); this adds the 3-tier
+// catalog (groups -> frontmatter -> loaded bodies), the load/unload/open/close
+// levers, the loaded-skill budget gate, and render_skills_block (called by
+// compose_system_prompt, late-bound). Re-authors compose_tools (later-file-wins)
+// to surface the skill_* levers, so it follows everything it reads.
+extension_sql_file!(
+    "../24-skills.sql",
+    name = "create_skills",
+    requires = ["create_reflect_watchman"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

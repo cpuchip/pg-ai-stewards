@@ -414,27 +414,13 @@ BEGIN
         v_prompt := v_prompt || E'\n\n' || v_instructions;
     END IF;
 
-    IF stewards.tool_permission(p_agent_family, 'skill') <> 'deny' THEN
-        SELECT E'\n\n<available_skills>\n' || string_agg(
-            '  <skill>' || E'\n'
-            || '    <name>' || family || '</name>' || E'\n'
-            || '    <description>' || description || '</description>' || E'\n'
-            || '  </skill>',
-            E'\n'
-            ORDER BY family
-        ) || E'\n</available_skills>'
-        INTO v_skills_block
-        FROM (
-            SELECT DISTINCT ON (family) family, description
-            FROM stewards.skills
-            WHERE active
-              AND stewards.glob_match(model_match, p_model)
-              AND stewards.skill_permission(p_agent_family, family) <> 'deny'
-            ORDER BY family, length(model_match) DESC, model_match
-        ) s;
-        IF v_skills_block IS NOT NULL THEN
-            v_prompt := v_prompt || v_skills_block;
-        END IF;
+    -- Skills — the 3-tier catalog (group summaries -> opened-group frontmatter ->
+    -- loaded bodies). Built in 24-skills.sql; the call is late-bound (plpgsql), so
+    -- the forward reference to a later chain file is safe. Returns NULL when the
+    -- agent is skill-denied or nothing is visible.
+    v_skills_block := stewards.render_skills_block(p_agent_family, p_model, p_session_id);
+    IF v_skills_block IS NOT NULL THEN
+        v_prompt := v_prompt || v_skills_block;
     END IF;
 
     -- PR.1: The Watch (echo) — the covenant speaks last as well as first.

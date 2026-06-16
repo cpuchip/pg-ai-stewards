@@ -318,4 +318,84 @@ BEGIN
     RAISE NOTICE 'OK 8: self-presiding watchman guard ships + acts (auto-pause + accounting + idempotent; inverse-proven)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→23) is sound =='
+-- ── 9. skills (24) — the 3-tier catalog ships + tiers/levers/budget work ──────
+DO $$
+DECLARE
+    v0 text; v1 text; v2 text;
+    v_tools jsonb; v_load jsonb; v_over jsonb;
+BEGIN
+    -- the surface ships: the new tables, the budget config, the four levers, the render fn
+    ASSERT (SELECT count(*) FROM information_schema.tables WHERE table_schema='stewards'
+             AND table_name IN ('skill_groups','session_skills','session_skill_groups')) = 3,
+        'the skills tables (skill_groups/session_skills/session_skill_groups) must ship';
+    ASSERT stewards.config_get_text('skill_loaded_budget_tokens','x') = '4000',
+        'the loaded-skill budget config must seed';
+    ASSERT (SELECT count(*) FROM stewards.tool_defs WHERE active AND name IN
+             ('skill_load','skill_unload','skill_group_open','skill_group_close')) = 4,
+        'the four skill levers must ship as tool_defs';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='render_skills_block'),
+        'render_skills_block must ship';
+    ASSERT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='stewards'
+                    AND table_name='skills' AND column_name='group_family'),
+        'the skills table must gain group_family';
+
+    -- an agent explicitly DENIED the 'skill' permission gets no catalog and no levers
+    -- (core ships 2 ungrouped skills — reference-linking, source-verification — so
+    -- the deny gate, not emptiness, is what hides the surface).
+    INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action)
+      VALUES ('smoke-skilldeny','skill','deny');
+    v_tools := stewards.compose_tools('smoke-skilldeny');
+    ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_tools) e WHERE e->'function'->>'name' = 'skill_load'),
+        'skill levers must be hidden for an agent denied the skill permission';
+    ASSERT stewards.render_skills_block('smoke-skilldeny','test-model','smoke-sess') IS NULL,
+        'the skills catalog must be empty for a skill-denied agent';
+    DELETE FROM stewards.agent_tool_perms WHERE agent_family='smoke-skilldeny';
+
+    -- seed a throwaway group + two grouped skills (cleaned up below)
+    INSERT INTO stewards.skill_groups (family,name,summary,applies_to)
+      VALUES ('smoke-story','Smoke Story','narrative-craft skills (smoke fixture)','smoke-skills');
+    INSERT INTO stewards.skills (family,model_match,description,body,group_family) VALUES
+      ('smoke-villains','*','antagonists with real motivation','BODY: villains want something specific and think they are right.','smoke-story'),
+      ('smoke-pacing','*','therefore/but scene momentum','BODY: connect every beat by therefore or but, never and then.','smoke-story');
+
+    -- the levers now surface for an agent the group applies to
+    v_tools := stewards.compose_tools('smoke-skills');
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v_tools) e WHERE e->'function'->>'name' = 'skill_load'),
+        'skill levers must surface once a group applies to the agent';
+
+    -- TIER 0 (nothing opened): the group summary shows; its skills stay hidden
+    v0 := stewards.render_skills_block('smoke-skills','test-model','smoke-sess');
+    ASSERT v0 LIKE '%<group name="smoke-story">%', 'tier 0: the closed group summary must render';
+    ASSERT v0 NOT LIKE '%smoke-villains%', 'tier 0: a closed group''s skills must be hidden';
+
+    -- TIER 1 (open the group): the skills'' frontmatter appears, bodies still hidden
+    PERFORM stewards.skill_group_open_tool(jsonb_build_object('_session_id','smoke-sess','group','smoke-story'));
+    v1 := stewards.render_skills_block('smoke-skills','test-model','smoke-sess');
+    ASSERT v1 LIKE '%<name>smoke-villains</name>%', 'tier 1: an opened group must list its skills'' frontmatter';
+    ASSERT v1 NOT LIKE '%BODY: villains%', 'tier 1: a skill body stays hidden until loaded';
+
+    -- TIER 2 (load one): the body appears under loaded_skills, its frontmatter drops out
+    v_load := stewards.skill_load_tool(jsonb_build_object('_session_id','smoke-sess','skill','smoke-villains'));
+    ASSERT (v_load->>'ok') = 'true', 'skill_load must succeed within budget';
+    v2 := stewards.render_skills_block('smoke-skills','test-model','smoke-sess');
+    ASSERT v2 LIKE '%<loaded_skills>%' AND v2 LIKE '%BODY: villains%', 'tier 2: a loaded skill''s body must render';
+    ASSERT v2 NOT LIKE '%<name>smoke-villains</name>%', 'tier 2: a loaded skill drops out of the frontmatter list';
+
+    -- BUDGET: tighten to 1 token → loading another body must be REFUSED (no eviction)
+    PERFORM stewards.config_set('skill_loaded_budget_tokens', '1'::jsonb, NULL);
+    v_over := stewards.skill_load_tool(jsonb_build_object('_session_id','smoke-sess','skill','smoke-pacing'));
+    ASSERT (v_over ? 'error'), 'a skill_load over budget must be refused';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.session_skills WHERE session_id='smoke-sess' AND family='smoke-pacing'),
+        'a refused load must not be recorded';
+
+    -- restore virgin state
+    PERFORM stewards.config_set('skill_loaded_budget_tokens', '4000'::jsonb, NULL);
+    DELETE FROM stewards.session_skills       WHERE session_id='smoke-sess';
+    DELETE FROM stewards.session_skill_groups WHERE session_id='smoke-sess';
+    DELETE FROM stewards.skills               WHERE group_family='smoke-story';
+    DELETE FROM stewards.skill_groups         WHERE family='smoke-story';
+    RAISE NOTICE 'OK 9: skills 3-tier catalog ships + tiers/levers/budget proven (summary -> frontmatter -> loaded body; over-budget refused)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→24) is sound =='
