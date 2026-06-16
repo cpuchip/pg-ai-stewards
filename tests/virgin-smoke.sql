@@ -514,4 +514,55 @@ BEGIN
     RAISE NOTICE 'OK 11: planner dedup — near-dup enqueue gate works (reworded gated, distinct kept) + survey carries existing_studies';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→25) is sound =='
+-- ── 12. productivity (26) — todos/goals coupled to the tag lifecycle ─────────
+DO $$
+DECLARE v_sess text := 'smoke-todo-sess'; v_r jsonb; v_agenda text; v_state text;
+BEGIN
+    -- surface ships
+    ASSERT (SELECT count(*) FROM information_schema.tables WHERE table_schema='stewards'
+             AND table_name IN ('session_todos','session_goals')) = 2,
+        'the todo/goal tables must ship';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='render_agenda'), 'render_agenda must ship';
+    ASSERT (SELECT count(*) FROM stewards.tool_defs WHERE active AND name IN
+             ('todo_add','todo_done','todo_reopen','todo_focus','todo_list','goal_set')) = 6,
+        'the 6 productivity tools must ship';
+    ASSERT stewards.config_get_text('todo_autofold_on_done','x') = 'true', 'autofold config must seed true';
+
+    -- a session + the loop: goal_set, todo_add (active + working_tag), tag a message
+    INSERT INTO stewards.sessions (id) VALUES (v_sess) ON CONFLICT DO NOTHING;
+    PERFORM stewards.goal_set_tool(jsonb_build_object('_session_id',v_sess,'goal','prove the todo loop'));
+    v_r := stewards.todo_add_tool(jsonb_build_object('_session_id',v_sess,'title','Decouple the widget'));
+    ASSERT (v_r->>'ok')='true' AND (v_r->>'slug')='decouple-the-widget', 'todo_add opens + slugifies';
+    ASSERT (SELECT working_tag FROM stewards.sessions WHERE id=v_sess) = 'todo:decouple-the-widget',
+        'the active todo sets sessions.working_tag (auto-stamp)';
+    -- simulate work done under the active todo (a message bearing its tag)
+    INSERT INTO stewards.messages (session_id, role, content, context_tags)
+    VALUES (v_sess, 'assistant', 'working the widget', ARRAY['todo:decouple-the-widget']);
+
+    -- AGENDA renders the goal + open todo
+    v_agenda := stewards.render_agenda(v_sess);
+    ASSERT v_agenda LIKE '%Goal: prove the todo loop%' AND v_agenda LIKE '%decouple-the-widget%',
+        'render_agenda must show the goal + open todo';
+
+    -- todo_done → marked done + AUTO-FOLD the tagged message (context_state→muted)
+    v_r := stewards.todo_done_tool(jsonb_build_object('_session_id',v_sess,'slug','decouple-the-widget'));
+    ASSERT (v_r->>'ok')='true' AND (v_r->>'folded')='true', 'todo_done must auto-fold';
+    ASSERT (SELECT status FROM stewards.session_todos WHERE session_id=v_sess AND slug='decouple-the-widget')='done',
+        'the todo must be marked done';
+    SELECT context_state INTO v_state FROM stewards.messages WHERE session_id=v_sess AND context_tags @> ARRAY['todo:decouple-the-widget'];
+    ASSERT v_state = 'muted', format('the tagged message must be folded (muted) after todo_done, got %s', v_state);
+
+    -- todo_reopen → restores the message to verbatim
+    PERFORM stewards.todo_reopen_tool(jsonb_build_object('_session_id',v_sess,'slug','decouple-the-widget'));
+    SELECT context_state INTO v_state FROM stewards.messages WHERE session_id=v_sess AND context_tags @> ARRAY['todo:decouple-the-widget'];
+    ASSERT v_state = 'verbatim', format('todo_reopen must restore the message to verbatim, got %s', v_state);
+
+    -- restore virgin state
+    DELETE FROM stewards.messages WHERE session_id=v_sess;
+    DELETE FROM stewards.session_todos WHERE session_id=v_sess;
+    DELETE FROM stewards.session_goals WHERE session_id=v_sess;
+    DELETE FROM stewards.sessions WHERE id=v_sess;
+    RAISE NOTICE 'OK 12: productivity surface — goal_set + todo_add (active+tag) + auto-fold on done + reopen restore (todo<->tag coupling proven)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→26) is sound =='

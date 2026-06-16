@@ -56,6 +56,30 @@ This is different from `compact_context` (a between-turn *judge* that compresses
 - **P1** — focus mode + reminders + the done-log roll-up.
 - **P2** — promote-todo-to-work_item; inter-agent handoff.
 
+## RATIFIED + BUILT 2026-06-16 (P0 shipped, deployed live)
+
+Council/ask-tool ratify: **auto-fold ON** by default (reversible/togglable);
+**single active todo** (auto-stamp; `todo_focus` to switch); todos **separate from
+work_items** in P0 (promote = later); granted to **all context-enabled agents**.
+Storage = a purpose-built `session_todos` + `session_goals` (the `session_facets`
+rec was wrong — that table is persona/room scoping, not a notes store).
+
+**Built (`extension/26-productivity.sql`):** the tables + `todo_autofold_on_done`
+config + `todo_slugify` + the 6 levers (`todo_add/done/reopen/focus/list`,
+`goal_set`) — each wrapping the existing working-tag tools (`todo_add` →
+`context_set_tag`; `todo_done` → `context_mute_tag`; `todo_reopen` →
+`context_expand_tag`) so the fold machinery is reused, not rebuilt — + `render_agenda`
+(the AGENDA block) + the tool_defs. `compose_tools` re-authored (later-file-wins,
+carrying 24's body) to surface `todo_/goal_` on `context_tools_on` agents;
+`compose_system_prompt` (09) calls `render_agenda` (late-bound). The deny-* agents
+get `todo_*`/`goal_*` grants via the `context-tools-on` overlay.
+
+**Proven:** virgin-smoke **OK 12** (00→26: goal_set + todo_add sets the active
+working_tag, a tagged message auto-folds to `muted` on `todo_done`, `todo_reopen`
+restores it to `verbatim`); clobber-check PASS 3/0; deployed live — research +
+gamemaster + librarian see the tools, the judge + `propose_prompt_change` stay off.
+P1 (focus mode, reminders, done-log) + P2 (promote-to-work_item, handoff) remain.
+
 ## Open questions for council
 1. Storage: structured `session_facets` (a) vs a `session_todos` table (b)? (Lean: a, then b if needed.)
 2. Auto-fold default on or off? (Michael: "if wanted" → on, config-togglable.)

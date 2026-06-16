@@ -299,6 +299,16 @@ extension_sql_file!(
     requires = ["create_skills"],
 );
 
+// 26: agent productivity surface — todos + goals coupled to the working-tag
+// lifecycle (todo_done auto-folds via context_mute_tag). The usage-driver for
+// the context engine. Re-authors compose_tools (later-file-wins) to surface
+// todo_/goal_ levers; compose_system_prompt (09) calls render_agenda (late-bound).
+extension_sql_file!(
+    "../26-productivity.sql",
+    name = "create_productivity",
+    requires = ["create_corpus"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

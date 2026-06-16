@@ -423,6 +423,16 @@ BEGIN
         v_prompt := v_prompt || v_skills_block;
     END IF;
 
+    -- Agenda — the session's goal + open todos (26-productivity). Late-bound
+    -- forward ref (plpgsql) to a later chain file, like render_skills_block.
+    DECLARE v_agenda text;
+    BEGIN
+        v_agenda := stewards.render_agenda(p_session_id);
+        IF v_agenda IS NOT NULL THEN
+            v_prompt := v_prompt || v_agenda;
+        END IF;
+    END;
+
     -- PR.1: The Watch (echo) — the covenant speaks last as well as first.
     IF v_covenant.id IS NOT NULL THEN
         SELECT string_agg(c->>'key', ', ') INTO v_echo_keys
