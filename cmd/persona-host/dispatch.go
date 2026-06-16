@@ -132,6 +132,18 @@ func (c *Cognition) SetSessionFacets(ctx context.Context, sessionID, persona, ro
 // reply (which may be SilenceToken). The session already holds the persona's
 // character + prior turns, so the question is just the new message.
 func (c *Cognition) ConsultTurn(ctx context.Context, sessionID, question string) (answer string, err error) {
+	// A tool-using turn spans several work_queue items (chat -> tool_dispatch ->
+	// chat -> ...). The wq returned by consult_subagent_dispatch completes after
+	// the FIRST model call (often a tool call), NOT the final answer — so its
+	// "done" is not the turn's done. If we read the latest assistant message at
+	// that moment we get the PRIOR turn's reply (one turn behind). Instead:
+	// baseline the newest assistant id before dispatching, then wait for a NEW
+	// non-empty assistant message to land — that is unambiguously this turn's.
+	baseline, err := c.maxAssistantID(ctx, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("baseline session %s: %w", sessionID, err)
+	}
+
 	var chatWQ int64
 	if err = c.pool.QueryRow(ctx,
 		`SELECT stewards.consult_subagent_dispatch($1, $2)`, sessionID, question,
@@ -141,25 +153,60 @@ func (c *Cognition) ConsultTurn(ctx context.Context, sessionID, question string)
 
 	deadline := time.Now().Add(consultMaxWait)
 	for {
-		var status string
-		if err = c.pool.QueryRow(ctx,
-			`SELECT status FROM stewards.work_queue WHERE id = $1`, chatWQ,
-		).Scan(&status); err != nil {
-			return "", fmt.Errorf("poll consult wq=%d: %w", chatWQ, err)
+		content, id, e := c.assistantSince(ctx, sessionID, baseline)
+		if e != nil {
+			return "", e
 		}
-		if status == "done" || status == "error" {
-			if status == "error" {
-				return "", fmt.Errorf("consult session %s errored (wq=%d)", sessionID, chatWQ)
-			}
-			return c.lastAssistant(ctx, sessionID)
+		if id > baseline {
+			return content, nil // this turn's reply has landed
+		}
+		// Liveness: surface a hard dispatch error rather than waiting out the deadline.
+		var status string
+		if e = c.pool.QueryRow(ctx,
+			`SELECT status FROM stewards.work_queue WHERE id = $1`, chatWQ,
+		).Scan(&status); e == nil && status == "error" {
+			return "", fmt.Errorf("consult session %s errored (wq=%d)", sessionID, chatWQ)
 		}
 		if time.Now().After(deadline) {
-			return "", fmt.Errorf("consult session %s timed out (wq=%d status=%s)", sessionID, chatWQ, status)
+			return "", fmt.Errorf("consult session %s timed out (wq=%d)", sessionID, chatWQ)
 		}
 		if err = sleepCtx(ctx, consultPollInterval); err != nil {
 			return "", err
 		}
 	}
+}
+
+// maxAssistantID returns the id of the newest assistant message in a session
+// (0 if none) — the baseline that lets ConsultTurn tell this turn's reply from
+// the prior turn's.
+func (c *Cognition) maxAssistantID(ctx context.Context, sessionID string) (int64, error) {
+	var id int64
+	err := c.pool.QueryRow(ctx, `
+		SELECT COALESCE(max(id), 0) FROM stewards.messages
+		 WHERE session_id = $1 AND role = 'assistant'`, sessionID).Scan(&id)
+	if err != nil {
+		return 0, fmt.Errorf("max assistant id for %s: %w", sessionID, err)
+	}
+	return id, nil
+}
+
+// assistantSince returns the newest non-empty assistant message strictly after
+// baseline (content, id). When nothing new has landed yet it returns id ==
+// baseline so the caller keeps polling.
+func (c *Cognition) assistantSince(ctx context.Context, sessionID string, baseline int64) (string, int64, error) {
+	var content string
+	var id int64
+	err := c.pool.QueryRow(ctx, `
+		SELECT content, id FROM stewards.messages
+		 WHERE session_id = $1 AND role = 'assistant' AND COALESCE(content,'') <> '' AND id > $2
+		 ORDER BY id DESC LIMIT 1`, sessionID, baseline).Scan(&content, &id)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", baseline, nil // nothing new yet
+		}
+		return "", 0, fmt.Errorf("read reply for %s: %w", sessionID, err)
+	}
+	return content, id, nil
 }
 
 // lastAssistant returns the newest non-empty assistant message in a session.
