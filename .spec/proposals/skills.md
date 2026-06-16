@@ -224,6 +224,24 @@ frees spent message-context also reclaims spent skill-context. (P2; the manual
 - **P3 — `.stewards/` succession.** If per-model agent tuning is still alive,
   reframe `.stewards/` as the skills-authoring dir; otherwise archive it.
 
+## RATIFIED 2026-06-16 (Michael, via ask-tool)
+
+- **D1** ✓ the shape (registry + catalog + load/unload + groups/tiers).
+- **D2** ✓ manual on/off in P0; judge-driven unload P2.
+- **D3** ✓ budget gate **refuses** a new load over budget (no surprise eviction).
+- **D4** ✓ humans author skills in P0.
+- **D5** ✓ shared `SKILL.md` format with the harness-side `.claude/.github` skills
+  (write once, target either runtime).
+- **D6** ✓ **groups + the 3-tier catalog ship in P0** (it's the context-savings value).
+
+**Build note:** P0 is a new core chain file (`24-skills.sql`) — tables + the four
+levers + the budget gate are clean/additive, but the catalog injection requires
+**re-authoring `compose_system_prompt`** (the presiding-render fn, 16/ct2-7e
+final) to add the SKILLS section (group summaries → opened-group frontmatter →
+loaded bodies). That's a careful later-file-wins re-author + rebuild + virgin-smoke
++ the overlay-clobber-check — same discipline as 23-watchman. First group
+(storytelling) = operator overlay, seeded from the D&D-transcript study.
+
 ## Decisions needed from Michael
 
 - **D1** — ratify the shape (registry + catalog + load/unload lever + body inject).
