@@ -556,7 +556,8 @@ Optional keys (omit if not applicable):
 ## HARD CONSTRAINTS
 
 - **Output ONLY the JSON array.** No prose intro/outro. No markdown fences. Just `[ ... ]`.
-- **Maximum 5 proposed work_items.** Quality over quantity. Pick the ones that matter.
+- **Maximum 3 proposed work_items — fewer, deeper, higher-leverage.** A short list of substantial, well-scoped next-steps beats a long shallow one. Pick only the ones that genuinely move the intent forward; it is fine to propose just one, or none if nothing new is warranted.
+- **Do NOT re-propose work that already exists.** The plan above was briefed (council survey) on what is already proposed, in flight, or done — and on the existing studies in the pool and what they cover. Propose only genuinely NEW questions, or a *deeper* extension of an existing line (and say which it extends). A reworded version of an existing proposal/study will be rejected by the substrate's duplicate gate and wastes the slot.
 - **Each work_item must be ≤2hr scope.** "Build the substrate" is not a work_item; "Add origin column to work_items" is.
 - **slugs must be kebab-case** matching `^[a-z0-9-]+$`, prefixed with the parent slug or project where possible (e.g., `museum-exhibit-budget-q2`).
 - **No external tools.** This stage is pure structured output.
@@ -1054,9 +1055,48 @@ ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
     produces_maturity = EXCLUDED.produces_maturity, notes = EXCLUDED.notes;
 
 -- =====================================================================
+-- binding_question_overlap — a cheap, generic near-duplicate signal: the
+-- Jaccard overlap of the two questions' SIGNIFICANT words (lowercased, length
+-- >= 4, minus a small generic-English stoplist). No pg_trgm / no extension dep
+-- (keeps the vector-only invariant). 0 = disjoint, 1 = same word set. The
+-- council survey is the soft nudge; the enqueue gate (below) uses this as the
+-- hard floor so a cold-start planner cannot re-enqueue a reworded duplicate.
+-- =====================================================================
+CREATE OR REPLACE FUNCTION stewards.binding_question_overlap(p_a text, p_b text)
+RETURNS numeric LANGUAGE sql IMMUTABLE AS $bq$
+    WITH stop(w) AS (VALUES
+        ('what'),('does'),('what''s'),('with'),('that'),('this'),('their'),('they'),
+        ('from'),('have'),('about'),('would'),('which'),('when'),('where'),('there'),
+        ('these'),('those'),('into'),('over'),('your'),('been'),('such'),('than'),
+        ('then'),('them'),('also'),('most'),('more'),('only'),('some'),('upon'),
+        ('across'),('based'),('specific'),('specifically'),('public'),('publicly'),
+        ('include'),('including')),
+    -- strip a trailing 's' (cheap singular/plural fold: complaints->complaint,
+    -- reviews->review, customers->customer) so the common drift still matches.
+    wa AS (SELECT DISTINCT regexp_replace(t, 's$', '') AS t
+             FROM regexp_split_to_table(lower(coalesce(p_a,'')), '[^a-z0-9'']+') t
+            WHERE length(t) >= 4 AND t NOT IN (SELECT w FROM stop)),
+    wb AS (SELECT DISTINCT regexp_replace(t, 's$', '') AS t
+             FROM regexp_split_to_table(lower(coalesce(p_b,'')), '[^a-z0-9'']+') t
+            WHERE length(t) >= 4 AND t NOT IN (SELECT w FROM stop)),
+    u  AS (SELECT t FROM wa UNION SELECT t FROM wb),
+    i  AS (SELECT t FROM wa INTERSECT SELECT t FROM wb)
+    SELECT CASE WHEN (SELECT count(*) FROM u) = 0 THEN 0
+                ELSE round((SELECT count(*) FROM i)::numeric / (SELECT count(*) FROM u), 3) END
+$bq$;
+COMMENT ON FUNCTION stewards.binding_question_overlap(text, text) IS
+'Jaccard overlap of two questions'' significant words (len>=4, minus a generic stoplist). The deterministic near-duplicate signal the enqueue gate uses so reworded re-proposals are dropped regardless of model behavior. Generic — domain words are kept as signal; the distinctive nouns dominate.';
+
+-- the gate''s threshold — operator-tunable without a rebuild (the watchman-guard pattern).
+SELECT stewards.config_set('reflect_dedup_overlap_threshold', '0.5'::jsonb,
+    'enqueue_proposed_work_items drops a proposed work_item whose binding_question has >= this Jaccard word-overlap (significant words, singular/plural-folded) with an existing non-terminal proposal for the same intent. 0.5 default = catches verbatim re-proposals AND moderate rewordings (a real reworded pair scores ~0.57) while sparing genuinely distinct angles (~0.1-0.3). Higher = stricter (fewer drops); lower = more aggressive; 0 disables.');
+
+-- =====================================================================
 -- enqueue_proposed_work_items (h3-5) — called by 08's on_maturity_verified
 -- planning branch (wrapped forward ref). Reads a planning work_item's
 -- propose_work.output JSON array; inserts each proposed work_item.
+-- 2026-06-16: + a deterministic near-duplicate gate (binding_question_overlap)
+-- so the planner can't re-enqueue work already pending/in-flight for the intent.
 -- =====================================================================
 CREATE OR REPLACE FUNCTION stewards.enqueue_proposed_work_items(p_work_item_id uuid)
 RETURNS int
@@ -1079,12 +1119,16 @@ DECLARE
     v_inserted        int := 0;
     v_skipped         int := 0;
     v_reason          text;
+    v_threshold       numeric;
+    v_dup_slug        text;
 BEGIN
     SELECT * INTO v_wi FROM stewards.work_items WHERE id = p_work_item_id;
     IF v_wi.id IS NULL THEN
         RAISE NOTICE 'enqueue_proposed_work_items: work_item % not found', p_work_item_id;
         RETURN 0;
     END IF;
+
+    v_threshold := COALESCE(NULLIF(stewards.config_get_text('reflect_dedup_overlap_threshold','0.5'),'')::numeric, 0.5);
 
     -- Only planning-family work_items emit proposed work.
     IF v_wi.pipeline_family <> 'planning' THEN
@@ -1161,6 +1205,29 @@ BEGIN
             RAISE NOTICE 'enqueue_proposed_work_items: slug=% already exists, skipping', v_slug;
             v_skipped := v_skipped + 1;
             CONTINUE;
+        END IF;
+
+        -- Near-duplicate gate (2026-06-16): drop a proposal that overlaps an
+        -- existing NON-TERMINAL proposal for the same intent above the threshold.
+        -- Exact-slug above only catches identical slugs; this catches reworded
+        -- re-proposals (the cold-start failure mode) — deterministic, not the
+        -- planner's goodwill. threshold=0 disables it.
+        IF v_threshold > 0 THEN
+            SELECT w.slug INTO v_dup_slug
+              FROM stewards.work_items w
+             WHERE w.intent_id = v_wi.intent_id
+               AND w.origin = 'agent_planning'
+               AND w.status IN ('pending','in_progress','awaiting_review')
+               AND w.id <> p_work_item_id
+               AND stewards.binding_question_overlap(w.input->>'binding_question', v_binding) >= v_threshold
+             ORDER BY w.created_at DESC
+             LIMIT 1;
+            IF v_dup_slug IS NOT NULL THEN
+                RAISE NOTICE 'enqueue_proposed_work_items: slug=% is a near-duplicate of pending/in-flight % (overlap>=%), skipping',
+                    v_slug, v_dup_slug, v_threshold;
+                v_skipped := v_skipped + 1;
+                CONTINUE;
+            END IF;
         END IF;
 
         -- If no target pipeline resolved, park under planning with a

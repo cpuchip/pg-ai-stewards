@@ -574,11 +574,12 @@ ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, args_schema=E
 CREATE OR REPLACE FUNCTION stewards.intent_work_survey_tool(p_args jsonb)
 RETURNS text LANGUAGE plpgsql AS $FN$
 DECLARE
-    v_sess   text := p_args->>'_session_id';
-    v_intent uuid;
-    v_slug   text;
+    v_sess    text := p_args->>'_session_id';
+    v_intent  uuid;
+    v_slug    text;
+    v_project text;
 BEGIN
-    SELECT w.intent_id, i.slug INTO v_intent, v_slug
+    SELECT w.intent_id, i.slug, w.project_association INTO v_intent, v_slug, v_project
       FROM stewards.work_items w JOIN stewards.intents i ON i.id = w.intent_id
      WHERE v_sess = ANY(w.session_ids) ORDER BY w.id DESC LIMIT 1;
     IF v_intent IS NULL THEN
@@ -604,14 +605,26 @@ BEGIN
               FROM (SELECT slug, maturity, updated_at FROM stewards.work_items
                      WHERE intent_id = v_intent AND status = 'completed'
                      ORDER BY updated_at DESC LIMIT 15) d),
-        'note', 'COUNCIL MOMENT — these are already proposed / running / done for this intent (slugs are your provenance). Do NOT re-propose any of them. Propose only genuinely NEW next-steps, or explicitly refine/extend an existing one by citing its slug. Cold starts tend to duplicate; this is how you avoid it.'
+        -- the actual knowledge already in the pool (this project + its neighbors),
+        -- with a gist of each — so the planner reasons over what we KNOW, not just
+        -- slugs, and proposes genuinely new/deeper work instead of re-asking.
+        'existing_studies', (
+            SELECT COALESCE(jsonb_agg(jsonb_build_object(
+                       'slug', slug, 'project', project_association, 'title', title,
+                       'gist', left(regexp_replace(coalesce(body,''), '\s+', ' ', 'g'), 220)
+                     ) ORDER BY updated_at DESC), '[]'::jsonb)
+              FROM (SELECT slug, project_association, title, body, updated_at
+                      FROM stewards.docs
+                     WHERE project_association = ANY(stewards.project_neighbors(COALESCE(v_project, v_slug)))
+                     ORDER BY updated_at DESC LIMIT 20) p),
+        'note', 'COUNCIL MOMENT — already_proposed/in_flight/recently_done are work for this intent (slugs are your provenance); existing_studies is what the pool already KNOWS (this project + its neighbors), with a gist of each. Do NOT re-propose any of them, and do NOT re-ask a question an existing study already answers. Read the gists; propose only genuinely NEW next-steps or a deeper extension of an existing line (cite its slug). Cold starts tend to duplicate; this is how you avoid it.'
     )::text;
 END $FN$;
 
 INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, active)
 VALUES (
   'intent_work_survey',
-  'Call this FIRST, before proposing anything. Returns what is already proposed (pending), in flight, and recently done for this intent — with slugs as provenance. Use it to avoid re-proposing duplicate work (cold starts repeat themselves): propose only NEW next-steps, or refine an existing item by citing its slug. This is your council moment.',
+  'Call this FIRST, before proposing anything. Returns what is already proposed (pending), in flight, and recently done for this intent — with slugs as provenance — AND existing_studies: the knowledge already in the pool (this project + its neighbors) with a gist of each. Use it to avoid re-proposing duplicate work and re-asking answered questions (cold starts repeat themselves): read the gists, then propose only NEW next-steps or a deeper extension of an existing line (cite its slug). This is your council moment.',
   '{"type":"object","properties":{}}'::jsonb,
   '{"kind":"sql_fn","schema":"stewards","name":"intent_work_survey_tool"}'::jsonb, true)
 ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, args_schema=EXCLUDED.args_schema,

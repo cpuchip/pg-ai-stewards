@@ -459,4 +459,54 @@ BEGIN
     RAISE NOTICE 'OK 10: corpus pool-publish decoupled (project-tagged verified pools w/o a file) + intent→project fill trigger (FK-safe)';
 END $$;
 
+-- ── 11. planner dedup — the near-duplicate enqueue gate + survey studies ─────
+DO $$
+DECLARE
+    v_intent uuid; v_ex uuid; v_pl uuid;
+    v_dup_q  text := 'What are the top customer complaint categories in the product BBB profile';
+    v_diff_q text := 'What do third party benchmarks reveal about product camera video latency';
+    v_existing_q text := 'What are the most frequent customer complaints about the product on the BBB';
+BEGIN
+    -- the helper + the tunable threshold ship
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='binding_question_overlap'),
+        'binding_question_overlap must ship';
+    ASSERT stewards.config_get_text('reflect_dedup_overlap_threshold','x') = '0.5',
+        'the dedup threshold config must seed at 0.5';
+    -- the metric: a reworded near-duplicate scores high; a distinct topic scores low
+    ASSERT stewards.binding_question_overlap(v_existing_q, v_dup_q) >= 0.5,
+        format('a reworded near-duplicate must score >= 0.5, got %s', stewards.binding_question_overlap(v_existing_q, v_dup_q));
+    ASSERT stewards.binding_question_overlap(v_existing_q, v_diff_q) < 0.5,
+        format('a distinct topic must score < 0.5, got %s', stewards.binding_question_overlap(v_existing_q, v_diff_q));
+
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug='default';
+
+    -- an existing PENDING proposal for the intent
+    v_ex := stewards.work_item_create('smoke-pipe',
+              jsonb_build_object('binding_question', v_existing_q), 'dq-existing-bbb','tester',NULL,v_intent);
+    UPDATE stewards.work_items SET origin='agent_planning', status='pending' WHERE id=v_ex;
+
+    -- a planning run proposing [near-duplicate, distinct]
+    v_pl := stewards.work_item_create('smoke-pipe', '{"binding_question":"plan dq"}'::jsonb,'dq-planner','tester',NULL,v_intent);
+    UPDATE stewards.work_items
+       SET pipeline_family='planning',
+           stage_results = jsonb_build_object('propose_work', jsonb_build_object('output',
+             format('[{"slug":"dq-bbb-categories","binding_question":"%s","pipeline_family_hint":"research-write","rationale":"check the bbb categories"},{"slug":"dq-camera-latency","binding_question":"%s","pipeline_family_hint":"research-write","rationale":"benchmark camera latency"}]',
+                    v_dup_q, v_diff_q)))
+     WHERE id=v_pl;
+    PERFORM stewards.enqueue_proposed_work_items(v_pl);
+
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.work_items WHERE slug='dq-bbb-categories'),
+        'the near-duplicate proposal must be gated (not enqueued)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.work_items WHERE slug='dq-camera-latency'),
+        'the distinct proposal must be enqueued';
+
+    -- the survey now carries existing_studies (the pool gists) for the planner
+    ASSERT (stewards.intent_work_survey_tool(jsonb_build_object('intent','default'))::jsonb ? 'existing_studies'),
+        'intent_work_survey must surface existing_studies';
+
+    -- restore virgin state
+    DELETE FROM stewards.work_items WHERE slug IN ('dq-existing-bbb','dq-planner','dq-camera-latency');
+    RAISE NOTICE 'OK 11: planner dedup — near-dup enqueue gate works (reworded gated, distinct kept) + survey carries existing_studies';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→25) is sound =='
