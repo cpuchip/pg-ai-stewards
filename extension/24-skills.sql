@@ -64,6 +64,18 @@ CREATE TABLE IF NOT EXISTS stewards.session_skills (
 COMMENT ON TABLE stewards.session_skills IS
 'Per-session loaded skills (tier 2). A row means the skill body is injected into compose_system_prompt for this session. Fully reversible (skill_unload) — a loaded skill is conceptually a pinned context block; unloading is muting it.';
 
+-- group_applies — does a skill group's applies_to (a comma-separated list of
+-- agent_family globs) match this agent? Lets a group target more than one family
+-- (e.g. 'fiction,gamemaster') while a single value with no comma still works.
+CREATE OR REPLACE FUNCTION stewards.group_applies(p_applies_to text, p_agent_family text)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+    SELECT p_applies_to IS NOT NULL AND EXISTS (
+        SELECT 1 FROM regexp_split_to_table(p_applies_to, ',') pat
+         WHERE stewards.glob_match(btrim(pat), p_agent_family))
+$$;
+COMMENT ON FUNCTION stewards.group_applies(text, text) IS
+'A skill group''s applies_to is a comma-separated list of agent_family globs; this returns true if ANY matches p_agent_family. One value with no comma behaves like a single glob (backward compatible).';
+
 -- =====================================================================
 -- render_skills_block(agent, model, session) — the 3-tier SKILLS section
 -- appended by compose_system_prompt (09). Returns NULL when the agent is
@@ -136,8 +148,7 @@ BEGIN
     INTO v_summaries
     FROM stewards.skill_groups g
     WHERE g.active
-      AND g.applies_to IS NOT NULL
-      AND stewards.glob_match(g.applies_to, p_agent_family)
+      AND stewards.group_applies(g.applies_to, p_agent_family)
       AND NOT EXISTS (SELECT 1 FROM stewards.session_skill_groups sg
                        WHERE sg.session_id = p_session_id AND sg.group_family = g.family)
       AND EXISTS (
@@ -317,8 +328,7 @@ RETURNS jsonb LANGUAGE sql STABLE AS $function$
                                  WHERE sk.active AND sk.group_family IS NULL
                                    AND stewards.skill_permission(p_agent_family, sk.family) <> 'deny')
                      OR EXISTS (SELECT 1 FROM stewards.skill_groups g
-                                 WHERE g.active AND g.applies_to IS NOT NULL
-                                   AND stewards.glob_match(g.applies_to, p_agent_family))
+                                 WHERE g.active AND stewards.group_applies(g.applies_to, p_agent_family))
                    )
             ELSE true
           END

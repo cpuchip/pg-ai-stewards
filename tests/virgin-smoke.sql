@@ -339,6 +339,11 @@ BEGIN
     ASSERT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='stewards'
                     AND table_name='skills' AND column_name='group_family'),
         'the skills table must gain group_family';
+    -- a group's applies_to is a comma-separated list of family globs (multi-family)
+    ASSERT stewards.group_applies('fiction,gamemaster','gamemaster')
+       AND stewards.group_applies('fiction,gamemaster','fiction')
+       AND NOT stewards.group_applies('fiction,gamemaster','librarian'),
+        'group_applies must match any family in the comma list and reject others';
 
     -- an agent explicitly DENIED the 'skill' permission gets no catalog and no levers
     -- (core ships 2 ungrouped skills — reference-linking, source-verification — so
