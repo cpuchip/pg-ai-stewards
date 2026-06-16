@@ -1,7 +1,7 @@
 -- =====================================================================
 -- 25-corpus.sql — intent→project mapping so every loop compounds a pool
 -- =====================================================================
--- The reflect-steward (work-corpus) compounds: its verified findings publish to the
+-- The reflect-steward compounds: its verified findings publish to the
 -- searchable docs pool, deduped + surveyed + read back scoped to a project.
 -- The digest loops (book-study, video-study, general-research) reach
 -- maturity=verified but their work_items are NOT project-tagged — work_item_create

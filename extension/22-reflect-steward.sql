@@ -397,7 +397,7 @@ $func$;
 -- =====================================================================
 CREATE TABLE IF NOT EXISTS stewards.intent_source_ledger (
     intent_slug  text NOT NULL,
-    source_key   text NOT NULL,   -- normalized source/query id: a URL, "bbb-complaints", "query:work-corpus billing"
+    source_key   text NOT NULL,   -- normalized source/query id: a URL, "bbb-complaints", "query:product billing"
     gathered_at  timestamptz NOT NULL DEFAULT now(),
     finding      text,            -- one-line gist (so a skip still informs the plan)
     doc_slug     text,            -- the doc the finding was published into
