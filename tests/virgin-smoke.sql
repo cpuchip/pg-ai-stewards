@@ -398,4 +398,65 @@ BEGIN
     RAISE NOTICE 'OK 9: skills 3-tier catalog ships + tiers/levers/budget proven (summary -> frontmatter -> loaded body; over-budget refused)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→24) is sound =='
+-- ── 10. corpus (25) — pool-publish decoupled from file-materialize + the map ──
+DO $$
+DECLARE
+    v_intent uuid; v_wid uuid; v_wid2 uuid; v_proj text; v_pooled int;
+BEGIN
+    -- the machinery ships
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='intent_project_map'),
+        'intent_project_map must ship';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='fill_project_association'),
+        'fill_project_association must ship';
+    ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='work_items_fill_project'),
+        'the BEFORE-INSERT fill trigger must be installed';
+    -- core seeds an EMPTY map (the operator overlay fills it)
+    ASSERT (SELECT count(*) FROM stewards.intent_project_map) = 0,
+        'core must seed no intent→project mappings (overlay data)';
+
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug='default';
+    INSERT INTO stewards.projects (slug, name) VALUES ('smoke-corpus','Smoke Corpus') ON CONFLICT DO NOTHING;
+    -- a digest-style pipeline: auto_materialize OFF, no file_destination (writes its
+    -- own file via fs tools in real life) — the case that never pooled before.
+    INSERT INTO stewards.pipelines (family, description, stages, sabbath_enabled, atonement_enabled,
+        file_destination_template, file_content_jsonpath, maturity_ladder, auto_materialize_on_verified, metadata)
+    VALUES ('smoke-digest','virgin smoke digest',
+      '[{"name":"digest","next":null,"agent_family":"smoke","auto_advance":false,"input_template":"{{input.binding_question}}"}]'::jsonb,
+      false,false,NULL,NULL,'["raw","verified"]'::jsonb,false,'{}'::jsonb)
+    ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages, auto_materialize_on_verified=false;
+
+    -- TRIGGER: a work_item under a mapped intent (project exists) gets project-tagged
+    INSERT INTO stewards.intent_project_map (intent_slug, project_association) VALUES ('default','smoke-corpus');
+    v_wid := stewards.work_item_create('smoke-digest','{"binding_question":"corpus q"}'::jsonb,'smoke-corpus-wi','tester',NULL,v_intent);
+    SELECT project_association INTO v_proj FROM stewards.work_items WHERE id=v_wid;
+    ASSERT v_proj = 'smoke-corpus',
+        format('the fill trigger must tag a mapped intent''s work_item with its project, got %s', v_proj);
+
+    -- DECOUPLE: this work_item has NO file_destination + auto_materialize OFF; flipping
+    -- it to verified must STILL publish to the docs pool (the corpus-treatment fix).
+    UPDATE stewards.work_items
+       SET stage_results = '{"digest":{"output":"DIGEST: corpus body with a [ref](https://example.com)."}}'::jsonb
+     WHERE id=v_wid;
+    UPDATE stewards.work_items SET maturity='verified' WHERE id=v_wid;
+    SELECT count(*) INTO v_pooled FROM stewards.docs WHERE slug='smoke-corpus-wi' AND project_association='smoke-corpus';
+    ASSERT v_pooled = 1,
+        'a verified, project-tagged work_item with NO file_destination must still publish to the pool (decoupled)';
+
+    -- FK-GUARD: a map row pointing at a NON-existent project must not break inserts
+    UPDATE stewards.intent_project_map SET project_association='no-such-project' WHERE intent_slug='default';
+    v_wid2 := stewards.work_item_create('smoke-digest','{"binding_question":"q2"}'::jsonb,'smoke-corpus-wi2','tester',NULL,v_intent);
+    SELECT project_association INTO v_proj FROM stewards.work_items WHERE id=v_wid2;
+    ASSERT v_proj IS NULL,
+        'the fill trigger must NOT set a project that does not exist (FK-safe)';
+
+    -- restore virgin state
+    DELETE FROM stewards.docs WHERE slug='smoke-corpus-wi';
+    DELETE FROM stewards.work_items WHERE id IN (v_wid, v_wid2);
+    DELETE FROM stewards.intent_project_map WHERE intent_slug='default';
+    DELETE FROM stewards.pipelines WHERE family='smoke-digest';
+    DELETE FROM stewards.projects WHERE slug='smoke-corpus';
+    RAISE NOTICE 'OK 10: corpus pool-publish decoupled (project-tagged verified pools w/o a file) + intent→project fill trigger (FK-safe)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→25) is sound =='

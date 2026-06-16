@@ -1031,6 +1031,7 @@ DECLARE
     v_agent_ok      boolean;
     v_spawn_n       int;
     v_doc_slug      text;
+    v_content       text;
 BEGIN
     IF NEW.maturity <> 'verified' OR OLD.maturity = 'verified' THEN
         RETURN NEW;
@@ -1109,34 +1110,44 @@ BEGIN
             EXCEPTION WHEN OTHERS THEN
                 RAISE NOTICE 'on_maturity_verified: enqueue_work_item_file failed: %', SQLERRM;
             END;
+        END IF;
+    END IF;
 
-            -- Also publish the finding to the searchable docs pool (not just a
-            -- file): the digesters do both, but auto_materialize pipelines only
-            -- wrote the file — so the knowledge pool never compounded. import_doc
-            -- is idempotent by slug; we then tag it with the work_item's project
-            -- so pool_search/doc_search (and the next cycle) can find it.
-            BEGIN
+    -- Pool-publish — DECOUPLED from file-materialize (2026-06-16, corpus treatment).
+    -- Publish a verified finding to the searchable docs pool whether or not a file
+    -- was written. The digest loops (book/video/news) write their own files via fs
+    -- tools (auto_materialize off, no file_destination) — so the pool never
+    -- compounded for them. Gate on project_association (filled by the intent->
+    -- project trigger in 25-corpus) so any project-tagged verified work pools; the
+    -- auto_materialize+file arm preserves the prior reflect/planning pooling.
+    -- import_doc is idempotent by slug; we then tag the doc with the project.
+    IF (v_auto_mat AND NEW.file_destination IS NOT NULL)
+       OR NEW.project_association IS NOT NULL THEN
+        BEGIN
+            v_content := stewards.extract_work_item_file_content(NEW.id);
+            IF v_content IS NULL OR length(btrim(v_content)) = 0 THEN
+                RAISE NOTICE 'on_maturity_verified: no extractable content to pool for work_item=%', NEW.id;
+            ELSE
                 v_doc_slug := stewards.import_doc(
                     NEW.slug,
                     NEW.file_destination,
                     left(COALESCE(NEW.input->>'binding_question', NEW.slug), 200),
-                    stewards.extract_work_item_file_content(NEW.id),
+                    v_content,
                     jsonb_build_object('source_type', NEW.pipeline_family,
                                        'work_item_id', NEW.id::text,
                                        'intent_id', NEW.intent_id::text),
                     'doc');
-                -- import_doc returns the doc's id, not its slug — tag by the
-                -- slug we passed in (= NEW.slug) so the project FK is set.
+                -- import_doc returns the doc id; tag by the slug we passed (=NEW.slug).
                 IF v_doc_slug IS NOT NULL AND NEW.project_association IS NOT NULL THEN
                     UPDATE stewards.docs SET project_association = NEW.project_association
                      WHERE slug = NEW.slug;
                 END IF;
                 RAISE NOTICE 'on_maturity_verified: published doc % to pool (project=%) for work_item=%',
                     v_doc_slug, NEW.project_association, NEW.id;
-            EXCEPTION WHEN OTHERS THEN
-                RAISE NOTICE 'on_maturity_verified: import_doc to pool failed: %', SQLERRM;
-            END;
-        END IF;
+            END IF;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'on_maturity_verified: import_doc to pool failed: %', SQLERRM;
+        END;
     END IF;
 
     IF NEW.pipeline_family = 'planning' THEN

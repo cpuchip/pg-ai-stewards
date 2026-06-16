@@ -288,6 +288,17 @@ extension_sql_file!(
     requires = ["create_reflect_watchman"],
 );
 
+// 25: corpus treatment — the intent→project map + an additive BEFORE-INSERT
+// trigger that fills work_items.project_association when NULL. Lets the digest
+// loops (book/video/news) feed a compounding pool like the reflect-steward
+// (08's pool-publish is now decoupled from file-materialize and gates on
+// project_association). Empty map in core; the operator overlay seeds it.
+extension_sql_file!(
+    "../25-corpus.sql",
+    name = "create_corpus",
+    requires = ["create_skills"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
