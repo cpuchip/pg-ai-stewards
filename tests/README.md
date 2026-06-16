@@ -37,6 +37,25 @@ docker exec -i stewards-test psql -U stewards -d stewards -v ON_ERROR_STOP=1 < t
 docker rm -f stewards-test
 ```
 
+## `e2e-turn-loop.sh` — the running-turn invariants
+
+virgin-smoke asserts schema/seeds; `verify-*` asserts single functions. Neither
+runs a **turn**, so a class of bugs sails through — they only appear when dispatch
+→ tool-rounds → verify → consult actually executes (the on_one_shot clobber that
+left turns at `maturity=raw`; a prompt that dumped the same answer to every
+question; the consult that read the prior turn's reply). `e2e-turn-loop.sh` is that
+missing layer: against a running stack it dispatches a real persona turn and
+asserts (1) it auto-verifies + is non-empty, (2) a different question yields a
+different answer, (3) a consult re-ask produces a NEW tracked reply.
+
+```sh
+tests/e2e-turn-loop.sh [pg_container] [pipeline_family]   # defaults: stewards-oss-pg persona-turn
+```
+
+Makes real LLM calls (~1–2 min, small cost) — run on demand, **not** in
+every-commit CI. Exit 0 = invariants hold. (The persona-host's Go consult-ordering
+fix is additionally covered by the `cmd/persona-host` go tests.)
+
 ## CI
 
 `.github/workflows/ci.yml` runs exactly this smoke on every push to `main` and
