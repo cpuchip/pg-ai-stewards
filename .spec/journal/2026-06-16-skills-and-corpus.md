@@ -83,3 +83,34 @@ undisturbed. Rebaked `stewards-oss-pg:pg18` for future-boot parity.
   `yt-*` — minor near-dups possible; dedup later if it matters.
 - **Watch:** next book-digest / playlist-digest tick on live should pool to its
   project automatically now (the decouple + the map + the fill trigger).
+
+## Same-session follow-on — the reflect planner kept re-proposing (Michael's catch)
+
+Triaging the live proposal queue, Michael saw the planner re-proposing work already
+pending/done and asked to "tighten that up." Diagnosis: the council survey
+(`intent_work_survey`) *already surfaced* the pending queue, but (a) it's a soft
+prompt-only nudge cold-start models ignore, and (b) the only HARD dedup at enqueue
+was exact-slug — useless against reworded re-proposals. Three tightenings (OSS
+`91e58d0`, deployed live):
+
+1. **Deterministic near-dup gate** — `binding_question_overlap` (Jaccard of
+   significant words, singular/plural-folded, no extension dep) + a guard in
+   `enqueue_proposed_work_items` that drops a proposed item overlapping an existing
+   non-terminal proposal for the same intent `>= reflect_dedup_overlap_threshold`
+   (config, **0.5** — chosen after hand-/live-checking that a realistic reworded
+   pair scores ~0.5 and a distinct pair ~0.1; 0.6 would have missed the real dups).
+   The "build the oracle" pattern: structural, not model goodwill.
+2. **Fewer/deeper** — propose_work template `Maximum 5 → Maximum 3`, quality-over-
+   coverage, with an explicit "the gate rejects reworded dups" contract.
+3. **Planner sees the studies** — `intent_work_survey` gains `existing_studies`:
+   the pooled docs (project + neighbors) with a gist each, so the planner reasons
+   over what we KNOW, not just slugs. (11 studies surfaced for work-corpus.)
+
+**Honest limit:** word-Jaccard is lexical, not semantic — it catches verbatim and
+moderate rewordings but a heavily-reworded semantic dup can still slip; the enriched
+survey + the fewer/deeper prompt + the review_plan gate cover those. True semantic
+dedup (embedding cosine on binding_questions) is the future tool, but synchronous
+embedding inside the enqueue trigger is the wrong place — deferred. Also approved one
+proposal (`work-corpus-self-service-feature-proposals`) which **ran, verified, and pooled
+autonomously** — live proof the corpus decouple works on a real run — then declined 8
+redundant proposals (35→27).
