@@ -322,6 +322,33 @@ BEGIN
                      p_stage_output
                      || jsonb_build_object('completed_at', now()));
 
+    -- ----- empty-source halt (digester-empty-source-halt) -----
+    -- If the pipeline declares metadata.halt_on = {"stage":..,"outputs":[..]} and
+    -- the just-completed stage emitted a declared sentinel, cancel HERE — the single
+    -- advance choke point — and RETURN NULL, so the caller dispatches no next stage.
+    -- Supersedes the per-pipeline BEFORE-UPDATE guards: those set status=cancelled but
+    -- work_item_advance still returned the next stage name, and the bgworker dispatched
+    -- off the return value (the cancel and the return disagreed → all stages ran).
+    DECLARE
+        v_halt jsonb;
+    BEGIN
+        SELECT metadata->'halt_on' INTO v_halt
+          FROM stewards.pipelines WHERE family = v_wi.pipeline_family;
+        IF v_halt IS NOT NULL
+           AND v_halt->>'stage' = v_completing
+           AND (v_halt->'outputs') ? btrim(COALESCE(v_results->v_completing->>'output','')) THEN
+            UPDATE stewards.work_items
+               SET stage_results       = v_results,
+                   status              = 'cancelled',
+                   last_failure_reason = format(
+                       'empty-source halt: stage "%s" emitted "%s" (pipeline halt_on) — no downstream dispatch, nothing pooled',
+                       v_completing, btrim(v_results->v_completing->>'output')),
+                   updated_at          = now()
+             WHERE id = p_work_item_id;
+            RETURN NULL;
+        END IF;
+    END;
+
     -- ----- cv6: code-pr implement-critic (`review`) loop-back -----
     IF v_wi.pipeline_family = 'code-pr' AND v_completing = 'review' THEN
         v_verdict_text := COALESCE(p_stage_output->>'output', '');

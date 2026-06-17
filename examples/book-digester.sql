@@ -252,29 +252,22 @@ INSERT INTO stewards.book_shelf (slug, title, author, source_url, position) VALU
     ('the-art-of-war', 'The Art of War', 'Sun Tzu',             NULL, 40)
 ON CONFLICT (slug) DO NOTHING;
 
--- ── empty-shelf guard (the no-op the prompt asks for, made structural) ──────
--- The read stage replies "SHELF EMPTY" when book_next returns null, but the LLM
--- can't actually "stop" — auto_advance would still run digest/critique/recommend
--- on nothing and pool a junk null-case report (we found 17 of them). This
--- BEFORE-UPDATE guard cancels the work_item the instant read=SHELF EMPTY, so
--- nothing downstream dispatches and maturity never reaches verified (no pool).
--- Re-queue a book (book_add) and the schedule resumes normally.
-CREATE OR REPLACE FUNCTION stewards.book_digest_skip_empty_shelf()
-RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    IF NEW.status NOT IN ('cancelled','failed','completed')
-       AND (NEW.stage_results->'read'->>'output') = 'SHELF EMPTY' THEN
-        NEW.status := 'cancelled';
-        NEW.last_failure_reason := 'shelf empty — no book to digest (skipped; nothing pooled)';
-    END IF;
-    RETURN NEW;
-END $$;
+-- ── empty-shelf halt (generic: core work_item_advance honors metadata.halt_on) ──
+-- The read stage replies "SHELF EMPTY" when book_next returns null. Declaring
+-- halt_on makes core work_item_advance cancel the run AT the read stage and not
+-- advance — so digest/critique/recommend never dispatch and nothing is pooled.
+-- Re-queue a book (book_add) and the next scheduled run proceeds normally.
+-- (Replaces the old per-pipeline BEFORE-UPDATE guard, which raced the dispatcher:
+-- it set status=cancelled but work_item_advance still returned the next stage name,
+-- and the bgworker dispatched off the return value. See digester-empty-source-halt.)
+UPDATE stewards.pipelines
+   SET metadata = COALESCE(metadata, '{}'::jsonb)
+                || jsonb_build_object('halt_on',
+                       jsonb_build_object('stage','read','outputs', jsonb_build_array('SHELF EMPTY'))),
+       updated_at = now()
+ WHERE family = 'book-digest';
 DROP TRIGGER IF EXISTS work_items_book_digest_skip_empty ON stewards.work_items;
-CREATE TRIGGER work_items_book_digest_skip_empty
-    BEFORE UPDATE OF stage_results ON stewards.work_items
-    FOR EACH ROW
-    WHEN (NEW.pipeline_family = 'book-digest')
-    EXECUTE FUNCTION stewards.book_digest_skip_empty_shelf();
+DROP FUNCTION IF EXISTS stewards.book_digest_skip_empty_shelf();
 
 -- =====================================================================
 -- THE CURATOR — a presiding steward over the book line (digester-steward.md, P0).

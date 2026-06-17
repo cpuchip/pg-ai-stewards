@@ -307,26 +307,17 @@ INSERT INTO stewards.playlist_watch (slug, title, playlist_url, position) VALUES
      'https://www.youtube.com/playlist?list=PLcHf1NPbY2qXi5MkL-BzJb7t4r-m8SIEq', 10)
 ON CONFLICT (slug) DO NOTHING;
 
--- ── empty-source guard (the no-op the prompt asks for, made structural) ─────
+-- ── empty-source halt (generic: core work_item_advance honors metadata.halt_on) ──
 -- The read stage replies "NO PLAYLISTS" (nothing watched) or "NOTHING NEW" (every
--- video already digested), but auto_advance still runs digest/critique/recommend.
--- The prompt-threading keeps junk out of the pool (publish refuses), but the empty
--- stages are still wasted work. Cancel the work_item the instant read is an empty
--- sentinel: nothing downstream dispatches. (Same pattern as book-digest's guard —
--- see the generic-digester-halt proposal for unifying these.)
-CREATE OR REPLACE FUNCTION stewards.playlist_digest_skip_empty()
-RETURNS trigger LANGUAGE plpgsql AS $$
-BEGIN
-    IF NEW.status NOT IN ('cancelled','failed','completed')
-       AND (NEW.stage_results->'read'->>'output') IN ('NO PLAYLISTS','NOTHING NEW') THEN
-        NEW.status := 'cancelled';
-        NEW.last_failure_reason := 'no new video (' || (NEW.stage_results->'read'->>'output') || ') — skipped; nothing pooled';
-    END IF;
-    RETURN NEW;
-END $$;
+-- video already digested). Declaring halt_on makes core work_item_advance cancel
+-- at the read stage and not advance — no wasted digest/critique/recommend, nothing
+-- pooled. (Replaces the per-pipeline BEFORE-UPDATE guard, which raced the dispatcher;
+-- see digester-empty-source-halt.)
+UPDATE stewards.pipelines
+   SET metadata = COALESCE(metadata, '{}'::jsonb)
+                || jsonb_build_object('halt_on',
+                       jsonb_build_object('stage','read','outputs', jsonb_build_array('NO PLAYLISTS','NOTHING NEW'))),
+       updated_at = now()
+ WHERE family = 'playlist-digest';
 DROP TRIGGER IF EXISTS work_items_playlist_digest_skip_empty ON stewards.work_items;
-CREATE TRIGGER work_items_playlist_digest_skip_empty
-    BEFORE UPDATE OF stage_results ON stewards.work_items
-    FOR EACH ROW
-    WHEN (NEW.pipeline_family = 'playlist-digest')
-    EXECUTE FUNCTION stewards.playlist_digest_skip_empty();
+DROP FUNCTION IF EXISTS stewards.playlist_digest_skip_empty();

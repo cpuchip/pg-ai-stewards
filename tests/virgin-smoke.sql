@@ -760,4 +760,49 @@ BEGIN
     RAISE NOTICE 'OK 16: tool primers — context primer gated on context_tools_on, skills primer on skill perm, config toggle suppresses';
 END $$;
 
+-- ── 17: empty-source halt (work_item_advance honors metadata.halt_on)
+DO $$
+DECLARE v_iv uuid; v_wi uuid; v_ret text; v_status text; v_stage text;
+BEGIN
+    INSERT INTO stewards.intents (slug,purpose) VALUES ('halt-smoke','halt') ON CONFLICT (slug) DO NOTHING;
+    SELECT id INTO v_iv FROM stewards.intents WHERE slug='halt-smoke';
+    INSERT INTO stewards.pipelines (family, stages, metadata) VALUES
+      ('halt-smoke-pipe',
+       '[{"name":"read","next":"digest","auto_advance":true},{"name":"digest","next":null,"auto_advance":true}]'::jsonb,
+       jsonb_build_object('halt_on', jsonb_build_object('stage','read','outputs', jsonb_build_array('SHELF EMPTY'))))
+      ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages, metadata=EXCLUDED.metadata;
+
+    -- (1) read emits the sentinel -> HALT: advance returns NULL, cancelled, stays at read
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug,status)
+      VALUES ('halt-smoke-pipe','read',v_iv,'halt-1','in_progress') RETURNING id INTO v_wi;
+    v_ret := stewards.work_item_advance(v_wi, '{"output":"SHELF EMPTY"}'::jsonb);
+    SELECT status,current_stage INTO v_status,v_stage FROM stewards.work_items WHERE id=v_wi;
+    ASSERT v_ret IS NULL, format('halt must return NULL (no next stage), got %s', v_ret);
+    ASSERT v_status='cancelled', format('halt must cancel, got %s', v_status);
+    ASSERT v_stage='read', format('halt must NOT advance past read, got %s', v_stage);
+
+    -- (2) read emits a real book -> normal advance to digest
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug,status)
+      VALUES ('halt-smoke-pipe','read',v_iv,'halt-2','in_progress') RETURNING id INTO v_wi;
+    v_ret := stewards.work_item_advance(v_wi, '{"output":"BOOK: Real Book by Author"}'::jsonb);
+    SELECT status,current_stage INTO v_status,v_stage FROM stewards.work_items WHERE id=v_wi;
+    ASSERT v_ret='digest' AND v_stage='digest' AND v_status='pending',
+      format('non-sentinel must advance normally, got ret=%s stage=%s status=%s', v_ret, v_stage, v_status);
+
+    -- (3) a pipeline WITHOUT halt_on -> advances even on the sentinel text (no halt)
+    INSERT INTO stewards.pipelines (family, stages) VALUES
+      ('halt-smoke-nohalt', '[{"name":"read","next":"digest","auto_advance":true},{"name":"digest","next":null}]'::jsonb)
+      ON CONFLICT (family) DO NOTHING;
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug,status)
+      VALUES ('halt-smoke-nohalt','read',v_iv,'halt-3','in_progress') RETURNING id INTO v_wi;
+    v_ret := stewards.work_item_advance(v_wi, '{"output":"SHELF EMPTY"}'::jsonb);
+    SELECT status INTO v_status FROM stewards.work_items WHERE id=v_wi;
+    ASSERT v_ret='digest' AND v_status='pending', format('no halt_on -> normal advance, got ret=%s status=%s', v_ret, v_status);
+
+    DELETE FROM stewards.work_items WHERE pipeline_family IN ('halt-smoke-pipe','halt-smoke-nohalt');
+    DELETE FROM stewards.pipelines WHERE family IN ('halt-smoke-pipe','halt-smoke-nohalt');
+    DELETE FROM stewards.intents WHERE slug='halt-smoke';
+    RAISE NOTICE 'OK 17: empty-source halt — halt_on sentinel cancels at the stage + returns NULL (no advance); non-sentinel + no-halt_on advance normally';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→30) is sound =='
