@@ -641,4 +641,46 @@ BEGIN
     RAISE NOTICE 'OK 13: context_search — curated default hides folded (include_folded reveals), handle round-trips, the watch (parent->child), the private wall (private child invisible to parent, sees itself)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→27) is sound =='
+-- ── 14: guard narrow auto-resume (28) — self-clearing pauses self-heal, others don't
+DO $$
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='reflect_guard_autoresume_tick'),
+        'reflect_guard_autoresume_tick must ship';
+    ASSERT stewards.config_get_text('reflect_guard_autoresume_enabled','x')='true',
+        'autoresume enabled config must seed true';
+    ASSERT stewards.reflect_status() ? 'autoresume', 'reflect_status must surface autoresume';
+
+    PERFORM stewards.reflect_resume();   -- clean baseline (no autonomous load in smoke)
+
+    -- Case A: a GUARD spend pause whose spend has cleared -> auto-resume lifts it
+    PERFORM stewards.reflect_pause('simulated guard');
+    PERFORM stewards.config_set('reflect_pause_source', to_jsonb('guard:autonomous spend $99 in 24h >= cap $10'::text), NULL);
+    ASSERT stewards.config_get_text('autonomy_paused','false')='true', 'setup: paused';
+    PERFORM stewards.reflect_guard_autoresume_tick();
+    ASSERT stewards.config_get_text('autonomy_paused','false')='false',
+        'a cleared guard SPEND pause must auto-resume';
+    ASSERT EXISTS (SELECT 1 FROM stewards.reflect_guard_log WHERE action='auto_resumed'),
+        'auto-resume must be logged (account for releasing the brake)';
+
+    -- Case B: a HUMAN pause must NOT auto-resume
+    PERFORM stewards.reflect_pause('human stop');   -- source='manual'
+    PERFORM stewards.reflect_guard_autoresume_tick();
+    ASSERT stewards.config_get_text('autonomy_paused','false')='true',
+        'a human reflect_pause must NOT be auto-resumed';
+    PERFORM stewards.reflect_resume();
+
+    -- Case C: a guard FAILURE-streak pause (not self-clearing) must NOT auto-resume
+    PERFORM stewards.reflect_pause('simulated guard');
+    PERFORM stewards.config_set('reflect_pause_source', to_jsonb('guard:5 consecutive autonomous failures >= 5 (loop broken)'::text), NULL);
+    PERFORM stewards.reflect_guard_autoresume_tick();
+    ASSERT stewards.config_get_text('autonomy_paused','false')='true',
+        'a failure-streak guard pause must stay for a human (not self-clearing)';
+
+    -- restore virgin state
+    PERFORM stewards.reflect_resume();
+    PERFORM stewards.config_set('reflect_pause_source', to_jsonb('manual'::text), NULL);
+    DELETE FROM stewards.reflect_guard_log WHERE action='auto_resumed';
+    RAISE NOTICE 'OK 14: guard narrow auto-resume — cleared guard SPEND pause self-heals (logged); a human pause + a failure-streak pause do NOT';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→28) is sound =='

@@ -319,6 +319,15 @@ extension_sql_file!(
     requires = ["create_productivity"],
 );
 
+// 28: the guard's narrow auto-resume — releases its own brake once a self-clearing
+// breach (spend/in_flight) passes the deadband. Re-authors reflect_pause /
+// reflect_watchman_tick / watchman_scheduler_fire / reflect_status (later-file-wins).
+extension_sql_file!(
+    "../28-guard-autoresume.sql",
+    name = "create_guard_autoresume",
+    requires = ["create_context_search"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
