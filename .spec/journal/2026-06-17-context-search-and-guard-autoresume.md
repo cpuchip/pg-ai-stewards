@@ -67,3 +67,39 @@ exactly where judgment is needed (human pause, failures, backlog).
   (the window self-heals either way) — revert to $10 anytime, his call.
 - Reflect-steward kept hitting the cap today (heavy autonomous load); auto-resume should make
   these guard pauses transient from here.
+
+## 5. Intent-private file routing + tool-usage primers (OSS `30a0991`)
+
+Michael noticed the reflect-steward's work-corpus drops landing in the public `plans/` +
+`research/` dirs (the /workspace mount is the scripture-study root, RW). Two builds + a cleanup:
+
+- **The cleanup:** moved the 10 existing work-corpus files → `private/work-corpus/{plans,research}/`
+  (gitignored) + a root `.gitignore` safety-net (`plans/work-corpus-*`, `research/work-corpus-*`,
+  `study/daily-digest/work-corpus-*`). Also removed the stale `.git/hooks/pre-commit` (it targeted
+  the retired `pg-ai-stewards-dev` and only ever materialized writes — the RW mount does that now).
+- **A — `29-intent-private-routing.sql`:** `intents.file_private` + a single BEFORE INSERT/UPDATE
+  OF file_destination trigger that prefixes `private/<intent_slug>/`. The shared per-pipeline
+  templates (`planning→plans/<slug>`, `research-write→research/<slug>`) meant per-intent routing
+  needed a choke point; the trigger is it, and works because `enqueue_work_item_file` re-reads
+  `file_destination` from the row (so the prefix flows to the materialized file). Overlay marks
+  work-corpus private. Live-verified: `plans/x → private/work-corpus/plans/x`.
+- **B — `30-tool-primers.sql`:** the adoption lever the telemetry called for. A `tool_primers`
+  table + `render_tool_primers(agent_family)` gated per group (context=context_tools_on,
+  skills=skill perm), injected by `compose_system_prompt` (09) late-bound. Telemetry that drove
+  it: across all-time, `context_search`/`todo_*`/`goal_*`/`skill_*` had **0** agent-driven calls
+  (surfaced on 36/39 agents but unused — models aren't trained on substrate-native tools), while
+  the reactive engine quietly worked (8 folds). Surfacing ≠ adoption; teach them.
+
+**The one-shot question (Michael):** stages are NOT one-shot by design. 57 stages are tools-ON
+(multi-round tool loops, same machinery as coder-pr); 24 are tools-OFF (true one-shot — the
+judges/gates/critics, where context tools are pointless and already unsurfaced). The tools-on
+majority *can* call context tools mid-loop, but most are short task-scoped runs; the real
+beneficiaries are the long-runners (coder, reflect-steward, personas) — who the primer targets.
+
+Both: virgin-smoke OK 15 + OK 16, clobber 3/0, live-verified, pg18 rebaked. Deploy gotcha worth
+recording: a scratch-container `pg_get_functiondef` extraction of `compose_system_prompt` flaked
+(returned empty twice — container init timing), so I extracted the function block from the repo
+file (09 lines 257-468) and applied that instead — deterministic, no container dependency.
+
+**Carry (B follow-up):** now that the primer ships, re-measure tool adoption in a few days — that's
+the real #136 answer (does agent-driven context mgmt earn its keep *once taught*).
