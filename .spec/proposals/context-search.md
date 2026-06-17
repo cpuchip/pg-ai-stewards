@@ -1,6 +1,6 @@
 # Proposal: `context_search` — give every agent grep over its own durable context
 
-**Status:** draft for council · **Date:** 2026-06-17 · for Michael
+**Status:** ✅ RATIFIED (council w/ Michael, 2026-06-17) · **Date:** 2026-06-17 · for Michael
 **Motivation:** Michael — "Context in a model isn't durable, BUT in our system it
 is, because we curate it. What if we give every agent a tool to search its context
 and inject it into things like documents?"
@@ -8,6 +8,27 @@ and inject it into things like documents?"
 `expand_message`, the productivity auto-fold (`26-productivity.sql`), the presiding
 covenant (D&C 121 — walls are lawful), the open inbox item "let the digesters read
 our repos."
+
+## Ratified (council w/ Michael, 2026-06-17)
+
+1. **P0 = own + descendants + the private wall.** Search own context
+   (`session` + `self`) AND `descendants` (a presider searching the subagents'
+   work it ordered — the watch), plus the session-level `private` flag. Upward
+   (`ancestors`) and per-message private → P1.
+2. **Upward is private by default.** A child cannot grep an ancestor's context
+   unless the ancestor opts in to share — the conservative posture (opt-in leaks
+   nothing you didn't choose; opt-out leaks the message you forgot to flag). [P1]
+3. **A session can wall itself `private`** — searchable only by itself, invisible
+   to everyone *including its own parent*. The wall **beats the watch**: a private
+   child cannot be searched even by the presider that spawned it. Manual flag in
+   P0 (no auto-private — no sensitive workload yet; there for when it's needed).
+4. **The wall is absolute.** A parent cannot compel a child's private wall down
+   (D&C 121 — walls are lawful; force where persuasion would do is a breach).
+5. **No auto-private in P0** — local-vs-cloud routing and privacy stay independent
+   levers. **P1 future want:** a `sensitive` intent/agent flag that wires the whole
+   sensitive path in one switch — force local-model dispatch **and** force
+   `private`, so sensitive work never egresses to cloud *and* never leaks across
+   sessions.
 
 ## The insight
 
@@ -82,29 +103,30 @@ where persuasion would do is a breach.
 3. **`descendants`** (parent → children, my spawn tree) — "watch what you order,
    given eyes." A steward gripping its own delegated subagents' work *is* the
    watch. **Allowed.**
-4. **`ancestors`** (children → parent, up my chain) — "kinda makes sense, but not
-   always" (Michael). A child reaching into its parent's context is sometimes
-   useful, but the parent may hold privileged material the child shouldn't see
-   (a Hinge decision, evaluation criteria the child could game, a credential).
-   So upward search honors a **`private` flag**: the parent marks privileged
-   messages private, and `ancestors` search filters them out.
+4. **`ancestors`** (children → parent, up my chain) — **private by default
+   (ratified); P1.** A child may reach into a parent's context only for what the
+   parent has opted to share; the parent's context is otherwise walled (it may hold
+   a Hinge decision, evaluation criteria the child could game, a credential).
 5. **`global`** (any agent's context) — powerful but a wall. One agent reading
    another's private context is a breach and a tenant-leak surface. `doc_search`
    is global *on purpose* (the pool is shared); raw-context-grep is not. **Gated
    / deferred.**
 
-### The `private` flag
-A message-level privacy marker (a `private` boolean or a reserved `private`
-context-tag). Honored by **upward** (`ancestors`) and any future cross-agent
-search; never needed downward (a presider may see all it ordered) or for own
-context (it's mine).
+### The privacy model (ratified)
+Two levers:
+- **Session `private` flag (P0, manual).** A session marks *itself* private and is
+  then searchable only by itself — invisible to all other sessions, **including its
+  own parent** (the wall beats the watch). The security primitive: sensitive work
+  (a steward dispatching to a local, non-cloud model) walls its context so no other
+  agent — least of all a cloud-model parent — can grep it. No auto-private in P0;
+  the flag is set explicitly (there for when it's needed).
+- **Upward private-by-default + per-message `private` (P1).** `ancestors` search
+  sees only what a parent opted to share; the parent can also mark individual
+  messages `private` to wall specifics while sharing the rest.
 
-**Council question — the posture:** Michael's lean is *default-visible upward +
-flag-to-hide* (opt-out). The more conservative posture is *private-by-default
-upward + opt-in share* (opt-out leaks the message you forgot to flag; opt-in
-leaks nothing you didn't choose). Recommend opt-out for P0 ergonomics **with**
-a blanket "mark this whole session private" switch for sensitive runs, and
-revisit if privileged leakage shows up. This is the one real fork for council.
+Downward (`descendants`) needs no flag — a presider may see the non-private work it
+ordered. Own context is always fully searchable (it's mine). **The wall is
+absolute:** no parent can compel a child's `private` down (D&C 121).
 
 ## Provenance ≠ truth (the honesty guardrail)
 
@@ -139,18 +161,22 @@ engine works to keep lean. So:
 **New bits:** the `context_search` function + `tool_def`; the `include_folded`
 search path; the `private` flag + the `ancestors`/`descendants` scope resolution.
 
-## Phasing
-- **P0** — `context_search` over **own** context (`session` + `self`), curated by
-  default + `include_folded` recovery flag, snippet+handle results, in the
-  `context_*` grant family. Virgin-smoke: a folded message is found only with
-  `include_folded`, and a found handle round-trips through `expand_message`.
-- **P1** — the **lineage** scopes: `descendants` (the watch) and `ancestors`
-  (private-aware), with the `private` message flag + a session-level private
-  switch. Smoke: a child cannot see a parent message marked private; a parent
-  sees all of a child's.
-- **P2** — unify own-context grep + `pool_search` + engram search into one
-  **recall** surface (the substrate as the agent's full memory), and decide the
-  `global` tier under the walls.
+## Phasing (ratified)
+- **P0 — own + descendants + the private wall.** `context_search` over `session` +
+  `self` + `descendants` (the watch); curated by default + `include_folded`
+  recovery; the manual session-level `private` flag that `descendants` search
+  respects (a private child is invisible even to its parent); snippet+handle
+  results in the `context_*` grant family. Virgin-smoke: a folded message is found
+  only with `include_folded`; a found handle round-trips through `expand_message`;
+  a parent finds a normal child's message but NOT a private child's.
+- **P1 — upward + finer privacy + the sensitive switch.** `ancestors` (child →
+  parent, **private by default**, opt-in share) + per-message `private` + the
+  **`sensitive` intent/agent flag** (forces local-model dispatch + `private`
+  together — the noted future want). Smoke: a child sees an ancestor message only
+  when shared.
+- **P2 — the recall surface.** Unify own-context grep + `pool_search` + engram
+  search into one **recall** tool (the substrate as the agent's full memory), and
+  decide the `global` tier under the walls.
 
 ## Why this is worth it
 It's a small primitive (a function over `messages` + a tool_def) with an outsized
@@ -160,5 +186,5 @@ memory, gives a deterministic floor under "what did we decide," and makes
 expression of "the database thinks."
 
 **Standing-capability note:** giving *every* agent a new tool is
-`dominion_in_council` — ratify before building, the same gate skills and the
-productivity surface went through.
+`dominion_in_council` — **RATIFIED 2026-06-17** (council w/ Michael), cleared to
+build P0; same gate skills and the productivity surface went through.
