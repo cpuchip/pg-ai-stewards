@@ -1,7 +1,23 @@
 # Proposal: a generic "empty-source halt" for digester-shaped pipelines
 
-**Status:** draft for council · **Date:** 2026-06-16 · for Michael
+**Status:** ✅ SHIPPED 2026-06-17 (OSS `244ae38`) · **Date:** 2026-06-16 · for Michael
 **Motivation:** Michael — "generalize the notion of a digester so this won't happen again."
+
+> **✅ SHIPPED 2026-06-17 — with a root-cause correction.** The morning book-shelf
+> investigation showed the per-pipeline BEFORE-UPDATE guards (book/playlist) were
+> *present and matched the sentinel exactly* yet the runs **still ran all four stages**.
+> Reproduced: the guard set `status='cancelled'`, but `work_item_advance` still **returned
+> the next stage name**, and the bgworker dispatches off the return value — so the cancel
+> and the return disagreed. A BEFORE-UPDATE trigger *cannot* win this race. **The fix moved
+> the halt INTO `work_item_advance`** (the single advance choke point): a pipeline declares
+> `metadata.halt_on = {stage, outputs[]}`; when the just-completed stage emits a declared
+> sentinel, `work_item_advance` cancels the row **and returns NULL**, so no next stage
+> dispatches. book-digest + playlist-digest now declare `halt_on`; the two per-pipeline
+> triggers are retired. Proven: virgin-smoke OK 17 + live inverse-hypothesis (the exact
+> overnight scenario now halts). Good news from the same investigation: those empty runs
+> had pooled **zero junk** — the corpus content-gate already prevents the original
+> 17-junk-docs damage; the bug was wasted compute only. P1 (the `digester` template helper)
+> remains optional.
 
 ## The problem (twice now)
 
