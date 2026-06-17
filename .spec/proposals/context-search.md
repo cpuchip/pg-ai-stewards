@@ -162,13 +162,16 @@ engine works to keep lean. So:
 search path; the `private` flag + the `ancestors`/`descendants` scope resolution.
 
 ## Phasing (ratified)
-- **P0 — own + descendants + the private wall.** `context_search` over `session` +
-  `self` + `descendants` (the watch); curated by default + `include_folded`
-  recovery; the manual session-level `private` flag that `descendants` search
-  respects (a private child is invisible even to its parent); snippet+handle
-  results in the `context_*` grant family. Virgin-smoke: a folded message is found
-  only with `include_folded`; a found handle round-trips through `expand_message`;
-  a parent finds a normal child's message but NOT a private child's.
+- **P0 ✅ SHIPPED (OSS `de52a24`, live + pg18) — own + descendants + the private
+  wall.** `context_search` over `session` (own, default) + `descendants` (the
+  watch); curated by default + `include_folded` recovery; the manual session-level
+  `private` flag that `descendants` search respects (a private child is invisible
+  even to its parent); snippet + `[ctx:handle]` results in the `context_*` grant
+  family. (`self` — all my historical sessions — folded into P1: it needs a
+  session→agent identity map that doesn't exist yet.) Proven: virgin-smoke OK 13
+  (folded hidden by default / revealed with the flag; handle round-trips
+  `context_resolve_handle`; the watch finds a normal child; a private child is
+  invisible to the parent yet sees itself) + overlay-clobber-check PASS 3/0.
 - **P1 — upward + finer privacy + the sensitive switch.** `ancestors` (child →
   parent, **private by default**, opt-in share) + per-message `private` + the
   **`sensitive` intent/agent flag** (forces local-model dispatch + `private`
