@@ -275,3 +275,90 @@ CREATE TRIGGER work_items_book_digest_skip_empty
     FOR EACH ROW
     WHEN (NEW.pipeline_family = 'book-digest')
     EXECUTE FUNCTION stewards.book_digest_skip_empty_shelf();
+
+-- =====================================================================
+-- THE CURATOR — a presiding steward over the book line (digester-steward.md, P0).
+-- Ratified 2026-06-16 (council): keep the shelf fed with verified, non-duplicate
+-- books that further book-study; on a dry shelf, brainstorm new directions. Feed
+-- ONLY when the queue is low (don't over-fill); enabled by default (capped by the
+-- watchman guard + the operator's provider spend cap). This is the back-office
+-- steward leg the reflect-steward gives any intent (22-reflect-steward.sql),
+-- brought here to the book-study line.
+-- =====================================================================
+
+-- runway + dedup surface for the curator (queued/reading/done counts + titles).
+CREATE OR REPLACE FUNCTION stewards.book_shelf_status()
+RETURNS jsonb LANGUAGE sql STABLE AS $$
+    SELECT jsonb_build_object(
+        'queued',  (SELECT count(*) FROM stewards.book_shelf WHERE status='queued'),
+        'reading', (SELECT count(*) FROM stewards.book_shelf WHERE status='reading'),
+        'done',    (SELECT count(*) FROM stewards.book_shelf WHERE status='done'),
+        'queued_titles', COALESCE((SELECT jsonb_agg(title ORDER BY position)
+                                     FROM stewards.book_shelf WHERE status IN ('queued','reading')), '[]'::jsonb),
+        'done_titles',   COALESCE((SELECT jsonb_agg(title) FROM (
+                                     SELECT title FROM stewards.book_shelf WHERE status='done'
+                                      ORDER BY done_at DESC NULLS LAST LIMIT 50) d), '[]'::jsonb));
+$$;
+CREATE OR REPLACE FUNCTION stewards.book_shelf_status_tool(p_args jsonb)
+RETURNS jsonb LANGUAGE sql AS $$ SELECT stewards.book_shelf_status(); $$;
+
+INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, active) VALUES
+( 'book_shelf_status',
+  'The reading shelf at a glance: how many books are queued/reading/done, plus the queued and recently-done titles. Call this FIRST when curating, to see the runway and what NOT to re-add.',
+  '{"type":"object","additionalProperties":false,"properties":{}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"book_shelf_status_tool"}'::jsonb,
+  true )
+ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, args_schema=EXCLUDED.args_schema,
+    execute_target=EXCLUDED.execute_target, active=true;
+
+-- tunable dials (the prompt hardcodes the same defaults; config documents/overrides)
+SELECT stewards.config_set('book_curate_runway_threshold', '3'::jsonb,
+    'The curator tops up the shelf only when queued books are BELOW this (don''t over-fill).');
+SELECT stewards.config_set('book_curate_max_adds', '5'::jsonb,
+    'Max books the curator adds in one run.');
+
+-- the curator can read the shelf + brainstorm (research already has book_add, web,
+-- intent_work_survey, fetch). Grant the two it lacks.
+INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
+    ('research','book_shelf_status','allow','manual'),
+    ('research','start_brainstorm', 'allow','manual')
+ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET action='allow';
+
+-- the curate pipeline (one tools-on stage; reuses the research agent).
+INSERT INTO stewards.pipelines (
+    family, description, stages, sabbath_enabled, atonement_enabled,
+    file_destination_template, file_content_jsonpath, maturity_ladder,
+    auto_materialize_on_verified, metadata)
+VALUES (
+    'book-curate',
+    'Presiding curator for the book line: keep the shelf fed with verified, non-duplicate books that further book-study; brainstorm new directions when it runs dry. Feeds only when the queue is low. Single tools-on stage (research agent).',
+    jsonb_build_array(jsonb_build_object(
+        'name','curate','next',NULL,'model','kimi-k2.6','provider','opencode_go',
+        'agent_family','research','auto_advance',true,'tools_disabled',false,'max_tokens',6000,
+        'input_template',
+          'You are the BOOK-STUDY CURATOR. Keep the reading shelf fed with books worth digesting, and never let it sit empty. Today: {{input.today}}.' || E'\n\n' ||
+          'STEP 1 — RUNWAY. Call book_shelf_status. If `queued` >= 3, reply EXACTLY "SHELF STOCKED" and stop — do not over-fill.' || E'\n\n' ||
+          'STEP 2 — SURVEY (avoid repeats). Call intent_work_survey. Combine with book_shelf_status''s queued_titles + done_titles. NEVER propose a book already queued, reading, or done.' || E'\n\n' ||
+          'STEP 3 — PICK + VERIFY, then add (up to 3 minus the current queued count). Choose books that further book-study — wisdom, philosophy, science, craft; depth over breadth; classics with freely-available full text. For EACH candidate you MUST verify a real, fetchable full-text source exists: call web_search_exa (and fetch_url if needed) to confirm a working URL on Project Gutenberg / archive.org / similar. ONLY when you have a verified URL, call book_add(title, author, url). Never add a book whose source you could not verify — a phantom wastes a digest run.' || E'\n\n' ||
+          'STEP 4 — DRY SHELF. If you cannot name good concrete next books, call start_brainstorm on the book-study intent to discover new directions, then turn the strongest idea into a verified pick (step 3).' || E'\n\n' ||
+          'Report the books you added (each: title — source url), or "SHELF STOCKED".' )),
+    false, false, NULL, NULL,
+    '["raw","verified"]'::jsonb, false,
+    jsonb_build_object('shape','curator','line','book-study')
+)
+ON CONFLICT (family) DO UPDATE SET
+    description = EXCLUDED.description, stages = EXCLUDED.stages, metadata = EXCLUDED.metadata, updated_at = now();
+
+-- the curator schedule (enabled by default — capped by the guard + opencode-go).
+INSERT INTO stewards.scheduled_pipelines (slug, pipeline_family, intent_id, cron_pattern, input_template, enabled, missed_window_hours, notes)
+VALUES (
+    'book-curate-cron', 'book-curate',
+    (SELECT id FROM stewards.intents WHERE slug='book-study' LIMIT 1),
+    '0 */6 * * *',
+    '{"assignment":"Curate the book shelf: top it up with verified, non-duplicate books that further book-study; brainstorm new directions if it is running dry."}'::jsonb,
+    true, 6,
+    'book-curate: presiding steward; tops up the shelf only when queued < threshold; brainstorms on a dry shelf.'
+)
+ON CONFLICT (slug) DO UPDATE SET
+    pipeline_family = EXCLUDED.pipeline_family, cron_pattern = EXCLUDED.cron_pattern,
+    input_template = EXCLUDED.input_template, enabled = EXCLUDED.enabled, updated_at = now();
