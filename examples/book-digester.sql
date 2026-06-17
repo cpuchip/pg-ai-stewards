@@ -354,7 +354,10 @@ INSERT INTO stewards.scheduled_pipelines (slug, pipeline_family, intent_id, cron
 VALUES (
     'book-curate-cron', 'book-curate',
     (SELECT id FROM stewards.intents WHERE slug='book-study' LIMIT 1),
-    '0 */6 * * *',
+    -- every 2h: book-digest consumes ~1 book/hour, so a 6h curator (adds up to 3)
+    -- loses the race and the shelf drains; 2h keeps it fed (a STOCKED run is a
+    -- single cheap call that adds nothing, so over-frequency costs ~nothing).
+    '0 */2 * * *',
     '{"assignment":"Curate the book shelf: top it up with verified, non-duplicate books that further book-study; brainstorm new directions if it is running dry."}'::jsonb,
     true, 6,
     'book-curate: presiding steward; tops up the shelf only when queued < threshold; brainstorms on a dry shelf.'
