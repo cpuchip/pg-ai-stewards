@@ -565,4 +565,80 @@ BEGIN
     RAISE NOTICE 'OK 12: productivity surface — goal_set + todo_add (active+tag) + auto-fold on done + reopen restore (todo<->tag coupling proven)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→26) is sound =='
+-- ── 13: context_search (27) — grep over own + descendants, folded recovery, the wall
+DO $$
+DECLARE
+    v_p text := 'smoke-cs-parent';
+    v_c text := 'smoke-cs-child';
+    v_intent uuid; v_pwi uuid; v_cwi uuid;
+    v_r jsonb; v_handle text; v_resolved bigint;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='stewards'
+            AND table_name='sessions' AND column_name='private'), 'sessions.private must ship';
+    ASSERT (SELECT count(*) FROM stewards.tool_defs WHERE active AND name IN
+            ('context_search','context_session_private')) = 2, 'the 2 context_search tools must ship';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='context_descendant_sessions'),
+            'context_descendant_sessions must ship';
+
+    -- seed: intent + pipeline + parent/child sessions + a parent->child work_item lineage
+    INSERT INTO stewards.intents (slug,purpose) VALUES ('cs-smoke','context_search smoke')
+      ON CONFLICT (slug) DO NOTHING;
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug='cs-smoke';
+    INSERT INTO stewards.pipelines (family,stages) VALUES ('cs-smoke-pipe','[{"name":"s"}]'::jsonb)
+      ON CONFLICT (family) DO NOTHING;
+    INSERT INTO stewards.sessions (id,kind) VALUES (v_p,'agent'),(v_c,'agent') ON CONFLICT DO NOTHING;
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,session_ids,slug)
+      VALUES ('cs-smoke-pipe','s',v_intent,ARRAY[v_p],'cs-parent') RETURNING id INTO v_pwi;
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,session_ids,parent_work_item_id,slug)
+      VALUES ('cs-smoke-pipe','s',v_intent,ARRAY[v_c],v_pwi,'cs-child') RETURNING id INTO v_cwi;
+
+    -- messages: parent verbatim + parent folded (muted via the real path) + child verbatim
+    INSERT INTO stewards.messages (session_id,role,content)
+      VALUES (v_p,'assistant','the WIDGET decision: ship it');
+    INSERT INTO stewards.messages (session_id,role,content,context_tags)
+      VALUES (v_p,'assistant','a folded WIDGET note',ARRAY['cs-fold']);
+    PERFORM stewards.context_mute_tag_tool(jsonb_build_object('_session_id',v_p,'tag','cs-fold'));
+    INSERT INTO stewards.messages (session_id,role,content)
+      VALUES (v_c,'assistant','child found a WIDGET bug');
+
+    -- (1) own session, curated default: finds the verbatim, NOT the folded
+    v_r := stewards.context_search_tool(jsonb_build_object('_session_id',v_p,'pattern','widget'));
+    ASSERT (v_r->>'count')::int = 1,
+        format('own curated search must find 1 (verbatim only), got %s', v_r->>'count');
+
+    -- (2) include_folded: finds both parent messages
+    v_r := stewards.context_search_tool(jsonb_build_object('_session_id',v_p,'pattern','widget','include_folded',true));
+    ASSERT (v_r->>'count')::int = 2,
+        format('include_folded must find 2 (verbatim+folded), got %s', v_r->>'count');
+
+    -- (3) a returned handle round-trips through context_resolve_handle (own session)
+    v_handle := v_r->'results'->0->>'handle';
+    v_resolved := stewards.context_resolve_handle(v_p, v_handle);
+    ASSERT v_resolved IS NOT NULL, format('returned handle %s must resolve to a message id', v_handle);
+
+    -- (4) descendants (the watch): parent sees the non-private child's message
+    v_r := stewards.context_search_tool(jsonb_build_object('_session_id',v_p,'pattern','widget','scope','descendants'));
+    ASSERT (v_r->>'count')::int = 2,
+        format('descendants curated must find parent+child verbatim = 2, got %s', v_r->>'count');
+    ASSERT v_r::text LIKE '%child found a WIDGET bug%', 'descendants must include the child message';
+
+    -- (5) the private wall: child walls itself -> invisible to the parent's watch
+    PERFORM stewards.context_session_private_tool(jsonb_build_object('_session_id',v_c,'on',true));
+    v_r := stewards.context_search_tool(jsonb_build_object('_session_id',v_p,'pattern','widget','scope','descendants'));
+    ASSERT (v_r->>'count')::int = 1,
+        format('a private child must be invisible to the parent watch, got %s', v_r->>'count');
+    ASSERT v_r::text NOT LIKE '%child found a WIDGET bug%', 'the private child message must NOT appear to the parent';
+    -- but the child still searches its OWN context
+    v_r := stewards.context_search_tool(jsonb_build_object('_session_id',v_c,'pattern','widget'));
+    ASSERT (v_r->>'count')::int = 1, 'a private session can still search its own context';
+
+    -- restore virgin state
+    DELETE FROM stewards.messages WHERE session_id IN (v_p,v_c);
+    DELETE FROM stewards.work_items WHERE id IN (v_pwi,v_cwi);
+    DELETE FROM stewards.sessions WHERE id IN (v_p,v_c);
+    DELETE FROM stewards.pipelines WHERE family='cs-smoke-pipe';
+    DELETE FROM stewards.intents WHERE slug='cs-smoke';
+    RAISE NOTICE 'OK 13: context_search — curated default hides folded (include_folded reveals), handle round-trips, the watch (parent->child), the private wall (private child invisible to parent, sees itself)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→27) is sound =='

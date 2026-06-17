@@ -178,6 +178,21 @@ search path; the `private` flag + the `ancestors`/`descendants` scope resolution
   search into one **recall** tool (the substrate as the agent's full memory), and
   decide the `global` tier under the walls.
 
+## Adoption & telemetry (Michael, 2026-06-17)
+Models weren't trained on these substrate-native tools, so adoption may start low
+even when the tool would help — "if we find adoption uncharacteristically low, they
+weren't trained on these kinds of tools." Two cross-cutting responses (apply to
+skills, productivity, **and** context tools):
+- **A per-tool-group usage primer** — one short teaching block per tool family
+  (what it is, when to reach for it, why it beats guessing from the lossy window),
+  injected into the prompt alongside the tools. This is the skill-group render
+  pattern (`render_skills_block`) pointed at tool families — a natural reuse, and
+  a candidate for its own small proposal.
+- **Usage telemetry** — we already log every dispatch + tool call, so we can query
+  real `context_search` / context-tool usage per agent and tune. Uncharacteristically
+  low adoption is the signal the primer is needed (a training gap, not a design
+  flaw). Pairs with the #136 A/B ("does agent-driven context mgmt earn its keep").
+
 ## Why this is worth it
 It's a small primitive (a function over `messages` + a tool_def) with an outsized
 payoff: it turns the durable-but-passive message log into an agent's *active*

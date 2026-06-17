@@ -309,6 +309,16 @@ extension_sql_file!(
     requires = ["create_corpus"],
 );
 
+// 27: context_search — deterministic grep over an agent's OWN durable context
+// (+ the watch over non-private descendants) with a manual session `private`
+// wall. The Ctrl-F a model can't do over its lossy window. context_* names, so
+// compose_tools (26) already surfaces them on context-enabled agents.
+extension_sql_file!(
+    "../27-context-search.sql",
+    name = "create_context_search",
+    requires = ["create_productivity"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
