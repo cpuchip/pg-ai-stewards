@@ -61,7 +61,7 @@
 -- the scripture-study "gospel" corpus reference in the prior-work tool
 -- descriptions is generalized, and the project-specific example names in
 -- the planning propose_work example are neutralized. Model / provider
--- names (kimi-k2.6 / qwen3.6-plus / opencode_go) are kept as operator-data
+-- names (kimi-k2.6 / qwen3.7-plus / opencode_go) are kept as operator-data
 -- references, consistent with 04's echo-test example seed: the seed pack
 -- ships matching example agents/models/providers.
 -- =====================================================================
@@ -297,7 +297,7 @@ Return ONE of:
 v_stages := jsonb_build_array(
     jsonb_build_object(
         'name', 'context_gather', 'next', 'gather',
-        'model', 'qwen3.6-plus', 'provider', 'opencode_go',
+        'model', 'qwen3.7-plus', 'provider', 'opencode_go',
         'agent_family', 'research', 'auto_advance', true,
         'tools_disabled', false, 'input_template', v_context_gather_template
     ),
@@ -315,7 +315,7 @@ v_stages := jsonb_build_array(
     ),
     jsonb_build_object(
         'name', 'review', 'next', NULL,
-        'model', 'qwen3.6-plus', 'provider', 'opencode_go',
+        'model', 'qwen3.7-plus', 'provider', 'opencode_go',
         'agent_family', 'research', 'auto_advance', true,
         'tools_disabled', true, 'input_template', v_review_template
     )
@@ -350,10 +350,10 @@ ON CONFLICT (family) DO UPDATE SET
     updated_at                   = now();
 
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model, notes) VALUES
-    ('research-write', 'context_gather', 'qwen3.6-plus', 'Prior-work briefing; structured, not creative.'),
+    ('research-write', 'context_gather', 'qwen3.7-plus', 'Prior-work briefing; structured, not creative.'),
     ('research-write', 'gather',         'kimi-k2.6',    'External-source gather; tools enabled (exa, web_search, fetch_url, yt_*).'),
     ('research-write', 'synthesize',     'kimi-k2.6',    'Draft synthesis from gather brief; tools enabled lightly (re-fetch only).'),
-    ('research-write', 'review',         'qwen3.6-plus', 'Tools-disabled verification pass.')
+    ('research-write', 'review',         'qwen3.7-plus', 'Tools-disabled verification pass.')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
     default_model = EXCLUDED.default_model, notes = EXCLUDED.notes;
 
@@ -640,7 +640,7 @@ then a blank line, then a short, specific list of what propose_work (or synthesi
 
 v_stages := jsonb_build_array(
     jsonb_build_object('name','context_gather','next','explore',
-        'model','qwen3.6-plus','provider','opencode_go','agent_family','research',
+        'model','qwen3.7-plus','provider','opencode_go','agent_family','research',
         'auto_advance',true,'tools_disabled',false,'input_template',v_context_gather_template),
     jsonb_build_object('name','explore','next','synthesize',
         'model','kimi-k2.6','provider','opencode_go','agent_family','research',
@@ -649,10 +649,10 @@ v_stages := jsonb_build_array(
         'model','kimi-k2.6','provider','opencode_go','agent_family','research',
         'auto_advance',true,'tools_disabled',true,'input_template',v_synthesize_template),
     jsonb_build_object('name','propose_work','next','review_plan',
-        'model','qwen3.6-plus','provider','opencode_go','agent_family','research',
+        'model','qwen3.7-plus','provider','opencode_go','agent_family','research',
         'auto_advance',true,'tools_disabled',true,'input_template',v_propose_work_template),
     jsonb_build_object('name','review_plan','next',NULL,
-        'model','qwen3.6-plus','provider','opencode_go','agent_family','research',
+        'model','qwen3.7-plus','provider','opencode_go','agent_family','research',
         'auto_advance',true,'tools_disabled',true,'input_template',v_review_plan_template)
 );
 
@@ -703,11 +703,11 @@ INSERT INTO stewards.pipeline_stage_maturity (pipeline_family, stage_name, produ
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET produces_maturity = EXCLUDED.produces_maturity;
 
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model) VALUES
-    ('planning', 'context_gather', 'qwen3.6-plus'),
+    ('planning', 'context_gather', 'qwen3.7-plus'),
     ('planning', 'explore',        'kimi-k2.6'),
     ('planning', 'synthesize',     'kimi-k2.6'),
-    ('planning', 'propose_work',   'qwen3.6-plus'),
-    ('planning', 'review_plan',    'qwen3.6-plus')
+    ('planning', 'propose_work',   'qwen3.7-plus'),
+    ('planning', 'review_plan',    'qwen3.7-plus')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET default_model = EXCLUDED.default_model;
 
 END $seed$;
@@ -776,7 +776,7 @@ Output ONLY the JSON object. Your turn.$T$;
 
 v_stages := jsonb_build_array(
     jsonb_build_object('name','validate','next',NULL,
-        'model','qwen3.6-plus','provider','opencode_go','agent_family','research',
+        'model','qwen3.7-plus','provider','opencode_go','agent_family','research',
         'auto_advance',true,'tools_disabled',true,'input_template',v_validate_template)
 );
 
@@ -819,7 +819,7 @@ VALUES ('agent-proposal', 'validate', 'verified')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET produces_maturity = EXCLUDED.produces_maturity;
 
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model)
-VALUES ('agent-proposal', 'validate', 'qwen3.6-plus')
+VALUES ('agent-proposal', 'validate', 'qwen3.7-plus')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET default_model = EXCLUDED.default_model;
 
 END $seed$;
@@ -895,7 +895,7 @@ Your turn. Output ONLY the JSON.$T$;
 
 v_stages := jsonb_build_array(
     jsonb_build_object('name','revise','next',NULL,
-        'model','qwen3.6-plus','provider','opencode_go','agent_family','research',
+        'model','qwen3.7-plus','provider','opencode_go','agent_family','research',
         'auto_advance',true,'tools_disabled',true,'input_template',v_revise_template)
 );
 
@@ -912,7 +912,7 @@ VALUES (
     jsonb_build_object(
         'cost_cap_default_micro', 100000,
         'cost_cap_default_dollars', 0.10,
-        'note', 'Single stage, qwen3.6-plus, tools off; typical cost $0.02-0.05'
+        'note', 'Single stage, qwen3.7-plus, tools off; typical cost $0.02-0.05'
     ),
     false,  -- sabbath_enabled
     false,  -- atonement_enabled
@@ -938,7 +938,7 @@ VALUES ('revise-proposal', 'revise', 'verified')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET produces_maturity = EXCLUDED.produces_maturity;
 
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model)
-VALUES ('revise-proposal', 'revise', 'qwen3.6-plus')
+VALUES ('revise-proposal', 'revise', 'qwen3.7-plus')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET default_model = EXCLUDED.default_model;
 
 END $seed$;
@@ -1002,7 +1002,7 @@ VALUES (
         jsonb_build_object(
             'name',            'review',
             'next',            NULL,
-            'model',           'qwen3.6-plus',
+            'model',           'qwen3.7-plus',
             'provider',        'opencode_go',
             'agent_family',    'research',
             'auto_advance',    true,
@@ -1043,7 +1043,7 @@ ON CONFLICT (family) DO UPDATE SET
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model, notes) VALUES
     ('research-summary', 'gather',     'kimi-k2.6',    'Daily-digest source gather; tools enabled. 24-hour scan.'),
     ('research-summary', 'synthesize', 'kimi-k2.6',    'Daily-digest synthesis from gather brief; 300-700 word target.'),
-    ('research-summary', 'review',     'qwen3.6-plus', 'Tools-disabled verification pass.')
+    ('research-summary', 'review',     'qwen3.7-plus', 'Tools-disabled verification pass.')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
     default_model = EXCLUDED.default_model, notes = EXCLUDED.notes;
 

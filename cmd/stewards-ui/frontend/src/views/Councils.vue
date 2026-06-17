@@ -18,7 +18,7 @@ const newBinding = ref('')
 const newBishop = ref('human:michael')
 const newMembers = ref([
   { agent_family: 'plan', role: 'proposer' as const, model: 'kimi-k2.6' },
-  { agent_family: 'plan', role: 'critic' as const, model: 'qwen3.6-plus' },
+  { agent_family: 'plan', role: 'critic' as const, model: 'qwen3.7-plus' },
 ])
 const convening = ref(false)
 const conveneError = ref('')

@@ -320,7 +320,7 @@ DECLARE
     v_session_id      text;
     v_payload         jsonb;
     v_work_id         bigint;
-    v_gate_model      text := 'qwen3.6-plus';
+    v_gate_model      text := 'qwen3.7-plus';
     v_gate_provider   text := 'opencode_go';
     v_gate_agent      text := 'plan';
 BEGIN
@@ -590,7 +590,7 @@ DECLARE
     v_session_id      text;
     v_payload         jsonb;
     v_work_id         bigint;
-    v_gate_model      text := 'qwen3.6-plus';
+    v_gate_model      text := 'qwen3.7-plus';
     v_gate_provider   text := 'opencode_go';
     v_gate_agent      text := 'plan';
 BEGIN

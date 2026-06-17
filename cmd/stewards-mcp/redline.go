@@ -45,7 +45,7 @@ func registerRedlineTools(srv *mcp.Server, pool *pgxpool.Pool) {
 type PanelRedlineInput struct {
 	Document             string   `json:"document" jsonschema:"repo-relative path or single-dir filename glob of the document(s) to redline (.md/.markdown/.txt only)"`
 	Mandate              string   `json:"mandate" jsonschema:"what edits to propose (e.g. 'tighten prose, cut filler' or 'find weak engineering parallels'). The model proposes; the human applies."`
-	Models               []string `json:"models" jsonschema:"the panel of model names, e.g. [\"kimi-k2.6\",\"glm-5.1\",\"qwen3.6-plus\",\"gemini-2.5-flash\",\"deepseek-v4-flash\"]. Each runs the same document. Provider is resolved per model."`
+	Models               []string `json:"models" jsonschema:"the panel of model names, e.g. [\"kimi-k2.6\",\"glm-5.1\",\"qwen3.7-plus\",\"gemini-2.5-flash\",\"deepseek-v4-flash\"]. Each runs the same document. Provider is resolved per model."`
 	Destination          string   `json:"destination,omitempty" jsonschema:"optional index file path (defaults to study/.scratch/redline-<slug>-index.md)"`
 	MaxTokens            int      `json:"max_tokens,omitempty" jsonschema:"per-model output ceiling, per API call (default 32000)"`
 	CostCapPerModelMicro int64    `json:"cost_cap_per_model_micro,omitempty" jsonschema:"override per-model cost cap in micro-dollars (default: auto-scaled from document size + max_tokens)"`

@@ -733,7 +733,7 @@ INSERT INTO stewards.pipelines (family, description, stages, sabbath_enabled, at
 VALUES
 ('prompt-critic',
  'CT2 §7.3: single-stage critic review of a proposed base-prompt change. Fire-and-forget; its completion trigger stamps the proposal row.',
- $STAGES$[{"name":"review","next":null,"model":"qwen3.7-max","provider":"opencode_go","agent_family":"prompt-critic","auto_advance":true,"tools_disabled":true,"max_tokens":1500,"input_template":"{{input.binding_question}}"}]$STAGES$::jsonb,
+ $STAGES$[{"name":"review","next":null,"model":"qwen3.7-plus","provider":"opencode_go","agent_family":"prompt-critic","auto_advance":true,"tools_disabled":true,"max_tokens":1500,"input_template":"{{input.binding_question}}"}]$STAGES$::jsonb,
  false, false, NULL, NULL,
  '["raw","verified"]'::jsonb, false,
  jsonb_build_object('shape', 'one-shot-critic', 'consumer', 'prompt_change_proposals'))

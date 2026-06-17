@@ -569,7 +569,7 @@ VALUES (
       {
         "name": "context_gather",
         "next": "decompose",
-        "model": "qwen3.6-plus",
+        "model": "qwen3.7-plus",
         "provider": "opencode_go",
         "agent_family": "research",
         "auto_advance": true,
@@ -579,7 +579,7 @@ VALUES (
       {
         "name": "decompose",
         "next": null,
-        "model": "qwen3.6-plus",
+        "model": "qwen3.7-plus",
         "provider": "opencode_go",
         "agent_family": "fanout-decompose",
         "auto_advance": true,
@@ -617,7 +617,7 @@ VALUES (
       {
         "name": "aggregate",
         "next": null,
-        "model": "qwen3.6-plus",
+        "model": "qwen3.7-plus",
         "provider": "opencode_go",
         "agent_family": "fanout-aggregate",
         "auto_advance": true,
@@ -657,7 +657,7 @@ VALUES
     'Brainstorm lens: SCAMPER. Single-stage pipeline emitting 14-21 candidate ideas tagged by transformation.',
     $STAGES$[{"name":"lens","next":null,"model":null,"provider":null,"agent_family":"brainstorm-scamper","auto_advance":true,"tools_disabled":false,"input_template":"Binding question: {{input.binding_question}}\n\nApply your SCAMPER framework. Return ONE markdown list. End your turn after the list."}]$STAGES$::jsonb,
     false, false, NULL, NULL, '["raw", "verified"]'::jsonb, false,
-    jsonb_build_object('shape','brainstorm-lens','lens','scamper','default_model','qwen3.6-plus','default_provider','opencode_go','suggested_model','qwen3.6-plus','suggested_provider','opencode_go')
+    jsonb_build_object('shape','brainstorm-lens','lens','scamper','default_model','qwen3.7-plus','default_provider','opencode_go','suggested_model','qwen3.7-plus','suggested_provider','opencode_go')
 ),
 (
     'brainstorm-six-hats',
@@ -671,7 +671,7 @@ VALUES
     'Brainstorm lens: Crazy 8s. 8 ideas, 8 minutes, deliberate variety.',
     $STAGES$[{"name":"lens","next":null,"model":null,"provider":null,"agent_family":"brainstorm-crazy8s","auto_advance":true,"tools_disabled":false,"input_template":"Binding question: {{input.binding_question}}\n\nApply Crazy 8s. Output 8 numbered ideas with one-line descriptions and a keyword tag each. End your turn after item 8."}]$STAGES$::jsonb,
     false, false, NULL, NULL, '["raw", "verified"]'::jsonb, false,
-    jsonb_build_object('shape','brainstorm-lens','lens','crazy8s','default_model','qwen3.6-plus','default_provider','opencode_go','suggested_model','qwen3.6-plus','suggested_provider','opencode_go')
+    jsonb_build_object('shape','brainstorm-lens','lens','crazy8s','default_model','qwen3.7-plus','default_provider','opencode_go','suggested_model','qwen3.7-plus','suggested_provider','opencode_go')
 ),
 (
     'brainstorm-reverse',
@@ -685,7 +685,7 @@ VALUES
     'Brainstorm lens: Mind Mapping. Hierarchical idea tree, 3-4 angular branches × 3-5 children, optional cross-branch links.',
     $STAGES$[{"name":"lens","next":null,"model":null,"provider":null,"agent_family":"brainstorm-mind-mapping","auto_advance":true,"tools_disabled":false,"input_template":"Binding question: {{input.binding_question}}\n\nProduce a mind map: 3-4 angular sub-themes, 3-5 children each. Mark cross-branch links inline. End your turn after the last leaf."}]$STAGES$::jsonb,
     false, false, NULL, NULL, '["raw", "verified"]'::jsonb, false,
-    jsonb_build_object('shape','brainstorm-lens','lens','mind-mapping','default_model','qwen3.6-plus','default_provider','opencode_go','suggested_model','qwen3.6-plus','suggested_provider','opencode_go')
+    jsonb_build_object('shape','brainstorm-lens','lens','mind-mapping','default_model','qwen3.7-plus','default_provider','opencode_go','suggested_model','qwen3.7-plus','suggested_provider','opencode_go')
 ),
 (
     'brainstorm-brainwriting',
@@ -713,7 +713,7 @@ VALUES
     'Brainstorm lens: Storyboarding. 5-7 narrative scenes with a single protagonist; each scene seeds one design idea. Surfaces temporal / contextual angles flat lists miss.',
     $STAGES$[{"name":"lens","next":null,"model":null,"provider":null,"agent_family":"brainstorm-storyboarding","auto_advance":true,"tools_disabled":false,"input_template":"Binding question: {{input.binding_question}}\n\nWrite 5-7 scenes following one protagonist through baseline → complication → midpoint → resolution. Each scene ends with an Idea seed. End your turn after the final Idea."}]$STAGES$::jsonb,
     false, false, NULL, NULL, '["raw", "verified"]'::jsonb, false,
-    jsonb_build_object('shape','brainstorm-lens','lens','storyboarding','default_model','qwen3.6-plus','default_provider','opencode_go','suggested_model','qwen3.6-plus','suggested_provider','opencode_go')
+    jsonb_build_object('shape','brainstorm-lens','lens','storyboarding','default_model','qwen3.7-plus','default_provider','opencode_go','suggested_model','qwen3.7-plus','suggested_provider','opencode_go')
 ),
 (
     'brainstorm-triz',
@@ -727,14 +727,14 @@ VALUES
     'Brainstorm lens: Forced Analogy. 3 random unrelated domains × restate-generate-port. Plus one standout port that surfaces something the home domain''s clichés missed.',
     $STAGES$[{"name":"lens","next":null,"model":null,"provider":null,"agent_family":"brainstorm-forced-analogy","auto_advance":true,"tools_disabled":false,"input_template":"Binding question: {{input.binding_question}}\n\nApply Forced Analogy: pick 3 random unrelated domains, restate the question in each, generate 3-4 in-domain ideas, port each back. Close with one STANDOUT port. End your turn after the STANDOUT."}]$STAGES$::jsonb,
     false, false, NULL, NULL, '["raw", "verified"]'::jsonb, false,
-    jsonb_build_object('shape','brainstorm-lens','lens','forced-analogy','default_model','qwen3.6-plus','default_provider','opencode_go','suggested_model','qwen3.6-plus','suggested_provider','opencode_go')
+    jsonb_build_object('shape','brainstorm-lens','lens','forced-analogy','default_model','qwen3.7-plus','default_provider','opencode_go','suggested_model','qwen3.7-plus','suggested_provider','opencode_go')
 ),
 (
     'brainstorm-worst-idea',
     'Brainstorm lens: Worst Possible Idea. 5-7 intentionally terrible solutions → name the violated principle each embodies → invert into a positive design constraint.',
     $STAGES$[{"name":"lens","next":null,"model":null,"provider":null,"agent_family":"brainstorm-worst-idea","auto_advance":true,"tools_disabled":false,"input_template":"Binding question: {{input.binding_question}}\n\nApply Worst Possible Idea: 5-7 terrible solutions, each with violated-principle diagnosis, each inverted into a positive constraint. End your turn after the last Constraint."}]$STAGES$::jsonb,
     false, false, NULL, NULL, '["raw", "verified"]'::jsonb, false,
-    jsonb_build_object('shape','brainstorm-lens','lens','worst-idea','default_model','qwen3.6-plus','default_provider','opencode_go','suggested_model','qwen3.6-plus','suggested_provider','opencode_go')
+    jsonb_build_object('shape','brainstorm-lens','lens','worst-idea','default_model','qwen3.7-plus','default_provider','opencode_go','suggested_model','qwen3.7-plus','suggested_provider','opencode_go')
 )
 ON CONFLICT (family) DO UPDATE
    SET description = EXCLUDED.description, stages = EXCLUDED.stages,
