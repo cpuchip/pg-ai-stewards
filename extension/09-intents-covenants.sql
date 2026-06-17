@@ -433,6 +433,17 @@ BEGIN
         END IF;
     END;
 
+    -- Tool-usage primers (30-tool-primers) — teach the model WHEN to reach for its
+    -- substrate-native tools (it wasn't trained on them). Per tool group, gated like
+    -- the tools. Late-bound forward ref (plpgsql), like render_skills_block/_agenda.
+    DECLARE v_primers text;
+    BEGIN
+        v_primers := stewards.render_tool_primers(p_agent_family);
+        IF v_primers IS NOT NULL THEN
+            v_prompt := v_prompt || v_primers;
+        END IF;
+    END;
+
     -- PR.1: The Watch (echo) — the covenant speaks last as well as first.
     IF v_covenant.id IS NOT NULL THEN
         SELECT string_agg(c->>'key', ', ') INTO v_echo_keys

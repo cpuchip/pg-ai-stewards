@@ -328,6 +328,23 @@ extension_sql_file!(
     requires = ["create_context_search"],
 );
 
+// 29: a "private" intent routes its materialized file drops under private/<intent>/
+// instead of the shared public pipeline dirs (one BEFORE-trigger on file_destination).
+extension_sql_file!(
+    "../29-intent-private-routing.sql",
+    name = "create_intent_private_routing",
+    requires = ["create_guard_autoresume"],
+);
+
+// 30: per-tool-group usage primers — teach the model WHEN to reach for its
+// substrate-native tools (it wasn't trained on them). compose_system_prompt (09)
+// calls render_tool_primers late-bound, like render_skills_block/render_agenda.
+extension_sql_file!(
+    "../30-tool-primers.sql",
+    name = "create_tool_primers",
+    requires = ["create_intent_private_routing"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

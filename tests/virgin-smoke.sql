@@ -683,4 +683,81 @@ BEGIN
     RAISE NOTICE 'OK 14: guard narrow auto-resume — cleared guard SPEND pause self-heals (logged); a human pause + a failure-streak pause do NOT';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→28) is sound =='
+-- ── 15: intent-private file routing (29) — a private intent prefixes private/<intent>/
+DO $$
+DECLARE v_ipriv uuid; v_ipub uuid; v_wi uuid; v_dest text;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='stewards'
+            AND table_name='intents' AND column_name='file_private'), 'intents.file_private must ship';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='work_item_private_file_route'), 'private-route fn must ship';
+    ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='work_items_private_file_route'), 'private-route trigger must ship';
+
+    INSERT INTO stewards.intents (slug,purpose,file_private) VALUES ('pr-priv','private smoke',true)
+      ON CONFLICT (slug) DO UPDATE SET file_private=true RETURNING id INTO v_ipriv;
+    INSERT INTO stewards.intents (slug,purpose) VALUES ('pr-pub','public smoke') ON CONFLICT (slug) DO NOTHING;
+    SELECT id INTO v_ipub FROM stewards.intents WHERE slug='pr-pub';
+    INSERT INTO stewards.pipelines (family,stages) VALUES ('pr-smoke-pipe','[{"name":"s"}]'::jsonb) ON CONFLICT (family) DO NOTHING;
+
+    -- (1) INSERT under a private intent -> prefixed
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug,file_destination)
+      VALUES ('pr-smoke-pipe','s',v_ipriv,'pr-priv-1','plans/pr-priv-1.md') RETURNING id INTO v_wi;
+    SELECT file_destination INTO v_dest FROM stewards.work_items WHERE id=v_wi;
+    ASSERT v_dest='private/pr-priv/plans/pr-priv-1.md', format('private INSERT must prefix, got %s', v_dest);
+
+    -- (2) public intent -> unchanged
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug,file_destination)
+      VALUES ('pr-smoke-pipe','s',v_ipub,'pr-pub-1','plans/pr-pub-1.md') RETURNING id INTO v_wi;
+    SELECT file_destination INTO v_dest FROM stewards.work_items WHERE id=v_wi;
+    ASSERT v_dest='plans/pr-pub-1.md', format('public intent must be unchanged, got %s', v_dest);
+
+    -- (3) the on_maturity render path = an UPDATE of file_destination -> prefixed
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug)
+      VALUES ('pr-smoke-pipe','s',v_ipriv,'pr-priv-2') RETURNING id INTO v_wi;
+    UPDATE stewards.work_items SET file_destination='research/pr-priv-2.md' WHERE id=v_wi;
+    SELECT file_destination INTO v_dest FROM stewards.work_items WHERE id=v_wi;
+    ASSERT v_dest='private/pr-priv/research/pr-priv-2.md', format('private UPDATE must prefix, got %s', v_dest);
+
+    -- (4) idempotent: already-private not double-prefixed
+    UPDATE stewards.work_items SET file_destination='private/pr-priv/research/pr-priv-2.md' WHERE id=v_wi;
+    SELECT file_destination INTO v_dest FROM stewards.work_items WHERE id=v_wi;
+    ASSERT v_dest='private/pr-priv/research/pr-priv-2.md', format('already-private must not double-prefix, got %s', v_dest);
+
+    DELETE FROM stewards.work_items WHERE pipeline_family='pr-smoke-pipe';
+    DELETE FROM stewards.pipelines WHERE family='pr-smoke-pipe';
+    DELETE FROM stewards.intents WHERE slug IN ('pr-priv','pr-pub');
+    RAISE NOTICE 'OK 15: intent-private routing — private intent prefixes private/<intent>/ (INSERT + render-UPDATE), public unchanged, idempotent';
+END $$;
+
+-- ── 16: tool-usage primers (30) — gated per group, config-toggleable
+DO $$
+DECLARE v_ctx text; v_noctx text; v_skills text;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='tool_primers'), 'tool_primers table must ship';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='render_tool_primers'), 'render_tool_primers must ship';
+    ASSERT (SELECT count(*) FROM stewards.tool_primers WHERE active) >= 2, 'core primers must seed';
+
+    -- context primer gated on context_tools_on
+    UPDATE stewards.agents SET context_tools_enabled=true WHERE family='research';
+    v_ctx := stewards.render_tool_primers('research');
+    ASSERT v_ctx IS NOT NULL AND v_ctx LIKE '%context_search%', 'context-on agent must get the context primer';
+    UPDATE stewards.agents SET context_tools_enabled=false WHERE family='research';
+    v_noctx := stewards.render_tool_primers('research');
+    ASSERT v_noctx IS NULL OR v_noctx NOT LIKE '%context_search%', 'context-off agent must NOT get the context primer';
+
+    -- skills primer gated on skill perm — throwaway family (context off, skill allowed)
+    INSERT INTO stewards.agent_tool_perms (agent_family,tool_pattern,action,source)
+      VALUES ('pr-skilltest','skill','allow','manual') ON CONFLICT (agent_family,tool_pattern) DO UPDATE SET action='allow';
+    v_skills := stewards.render_tool_primers('pr-skilltest');
+    ASSERT v_skills IS NOT NULL AND v_skills LIKE '%skill_load%', 'skill-allowed agent must get the skills primer';
+    DELETE FROM stewards.agent_tool_perms WHERE agent_family='pr-skilltest';
+
+    -- config toggle suppresses entirely
+    UPDATE stewards.agents SET context_tools_enabled=true WHERE family='research';
+    PERFORM stewards.config_set('tool_primers_enabled','false'::jsonb,NULL);
+    ASSERT stewards.render_tool_primers('research') IS NULL, 'tool_primers_enabled=false must suppress primers';
+    PERFORM stewards.config_set('tool_primers_enabled','true'::jsonb,NULL);
+    UPDATE stewards.agents SET context_tools_enabled=false WHERE family='research';  -- restore core default
+    RAISE NOTICE 'OK 16: tool primers — context primer gated on context_tools_on, skills primer on skill perm, config toggle suppresses';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→30) is sound =='

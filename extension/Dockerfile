@@ -57,7 +57,8 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      19-models.sql 20-coder.sql 21-compact-context.sql \
      22-reflect-steward.sql 23-reflect-watchman.sql 24-skills.sql \
      25-corpus.sql 26-productivity.sql 27-context-search.sql \
-     28-guard-autoresume.sql ./
+     28-guard-autoresume.sql 29-intent-private-routing.sql \
+     30-tool-primers.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
