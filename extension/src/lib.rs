@@ -345,6 +345,16 @@ extension_sql_file!(
     requires = ["create_intent_private_routing"],
 );
 
+// 31: logical model aliases (a name -> ordered provider/provider_model members)
+// + the file_private no-train guard rail. Re-authors work_item_dispatch_stage so
+// the requested model may be an alias that falls back across providers, and a
+// file_private intent never dispatches to a train-on-data provider.
+extension_sql_file!(
+    "../31-model-aliases.sql",
+    name = "create_model_aliases",
+    requires = ["create_tool_primers"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

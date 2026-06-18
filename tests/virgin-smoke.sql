@@ -805,4 +805,102 @@ BEGIN
     RAISE NOTICE 'OK 17: empty-source halt — halt_on sentinel cancels at the stage + returns NULL (no advance); non-sentinel + no-halt_on advance normally';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→30) is sound =='
+
+-- ── 18: model aliases + the file_private no-train guard rail
+DO $$
+DECLARE v_prov text; v_mod text; v_iv uuid; v_wi uuid; v_caught boolean;
+BEGIN
+    -- the policy column + helpers exist; default no-train, flag flips it
+    PERFORM 1 FROM information_schema.columns
+      WHERE table_schema='stewards' AND table_name='model_capability' AND column_name='trains_on_data';
+    ASSERT FOUND, 'model_capability.trains_on_data column must exist';
+    ASSERT stewards.model_trains_on_data('nosuch','model') = false, 'unflagged model defaults no-train';
+
+    INSERT INTO stewards.model_capability (provider, model, usable, trains_on_data, probed_via) VALUES
+      ('aliastest_free','m-free', true, true,  'manual'),
+      ('aliastest_paid','m-paid', true, false, 'manual')
+      ON CONFLICT (provider, model) DO UPDATE
+        SET usable=EXCLUDED.usable, trains_on_data=EXCLUDED.trains_on_data;
+    ASSERT stewards.model_trains_on_data('aliastest_free','m-free') = true, 'flagged model trains';
+
+    -- alias: a free (prio 0, train-on-data) member + a paid (prio 1, no-train) fallback
+    INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority) VALUES
+      ('aliastest-wq','aliastest_free','m-free',0),
+      ('aliastest-wq','aliastest_paid','m-paid',1)
+      ON CONFLICT (alias, provider, provider_model) DO NOTHING;
+
+    -- public (forbid=false): lowest priority wins => the free member
+    SELECT provider, model INTO v_prov, v_mod FROM stewards.pick_alias_member('aliastest-wq', false);
+    ASSERT v_prov='aliastest_free' AND v_mod='m-free',
+      format('public alias picks free prio0, got %s/%s', v_prov, v_mod);
+
+    -- private (forbid=true): the free member trains => dropped => falls to paid
+    SELECT provider, model INTO v_prov, v_mod FROM stewards.pick_alias_member('aliastest-wq', true);
+    ASSERT v_prov='aliastest_paid' AND v_mod='m-paid',
+      format('private alias drops train-on-data, falls to paid, got %s/%s', v_prov, v_mod);
+
+    -- an unusable member is skipped (public)
+    UPDATE stewards.model_capability SET usable=false WHERE provider='aliastest_free' AND model='m-free';
+    SELECT provider, model INTO v_prov, v_mod FROM stewards.pick_alias_member('aliastest-wq', false);
+    ASSERT v_prov='aliastest_paid', format('unusable member skipped, got %s', v_prov);
+    UPDATE stewards.model_capability SET usable=true WHERE provider='aliastest_free' AND model='m-free';
+
+    -- intent_forbids_training reads file_private
+    INSERT INTO stewards.intents (slug,purpose,file_private) VALUES ('aliastest-priv','t',true)
+      ON CONFLICT (slug) DO UPDATE SET file_private=true;
+    SELECT id INTO v_iv FROM stewards.intents WHERE slug='aliastest-priv';
+    ASSERT stewards.intent_forbids_training(v_iv) = true, 'file_private intent forbids training';
+
+    -- a working agent for the dispatch paths that proceed past the guard
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature)
+      VALUES ('aliastest','*','alias smoke agent','primary','You are a smoke agent.',0.2)
+      ON CONFLICT (family, model_match) DO UPDATE SET prompt=EXCLUDED.prompt;
+
+    -- guard rail: a file_private intent + a LITERAL train-on-data stage model
+    -- (no public_io) => refused
+    INSERT INTO stewards.pipelines (family, stages) VALUES
+      ('aliastest-litpipe',
+       jsonb_build_array(jsonb_build_object(
+         'name','gather','agent_family','aliastest','model','m-free','provider','aliastest_free','next',null)))
+      ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages;
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug,status)
+      VALUES ('aliastest-litpipe','gather',v_iv,'aliastest-lit','pending') RETURNING id INTO v_wi;
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.work_item_dispatch_stage(v_wi);
+    EXCEPTION WHEN OTHERS THEN
+        v_caught := (SQLERRM LIKE '%train-on-data%');
+    END;
+    ASSERT v_caught, 'file_private literal train-on-data dispatch must be refused with a train-on-data error';
+
+    -- public_io escape hatch: same private intent + train-on-data model, but the
+    -- stage declares public_io => the no-train guard is bypassed (gather I/O is
+    -- public), so dispatch proceeds (no train-on-data error).
+    INSERT INTO stewards.pipelines (family, stages) VALUES
+      ('aliastest-pubio',
+       jsonb_build_array(jsonb_build_object(
+         'name','gather','agent_family','aliastest','model','m-free','provider','aliastest_free','public_io',true,'next',null)))
+      ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages;
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug,status)
+      VALUES ('aliastest-pubio','gather',v_iv,'aliastest-pubio-wi','pending') RETURNING id INTO v_wi;
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.work_item_dispatch_stage(v_wi);
+    EXCEPTION WHEN OTHERS THEN
+        v_caught := (SQLERRM LIKE '%train-on-data%');
+    END;
+    ASSERT NOT v_caught, 'public_io stage must bypass the no-train guard even under a file_private intent';
+
+    DELETE FROM stewards.work_queue WHERE payload->>'_pipeline_family' IN ('aliastest-litpipe','aliastest-pubio');
+    DELETE FROM stewards.messages WHERE session_id LIKE 'wi--%--gather';
+    DELETE FROM stewards.work_items WHERE pipeline_family IN ('aliastest-litpipe','aliastest-pubio');
+    DELETE FROM stewards.sessions WHERE id LIKE 'wi--%--gather';
+    DELETE FROM stewards.pipelines WHERE family IN ('aliastest-litpipe','aliastest-pubio');
+    DELETE FROM stewards.agents WHERE family='aliastest';
+    DELETE FROM stewards.model_aliases WHERE alias='aliastest-wq';
+    DELETE FROM stewards.model_capability WHERE provider IN ('aliastest_free','aliastest_paid');
+    DELETE FROM stewards.intents WHERE slug='aliastest-priv';
+    RAISE NOTICE 'OK 18: model aliases — priority pick + private drops train-on-data member (falls to paid) + unusable skipped; intent_forbids_training=file_private; literal train-on-data into a private intent refused; public_io bypasses the guard';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→31) is sound =='

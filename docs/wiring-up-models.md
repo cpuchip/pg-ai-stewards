@@ -81,6 +81,45 @@ Local models price at $0/Mtok. Note: some local reasoning models always emit
 thinking — give them a generous per-call `max_tokens` or the answer can get
 truncated.
 
+## Model aliases & free-first fallback
+
+A pipeline stage normally names a concrete `provider` + `model`. But the same
+logical model often lives on several providers with different ids — opencode_go
+calls it `kimi-k2.6`, NVIDIA calls it `moonshotai/kimi-k2.6` — and you may want a
+free provider first with a paid fallback. `stewards.model_aliases` ties them
+together:
+
+```sql
+INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority) VALUES
+  ('kimi', 'nvidia',      'moonshotai/kimi-k2.6', 0),   -- free, tried first
+  ('kimi', 'opencode_go', 'kimi-k2.6',            1);   -- paid fallback
+```
+
+Now a stage can request `"model": "kimi"` (drop the `provider` — the alias picks
+it). At dispatch the alias resolves to its lowest-`priority` member that is
+**configured** (present in `providers_loaded()`), **usable**, and **under its
+spend cap** — so an unconfigured / over-cap / probe-failed member is skipped and
+the next one is used. Pick an alias name that is *not* a real model id so it
+never collides with a literal model.
+
+## Private intents & train-on-data routing
+
+Free public tiers (NVIDIA, opencode zen's free models) **train on submitted
+data**. Flag them so a private line never reaches them:
+
+```sql
+UPDATE stewards.model_capability SET trains_on_data = true
+ WHERE provider = 'nvidia';                 -- and the zen *-free models
+UPDATE stewards.intents SET file_private = true WHERE slug = 'my-private-intent';
+```
+
+A `file_private` intent's dispatch then drops train-on-data alias members (and
+**refuses** a literal train-on-data resolution) — its work routes to paid
+no-train providers automatically. The escape hatch is per stage: mark a stage
+`"public_io": true` when its inputs/outputs are public even under a private
+intent (a "gather public info" stage), and it stays free-eligible while the
+analysis / steward / critic stages stay no-train.
+
 ## Keeping prices current
 
 `examples/models.sql` is a **snapshot** — model lineups and prices change. The
