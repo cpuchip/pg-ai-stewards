@@ -92,6 +92,25 @@ have, rather than replacing it):
   `DEPENDS_ON` / `REFINES` so retrieval can follow causal paths, not just
   similarity neighborhoods — a hierarchical/causal layer *beside* the vector
   store, not instead of it.
+- **Graph retrieval (HippoRAG-style PPR) over the graph we already have — the
+  most on-thesis upgrade.** HippoRAG (OSU-NLP, NeurIPS 2024 / ICML 2025, MIT)
+  retrieves not by cosine but by **Personalized PageRank** seeded from
+  query-relevant nodes over a knowledge graph: one pass yields multi-hop /
+  associative results, ranking passages by graph connectedness (the
+  hippocampal-indexing analogy — neocortex = LLM, the KG = the index, PPR =
+  pattern completion). HippoRAG 2 reports beating vector RAG and other graph RAG
+  (GraphRAG / RAPTOR / LightRAG) on multi-hop (MuSiQue, 2Wiki, HotpotQA) and
+  sense-making (NarrativeQA) while using far less offline indexing. **We already
+  hold a relational knowledge graph in Postgres** (nodes/edges, `CITES` /
+  `SIMILAR_TO`, the pool) — we simply do not *retrieve* over it; we use vector +
+  FTS and leave the graph under-exploited. Adding PPR (a personalized-PageRank
+  recursive CTE or pgrx function) seeded from the query's entities, walking the
+  typed edges above, is a concrete graph-memory upgrade. And because our graph
+  lives *in* the DB, the PPR runs **in-database** — which no Python-side
+  HippoRAG / GraphRAG does. That is a genuinely novel framing and squarely on the
+  "DB thinks" thesis: graph-memory retrieval executed natively in the agent's own
+  relational store. (Homer = the self-improvement loop on top; HippoRAG = the
+  retrieval mechanism; they compose.)
 
 Honest counterpoint to carry in the paper: hierarchical navigation is brittle
 exactly where vector RAG is robust (fuzzy, cross-domain queries), and contrastive
@@ -107,12 +126,26 @@ reasoning it is augmenting). So the claim is "add a causal/organized layer," not
 - **Meta-harness / control plane** — Databricks *Omnigent*: the closest prior
   art and the strongest external validation; same control plane, opposite arrow
   (it dispatches harness CLIs; we dispatch models and the DB holds the loop).
-- **Agent memory** — Homer / Structured AI Memory (§3), MemGPT-style paged
-  context, generative-agents memory streams, vector-RAG memory. We improve from,
-  and cite, the organize-then-retrieve line.
+- **Agent memory (the line we improve from)** — *graph memory*: **HippoRAG** (PPR
+  over a KG; NeurIPS 2024 / ICML 2025), **GraphRAG** (Microsoft — entity graph +
+  community-summary sense-making; the graph-RAG family pg-ai-stewards loosely drew
+  its relational graph from), LightRAG, RAPTOR. *Organize-then-retrieve +
+  self-improvement*: Homer / Structured AI Memory (§3). *Paged / streamed context*:
+  MemGPT, generative-agents memory streams; plain vector-RAG as the baseline. We
+  sit beside the graph-memory family — but with the graph already resident in the
+  runtime DB — and improve toward in-DB PPR retrieval + contrastive self-improvement.
 - **Agent governance / safety** — policy-as-code engines (CEL-style gates), tool
   permissioning, cost governance. Contrast = our covenant + self-accounting guard
   + council-gated capability grants (graduated trust, not static policy).
+- **The problem this addresses (market evidence / motivation)** — Friedman,
+  "Why AI coding debt is different" (InfoWorld, 2026): AI's debt is *cognitive /
+  ownership* debt (code that functions but nobody understands), and the prescribed
+  fixes — context infrastructure, automated verification/governance, explicit human
+  ownership — map almost verbatim onto the substrate (compose-context, gates +
+  cross-model critic, the human Hinge). A **third convergence signal** after
+  Omnigent (architecture) and Pocock (workflow). Caveat to cite honestly:
+  vendor-authored (Qodo CEO), survey is Qodo's own; the GitClear + Google DORA
+  figures are the independent part.
 - **Postgres-as-platform** — pgvector, in-database ML, stored-procedure logic,
   pgEdge's query-side MCP. Contrast = a full *agent OS* in the DB, not a query
   surface bolted on.
