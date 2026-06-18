@@ -903,4 +903,65 @@ BEGIN
     RAISE NOTICE 'OK 18: model aliases — priority pick + private drops train-on-data member (falls to paid) + unusable skipped; intent_forbids_training=file_private; literal train-on-data into a private intent refused; public_io bypasses the guard';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→31) is sound =='
+
+-- ── 19: alias runtime failover (steward walks to the next member on a transient)
+DO $$
+DECLARE v_iv uuid; v_wi uuid; v_mo text; v_po text; v_n int;
+BEGIN
+    -- 32 broadened diagnose_failure to the real outage shapes
+    ASSERT stewards.diagnose_failure('chat HTTP 521 Web server is down') = 'transient',
+      'Cloudflare 521 must diagnose transient';
+    ASSERT stewards.diagnose_failure('HTTP 529: overloaded') = 'transient', '529 overloaded → transient';
+    ASSERT stewards.diagnose_failure('context deadline exceeded') = 'timeout', 'deadline → timeout';
+
+    -- exclude param skips a tried member
+    INSERT INTO stewards.model_capability (provider, model, usable, probed_via) VALUES
+      ('ftp_a','m-a', true, 'manual'), ('ftp_b','m-b', true, 'manual')
+      ON CONFLICT (provider, model) DO UPDATE SET usable=true;
+    INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority) VALUES
+      ('failtest','ftp_a','m-a',0), ('failtest','ftp_b','m-b',1)
+      ON CONFLICT (alias, provider, provider_model) DO NOTHING;
+    SELECT provider INTO v_po FROM stewards.pick_alias_member('failtest', false, '[{"provider":"ftp_a","model":"m-a"}]'::jsonb);
+    ASSERT v_po='ftp_b', format('exclude must skip ftp_a → ftp_b, got %s', v_po);
+
+    -- steward_tick failover: a failed alias work_item whose member A errored
+    -- transiently → re-dispatched onto member B (override set, action logged).
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature)
+      VALUES ('failtest','*','failover smoke agent','primary','You are a smoke agent.',0.2)
+      ON CONFLICT (family, model_match) DO UPDATE SET prompt=EXCLUDED.prompt;
+    INSERT INTO stewards.intents (slug,purpose) VALUES ('failtest-intent','t') ON CONFLICT (slug) DO NOTHING;
+    SELECT id INTO v_iv FROM stewards.intents WHERE slug='failtest-intent';
+    INSERT INTO stewards.pipelines (family, stages) VALUES
+      ('failtest-pipe', jsonb_build_array(jsonb_build_object(
+        'name','gather','agent_family','failtest','model','failtest','next',null)))
+      ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages;
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug,status,failure_count,last_failure_reason,escalation_state)
+      VALUES ('failtest-pipe','gather',v_iv,'failover-wi','failed',1,'chat dispatch failed at stage gather: HTTP 521 Web server is down','normal')
+      RETURNING id INTO v_wi;
+    -- the prior (member A) attempt, recorded as a transient error in work_queue
+    INSERT INTO stewards.work_queue (kind, provider, status, error, payload) VALUES
+      ('chat','ftp_a','error','HTTP 521 Web server is down',
+       jsonb_build_object('session_id','wi--x--gather','_work_item_id',v_wi::text,'_stage_name','gather','requested_model','m-a'));
+
+    PERFORM stewards.steward_tick();
+
+    SELECT model_override, provider_override INTO v_mo, v_po FROM stewards.work_items WHERE id=v_wi;
+    ASSERT v_mo='m-b' AND v_po='ftp_b',
+      format('failover must set override to the next member ftp_b/m-b, got %s/%s', v_po, v_mo);
+    SELECT count(*) INTO v_n FROM stewards.steward_actions WHERE work_item_id=v_wi AND action='alias_failover';
+    ASSERT v_n=1, format('exactly one alias_failover action expected, got %s', v_n);
+
+    DELETE FROM stewards.work_queue WHERE payload->>'_work_item_id'=v_wi::text;
+    DELETE FROM stewards.messages WHERE session_id LIKE 'wi--%--gather';
+    DELETE FROM stewards.steward_actions WHERE work_item_id=v_wi;
+    DELETE FROM stewards.work_items WHERE id=v_wi;
+    DELETE FROM stewards.sessions WHERE id LIKE 'wi--%--gather';
+    DELETE FROM stewards.pipelines WHERE family='failtest-pipe';
+    DELETE FROM stewards.agents WHERE family='failtest';
+    DELETE FROM stewards.model_aliases WHERE alias='failtest';
+    DELETE FROM stewards.model_capability WHERE provider IN ('ftp_a','ftp_b');
+    DELETE FROM stewards.intents WHERE slug='failtest-intent';
+    RAISE NOTICE 'OK 19: alias failover — diagnose covers 5xx/52x/529/timeout; exclude skips a tried member; steward walks a transient alias failure to the next member (override set + alias_failover logged)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→32) is sound =='

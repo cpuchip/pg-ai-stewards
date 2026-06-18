@@ -82,3 +82,37 @@ the alias system doing its job: dead free member → skip → next member.
   deepseek-v4-flash-free).
 - Closes the NVIDIA #185 private guard rail (the generalized version, not an
   `if provider=nvidia` one-off).
+
+## P1 done same session (Michael: "lets take that on") — `32-alias-failover.sql`
+
+The runtime-failure fallback the v1 deferred. Two findings drove the shape:
+- **A real bug in `diagnose_failure`:** the transient regex matched `5(00..04)`
+  only — it MISSED Cloudflare 521/522 and Anthropic 529, the exact outage shapes
+  nvidia/Moonshot throw. Broadened to any 5xx + 408 + 529/overloaded + "web
+  server is down". (Failover keys on `transient`/`timeout`, so this was load-bearing.)
+- **The hook is the steward, not the per-completion trigger.** `pick_model`
+  (the steward's escalation) RAISES for stages-jsonb pipelines (no stage_models
+  row) — so without this, an alias stage got NO retry. Added an alias-failover
+  branch to `steward_tick` BEFORE pick_model: on a transient/timeout failure of
+  an alias-dispatched stage, exclude the members that already transient-failed
+  this run (`alias_transient_failed_members` from work_queue error history),
+  `pick_alias_member(..., exclude)` the next one, set model_override +
+  provider_override, re-dispatch. Bounded by the tried-set + `failure_count < 3`.
+- Chose the steward-override mechanism (mirrors the existing escalation) over
+  re-authoring the dispatch FINAL a second time. **Known limit (documented):**
+  the override persists, so a mid-pipeline failover keeps the work_item's LATER
+  stages on the chosen member for that run; self-heals next run. Clean follow-up
+  = clear overrides on stage advance (improves the existing escalation too).
+- virgin-smoke **OK 19** (00→32): diagnose covers 5xx/52x/529/timeout; the
+  exclude set skips a tried member; `steward_tick` walks a transient alias
+  failure to the next member (override set + `alias_failover` logged). clobber
+  **3/0**. Applied to live (steward_tick has failover, 521→transient,
+  pick_alias_member 3-arg, the `kimi` alias still resolves), pg18 rebaked.
+
+## Side note (Michael's question): Gemini-direct is wired
+`google_gemini` is a configured provider (loaded, key present), 8 models
+catalogued, 7 auto-probed usable (2.5-flash/-lite/-pro, 3-flash, 3.1-flash-lite,
+3.1-pro, 3.5-flash); only `gemini-3-pro-preview` fails (404 "no longer
+available" — a retired id the probe correctly walls). Gemini's free AI-Studio
+tier also trains on data, so if it's ever used for a private intent it should be
+flagged `trains_on_data` per provider/model like nvidia/zen-free.

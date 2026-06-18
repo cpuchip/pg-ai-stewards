@@ -355,6 +355,16 @@ extension_sql_file!(
     requires = ["create_tool_primers"],
 );
 
+// 32: runtime failover across alias members — when a provider fails mid-call
+// (transient/timeout), the steward walks an alias-dispatched stage to its next
+// untried member. Also broadens diagnose_failure to the real outage shapes
+// (any 5xx incl. Cloudflare 52x, 529 overloaded).
+extension_sql_file!(
+    "../32-alias-failover.sql",
+    name = "create_alias_failover",
+    requires = ["create_model_aliases"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
