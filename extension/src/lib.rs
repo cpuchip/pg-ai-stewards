@@ -386,6 +386,16 @@ extension_sql_file!(
     requires = ["create_page_in"],
 );
 
+// R2b/R2c of the local-learnings rollout: recast research-summary + research-write
+// onto doc-construction (synthesize->build via doc_*, review->critique + doc_finalize),
+// so the small local model never one-shots the whole digest/piece. Needs both the
+// research pipelines (13) and the doc tools (34).
+extension_sql_file!(
+    "../35-research-doc-construction.sql",
+    name = "create_research_doc_construction",
+    requires = ["create_research_pipelines", "create_doc_builder"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

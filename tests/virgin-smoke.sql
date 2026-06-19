@@ -964,4 +964,100 @@ BEGIN
     RAISE NOTICE 'OK 19: alias failover — diagnose covers 5xx/52x/529/timeout; exclude skips a tried member; steward walks a transient alias failure to the next member (override set + alias_failover logged)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→32) is sound =='
+-- ── 20: doc-construction (34/35) — work-item-scoped drafts, cross-stage handoff,
+--        doc_finalize project-fallback, pools_via_tool skips the double-pool,
+--        research-summary/write recast.
+DO $$
+DECLARE
+    v_wid uuid; v_uuid8 text; v_sb text; v_sc text;
+    v_h text; v_r jsonb; v_proj text; v_slug text; v_journal int;
+BEGIN
+    -- 34 surface ships
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='doc_drafts'),
+        'doc_drafts must ship';
+    ASSERT (SELECT count(*) FROM stewards.tool_defs WHERE active AND name IN
+             ('doc_create','doc_append_section','doc_patch','doc_read','doc_finalize','doc_current')) = 6,
+        'the 6 doc-construction tools must ship';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='doc_draft_session_match'),
+        'doc_draft_session_match must ship';
+
+    -- work-item scoping: same wi across stages matches; cross-wi + persona do not
+    ASSERT stewards.doc_draft_session_match('wi--abc12345--build','wi--abc12345--critique'),
+        'same work item across stages must match (cross-stage draft)';
+    ASSERT NOT stewards.doc_draft_session_match('wi--abc12345--build','wi--def67890--critique'),
+        'different work items must not match';
+    ASSERT NOT stewards.doc_draft_session_match('persona-x','persona-y'),
+        'non-wi sessions match only exactly';
+    ASSERT stewards.doc_draft_session_match('persona-x','persona-x'),
+        'an exact session always matches';
+
+    -- a project-tagged work item; derive its stage sessions from the id
+    INSERT INTO stewards.projects (slug,name) VALUES ('dc-smoke-proj','DC Smoke') ON CONFLICT DO NOTHING;
+    INSERT INTO stewards.intents (slug,purpose) VALUES ('dc-smoke','dc') ON CONFLICT (slug) DO NOTHING;
+    INSERT INTO stewards.pipelines (family,stages,metadata,auto_materialize_on_verified) VALUES
+      ('dc-smoke-pipe','[{"name":"build","next":"critique"},{"name":"critique","next":null}]'::jsonb,
+       jsonb_build_object('pools_via_tool',true), false)
+      ON CONFLICT (family) DO UPDATE SET metadata=EXCLUDED.metadata, auto_materialize_on_verified=false;
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug,project_association)
+      VALUES ('dc-smoke-pipe','critique',(SELECT id FROM stewards.intents WHERE slug='dc-smoke'),
+              'dc-smoke-wi','dc-smoke-proj')
+      RETURNING id INTO v_wid;
+    v_uuid8 := left(v_wid::text,8);
+    v_sb := 'wi--'||v_uuid8||'--build';
+    v_sc := 'wi--'||v_uuid8||'--critique';
+    INSERT INTO stewards.sessions (id,kind) VALUES (v_sb,'agent'),(v_sc,'agent') ON CONFLICT DO NOTHING;
+    UPDATE stewards.work_items SET session_ids=ARRAY[v_sb,v_sc] WHERE id=v_wid;
+
+    -- build stage creates + appends a draft
+    v_r := stewards.doc_create_tool(jsonb_build_object('_session_id',v_sb,'title','DC Smoke Digest'));
+    v_h := v_r->>'handle';
+    ASSERT v_h IS NOT NULL, 'doc_create must return a handle';
+    PERFORM stewards.doc_append_section_tool(jsonb_build_object('_session_id',v_sb,'handle',v_h,
+      'heading','Body','body','Enough body text to clear the doc_finalize eighty-character floor so this draft pools cleanly.'));
+
+    -- CROSS-STAGE: the critique session finds the build stage's draft via doc_current
+    v_r := stewards.doc_current_tool(jsonb_build_object('_session_id',v_sc));
+    ASSERT (v_r->>'handle')=v_h,
+        format('doc_current from the sibling stage must find the build draft, got %s', v_r->>'handle');
+
+    -- doc_finalize from the critique session: pools + project-fallback to the work item's project
+    v_r := stewards.doc_finalize_tool(jsonb_build_object('_session_id',v_sc,'handle',v_h));
+    ASSERT (v_r->>'ok')='true', 'doc_finalize must succeed cross-stage';
+    v_slug := v_r->>'slug';
+    SELECT project_association INTO v_proj FROM stewards.docs WHERE slug=v_slug;
+    ASSERT v_proj='dc-smoke-proj',
+        format('doc_finalize must project-tag the pooled doc from the work item (fallback), got %s', v_proj);
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.doc_drafts WHERE handle=v_h), 'doc_finalize must clear the draft';
+
+    -- 08 pools_via_tool: flipping to verified must NOT auto-pool the journal (no doc under the wi slug)
+    UPDATE stewards.work_items SET stage_results='{"critique":{"output":"JOURNAL: pooled it."}}'::jsonb WHERE id=v_wid;
+    UPDATE stewards.work_items SET maturity='verified' WHERE id=v_wid;
+    SELECT count(*) INTO v_journal FROM stewards.docs WHERE slug='dc-smoke-wi';
+    ASSERT v_journal=0,
+        'pools_via_tool must skip on_maturity auto-pool (no journal doc under the work_item slug)';
+
+    -- 35: research-summary + research-write recast to build/critique + pools_via_tool + auto_mat off
+    ASSERT EXISTS (SELECT 1 FROM stewards.pipelines p, jsonb_array_elements(p.stages) s
+                    WHERE p.family='research-summary' AND s->>'name'='build'),
+        'research-summary must be recast to a build stage';
+    ASSERT EXISTS (SELECT 1 FROM stewards.pipelines p, jsonb_array_elements(p.stages) s
+                    WHERE p.family='research-write' AND s->>'name'='critique'),
+        'research-write must be recast to a critique stage';
+    ASSERT (SELECT (metadata->>'pools_via_tool')::boolean AND NOT auto_materialize_on_verified
+              FROM stewards.pipelines WHERE family='research-summary'),
+        'research-summary must declare pools_via_tool + auto_materialize off';
+    ASSERT (SELECT (metadata->>'pools_via_tool')::boolean AND NOT auto_materialize_on_verified
+              FROM stewards.pipelines WHERE family='research-write'),
+        'research-write must declare pools_via_tool + auto_materialize off';
+
+    -- restore virgin state
+    DELETE FROM stewards.docs WHERE slug IN (v_slug,'dc-smoke-wi');
+    DELETE FROM stewards.work_items WHERE id=v_wid;
+    DELETE FROM stewards.sessions WHERE id IN (v_sb,v_sc);
+    DELETE FROM stewards.pipelines WHERE family='dc-smoke-pipe';
+    DELETE FROM stewards.intents WHERE slug='dc-smoke';
+    DELETE FROM stewards.projects WHERE slug='dc-smoke-proj';
+    RAISE NOTICE 'OK 20: doc-construction — 6 doc tools + work-item-scoped drafts (cross-stage doc_current) + doc_finalize project-fallback + pools_via_tool skips the double-pool; research-summary/write recast (build/critique, auto_mat off)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→35) is sound =='

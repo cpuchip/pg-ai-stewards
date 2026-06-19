@@ -260,9 +260,10 @@ INSERT INTO stewards.pipelines (
             'auto_advance',true,'tools_disabled',false,
             'input_template',
               'You are the CRITIQUE stage — the final review before publish. The build stage built a digest draft for this run.' || E'\n\n' ||
-              'Steps:' || E'\n' ||
-              '1. Call `doc_current` to get the draft handle, then `doc_read` it.' || E'\n' ||
-              '2. Pressure-test it: What did it flatten or miss? Is any claim unfaithful to the book? Fix the weak/unfaithful parts with `doc_patch` (find the exact text, replace it).' || E'\n' ||
+              'Work ONLY from the draft. Your tools are doc_current, doc_read, doc_patch, doc_append_section, and book_publish_draft. Do NOT fetch_url or web_search — the build stage already read the source; re-researching wastes a slow round and risks not finishing. Judge faithfulness from the draft''s own quotes and internal consistency.' || E'\n\n' ||
+              'Steps (be efficient — converge to publish):' || E'\n' ||
+              '1. Call `doc_current` to get the draft handle, then `doc_read` it once.' || E'\n' ||
+              '2. Pressure-test it: What did it flatten or miss? Is any claim internally inconsistent or unsupported by its own quotes? Fix the weak parts with `doc_patch` (find the exact text, replace it). A few targeted patches, not a rewrite.' || E'\n' ||
               '3. Add the null case: `doc_append_section` a "Tensions & objections" section with the STRONGEST objection to the book''s argument. Be honest, not agreeable.' || E'\n' ||
               '4. Call `book_publish_draft` with the handle. This saves the digest as a study doc + brain entry and marks the book done.' || E'\n' ||
               '5. Reply with a short JOURNAL (2-4 sentences): what you corrected, the objection you added, and that you published. Do NOT paste the document.' )

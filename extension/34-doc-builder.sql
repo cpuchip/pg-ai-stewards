@@ -166,6 +166,7 @@ DECLARE
     v_slug   text := p_args ->> 'slug';
     v_d      stewards.doc_drafts%ROWTYPE;
     v_doc_id text;
+    v_proj   text;
 BEGIN
     IF v_sess IS NULL OR v_sess = '' THEN RETURN jsonb_build_object('error', 'no session context'); END IF;
     IF v_handle = '' THEN RETURN jsonb_build_object('error', 'handle required'); END IF;
@@ -177,9 +178,21 @@ BEGIN
                        regexp_replace(lower(v_d.title), '[^a-z0-9]+', '-', 'g') || '-' || v_handle);
     -- pool it (import_doc returns the doc id, not the slug)
     v_doc_id := stewards.import_doc(v_slug, '', v_d.title, v_d.body,
-                    jsonb_build_object('built_by', 'doc-construction', 'session', v_sess), 'digest');
-    IF v_d.project IS NOT NULL AND btrim(v_d.project) <> '' THEN
-        UPDATE stewards.docs SET project_association = v_d.project WHERE slug = v_slug;
+                    jsonb_build_object('built_by', 'doc-construction', 'session', v_sess), 'doc');
+    -- Project-tag the pooled doc so it is findable in the intent pool. Prefer the
+    -- draft's explicit project; else fall back to the WORK ITEM's project (a research
+    -- digest has no static project like a book does — its project comes from the
+    -- intent->project map on the work_item). The session is wi--<uuid8>--<stage>, so
+    -- the work item's id begins with that uuid8.
+    v_proj := nullif(btrim(coalesce(v_d.project, '')), '');
+    IF v_proj IS NULL AND left(v_sess, 4) = 'wi--' THEN
+        SELECT project_association INTO v_proj FROM stewards.work_items
+         WHERE left(id::text, 8) = split_part(v_sess, '--', 2)
+           AND project_association IS NOT NULL
+         LIMIT 1;
+    END IF;
+    IF v_proj IS NOT NULL THEN
+        UPDATE stewards.docs SET project_association = v_proj WHERE slug = v_slug;
     END IF;
     DELETE FROM stewards.doc_drafts WHERE handle = v_handle;
     RETURN jsonb_build_object('ok', true, 'slug', v_slug, 'doc_id', v_doc_id,
