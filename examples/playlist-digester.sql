@@ -146,6 +146,38 @@ RETURNS text LANGUAGE sql AS $func$
         COALESCE(p_args->>'playlist', p_args->>'playlist_slug'))::text;
 $func$;
 
+-- ── playlist_publish_draft(): publish a doc-construction DRAFT (the doc-builder
+--    path). The model built the digest incrementally with doc_create/append; here
+--    we pull its body SERVER-SIDE by handle (the model never re-emits the whole
+--    body as a tool arg — that would be the one-shot generation we are avoiding),
+--    run the same publish logic as playlist_publish, then clear the draft.
+CREATE OR REPLACE FUNCTION stewards.playlist_publish_draft_tool(p_args jsonb)
+RETURNS text LANGUAGE plpgsql AS $func$
+DECLARE
+    v_sess   text := p_args ->> '_session_id';
+    v_handle text := lower(btrim(coalesce(p_args ->> 'handle', '')));
+    v_vid    text := coalesce(p_args ->> 'video_id', p_args ->> 'id');
+    v_title  text := coalesce(p_args ->> 'title', p_args ->> 'video_title');
+    v_play   text := coalesce(p_args ->> 'playlist', p_args ->> 'playlist_slug');
+    v_body   text;
+    v_res    jsonb;
+BEGIN
+    IF v_sess IS NULL OR v_sess = '' THEN RETURN '{"ok":false,"note":"no session context"}'; END IF;
+    IF v_handle = '' THEN RETURN '{"ok":false,"note":"handle required (from doc_create)"}'; END IF;
+    SELECT body, COALESCE(v_title, title) INTO v_body, v_title
+      FROM stewards.doc_drafts WHERE handle = v_handle AND session_id = v_sess;
+    IF v_body IS NULL THEN
+        RETURN jsonb_build_object('ok', false, 'note', 'no draft ' || v_handle || ' in your session — doc_create + doc_append_section first')::text;
+    END IF;
+    -- reuse the exact publish boundary (video-id guard, import_doc, file write, brain, seen-set)
+    v_res := stewards.playlist_publish(v_vid, v_title, v_body, v_play);
+    IF (v_res->>'ok')::boolean THEN
+        DELETE FROM stewards.doc_drafts WHERE handle = v_handle AND session_id = v_sess;
+        v_res := v_res || jsonb_build_object('note', 'published from draft ' || v_handle || ' and cleared it. Your reply now is a short JOURNAL of what you did — do NOT paste the digest.');
+    END IF;
+    RETURN v_res::text;
+END $func$;
+
 -- ── playlist_add(): watch a new playlist ────────────────────────────────────
 CREATE OR REPLACE FUNCTION stewards.playlist_add(
     p_title text, p_url text, p_position int DEFAULT 100)
@@ -177,6 +209,10 @@ INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target) 
   'Save the finished digest of one video and mark it seen so it is never re-digested. Pass video_id, title, the playlist slug, and the COMPLETE digest as `body`. Writes study/yt/<video_id>.md + a brain entry. Call this LAST, once.',
   '{"type":"object","required":["video_id","body"],"properties":{"video_id":{"type":"string"},"title":{"type":"string"},"playlist":{"type":"string","description":"the playlist_slug from playlist_next"},"body":{"type":"string","minLength":100,"description":"the complete digest document (markdown)"}}}'::jsonb,
   '{"kind":"sql_fn","schema":"stewards","name":"playlist_publish_tool"}'::jsonb ),
+( 'playlist_publish_draft',
+  'Publish the video digest you BUILT with the doc tools (doc_create/doc_append_section). Pass the draft `handle` plus video_id, title, and the playlist slug — NOT the body (the body is pulled from your draft server-side, so you never re-emit the whole document). Marks the video seen so it is never re-digested. Call this LAST, once, after the draft is complete.',
+  '{"type":"object","required":["handle","video_id"],"properties":{"handle":{"type":"string","description":"the draft handle from doc_create"},"video_id":{"type":"string"},"title":{"type":"string"},"playlist":{"type":"string","description":"the playlist_slug from playlist_next"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"playlist_publish_draft_tool"}'::jsonb ),
 ( 'playlist_add',
   'Watch a new YouTube playlist (or channel) for future digests. Provide title (required) and url (the playlist/channel URL).',
   '{"type":"object","required":["title","url"],"properties":{"title":{"type":"string"},"url":{"type":"string"},"position":{"type":"integer"}}}'::jsonb,
@@ -189,6 +225,7 @@ ON CONFLICT (name) DO UPDATE SET
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
     ('research','playlist_next','allow','manual'),
     ('research','playlist_publish','allow','manual'),
+    ('research','playlist_publish_draft','allow','manual'),
     ('research','playlist_add','allow','manual'),
     ('research','yt_playlist','allow','manual'),
     ('research','yt_download','allow','manual'),
@@ -203,72 +240,72 @@ INSERT INTO stewards.pipelines (
     auto_materialize_on_verified
 ) VALUES (
     'playlist-digest',
-    'Digest the next unseen video on a watched playlist: read (find new video + fetch transcript) -> digest -> critique(null-case) -> recommend, then playlist_publish saves a study doc + brain entry. Single-pass v1. Uses the research agent.',
+    'Digest the next unseen video on a watched playlist. read (find new video + cache transcript, emit header only) -> build (fetch transcript via yt_get, construct the digest as a DOCUMENT via doc_* tool-call diffs, then playlist_publish_draft from the handle). The model never one-shots the digest; its reply is a journal. Doc-construction recast (agentic-doc-construction.md) — fixes the local reaper/contention/grammar failures. Uses the research agent.',
     jsonb_build_array(
-        jsonb_build_object('name','read','next','digest',
-            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
+        -- READ: find a new video, CACHE its transcript, emit ONLY the header.
+        -- It does NOT echo the transcript (a long transcript re-emit is itself a
+        -- one-shot generation that trips the reaper on a local model). The build
+        -- stage fetches the cached transcript via yt_get + page-in.
+        jsonb_build_object('name','read','next','build',
+            'model','ingest','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
             'input_template',
               'You are the READ stage of the playlist digester.' || E'\n\n' ||
               '1. Call `playlist_next`. It returns {playlist_slug, playlist_url, seen_video_ids}. If it returns playlist:null, reply EXACTLY "NO PLAYLISTS" and stop.' || E'\n' ||
               '2. Call `yt_playlist` with url = playlist_url to list the playlist''s videos (id, title, url).' || E'\n' ||
               '3. Choose the FIRST video whose id is NOT in seen_video_ids. If every listed video is already in seen_video_ids, reply EXACTLY "NOTHING NEW" and stop.' || E'\n' ||
-              '4. Call `yt_download` with that video''s url to fetch its transcript.' || E'\n' ||
-              '5. Output, starting with these EXACT three lines:' || E'\n' ||
+              '4. Call `yt_download` with that video''s url to fetch + CACHE its transcript. You do NOT need to read or repeat the transcript.' || E'\n' ||
+              '5. Output EXACTLY these three lines and NOTHING ELSE (no transcript — the build stage fetches it):' || E'\n' ||
               '   VIDEO_ID: <the video id>' || E'\n' ||
               '   PLAYLIST: <the playlist_slug>' || E'\n' ||
-              '   TITLE: <the video title>' || E'\n' ||
-              '   then the full transcript. The next stage digests it — do NOT digest it yourself.' ),
-        jsonb_build_object('name','digest','next','critique',
-            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
-            'auto_advance',true,'tools_disabled',true,
-            'input_template',
-              'You are the DIGEST stage. If the text below is exactly "NO PLAYLISTS" or "NOTHING NEW", reply with that same word(s) and stop.' || E'\n\n' ||
-              'Here is the video header + transcript from the read stage:' || E'\n\n' ||
-              '{{stage_results.read.output}}' || E'\n\n' ||
-              'Digest this talk/video the way a careful student studies it — depth over breadth. KEEP the VIDEO_ID / PLAYLIST / TITLE header lines at the top of your output, then produce, in markdown:' || E'\n' ||
-              '- **The core thesis / claim** (2-4 sentences).' || E'\n' ||
-              '- **How it builds** — the structure of the argument.' || E'\n' ||
-              '- **Key passages** — 3-6 quoted verbatim from the transcript, each with a one-line gloss.' || E'\n' ||
-              '- **Themes** — the recurring ideas.' || E'\n\n' ||
-              'Be faithful to the transcript. Quote only what is actually said.' ),
-        jsonb_build_object('name','critique','next','recommend',
-            'model','qwen3.7-plus','provider','opencode_go','agent_family','research',
-            'auto_advance',true,'tools_disabled',true,
-            'input_template',
-              'You are the CRITIQUE / null-case stage. If the digest below is exactly "NO PLAYLISTS" or "NOTHING NEW", reply with that same word(s) and stop.' || E'\n\n' ||
-              'TRANSCRIPT (excerpt):' || E'\n' || '{{stage_results.read.output}}' || E'\n\n' ||
-              'DIGEST:' || E'\n' || '{{stage_results.digest.output}}' || E'\n\n' ||
-              'Pressure-test the digest: What did it flatten or miss? Is any claim unfaithful to what was actually said? What is the STRONGEST objection to the video''s thesis (the null case)? Return the digest (keep the VIDEO_ID/PLAYLIST/TITLE header), corrected where it was wrong, with a new "## Tensions & objections" section. Keep the good parts verbatim.' ),
-        jsonb_build_object('name','recommend','next',NULL,
-            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
+              '   TITLE: <the video title>' ),
+        -- BUILD: construct the digest as a DOCUMENT via tool-call diffs (doc_*),
+        -- then publish from the draft handle. The model never emits the whole
+        -- digest as one generation — it builds it section by section and its
+        -- chat reply is a short journal. (agentic-doc-construction.md)
+        jsonb_build_object('name','build','next',NULL,
+            'model','reason','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
             'input_template',
-              'You are the RECOMMEND stage — the final one. If the text below is exactly "NO PLAYLISTS" or "NOTHING NEW", reply with that same word(s) and do NOT publish.' || E'\n\n' ||
-              'The refined digest (its first lines carry VIDEO_ID / PLAYLIST / TITLE):' || E'\n\n' ||
-              '{{stage_results.critique.output}}' || E'\n\n' ||
-              'Add a final section "## What''s worth learning — and what we could do with it": 3-6 concrete, actionable takeaways (not platitudes — things a person or this substrate could actually try). Then assemble the COMPLETE document (title, the digest, tensions, recommendations — you may drop the raw header lines from the published body) and call `playlist_publish` with: video_id + title + playlist (read them from the header lines) and the complete document as `body`. After publishing, output the document.' )
+              'You are the BUILD stage. BUILD the digest as a document using your doc tools — do NOT write the digest as your reply.' || E'\n\n' ||
+              'The read stage gave you this header:' || E'\n\n' ||
+              '{{stage_results.read.output}}' || E'\n\n' ||
+              'Steps:' || E'\n' ||
+              '1. Read the VIDEO_ID, PLAYLIST, and TITLE from the header above.' || E'\n' ||
+              '2. Call `yt_get` with the video_id to read the cached transcript. If it is large you will see a [page-in] banner with a handle — use `result_read`(handle, offset, limit) to read it in chunks; do not pull it all at once.' || E'\n' ||
+              '3. Call `doc_create` with title = the TITLE and project "ai".' || E'\n' ||
+              '4. Build the digest with `doc_append_section` (one call each, keep each small, faithful to the transcript, quote only what is actually said):' || E'\n' ||
+              '   - "Thesis" — the core claim in 2-4 sentences.' || E'\n' ||
+              '   - "How it builds" — the structure of the argument.' || E'\n' ||
+              '   - "Key passages" — 3-6 verbatim quotes, each with a one-line gloss.' || E'\n' ||
+              '   - "Themes" — the recurring ideas.' || E'\n' ||
+              '   - "Tensions & objections" — the STRONGEST objection to the thesis (the null case); be honest, not agreeable.' || E'\n' ||
+              '   - "What''s worth learning" — 3-6 concrete, actionable takeaways (not platitudes).' || E'\n' ||
+              '5. Call `doc_read` to review the whole draft; fix anything weak with `doc_patch`.' || E'\n' ||
+              '6. Call `playlist_publish_draft` with the handle + video_id + title + playlist (from the header). This publishes the doc and marks the video seen.' || E'\n' ||
+              '7. Finally, reply with a short JOURNAL (2-4 sentences): what the video argued, what you built, and the slug. Do NOT paste the document.' )
     ),
     false, false,
     NULL, NULL,
-    '["raw","researched","planned","verified"]'::jsonb,
-    false   -- playlist_publish persists directly (no file auto-materialize)
+    '["raw","verified"]'::jsonb,
+    false   -- playlist_publish_draft persists directly (no file auto-materialize)
 )
 ON CONFLICT (family) DO UPDATE SET
     description = EXCLUDED.description, stages = EXCLUDED.stages, updated_at = now();
 
+-- recast read/build (drop the old digest/critique/recommend rows — orphaned by the recast)
+DELETE FROM stewards.stage_models
+ WHERE pipeline_family='playlist-digest' AND stage_name IN ('digest','critique','recommend');
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model, notes) VALUES
-    ('playlist-digest','read',     'kimi-k2.6',    'Find a new video + fetch transcript; tools on (playlist_next, yt_playlist, yt_download).'),
-    ('playlist-digest','digest',   'kimi-k2.6',    'Faithful study digest of the transcript; tools off.'),
-    ('playlist-digest','critique', 'qwen3.7-plus', 'Null-case the digest; NOT qwen3.7-max (cost). Tools off.'),
-    ('playlist-digest','recommend','kimi-k2.6',    'Actionable takeaways + playlist_publish; tools on.')
+    ('playlist-digest','read',  'ingest', 'Find a new video + cache transcript, emit header only; tools on (playlist_next/yt_playlist/yt_download). Local ingest alias (gemma).'),
+    ('playlist-digest','build', 'reason', 'Build the digest as a doc via doc_* tool-call diffs + playlist_publish_draft; tools on. Local reason alias (qwen).')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
     default_model = EXCLUDED.default_model, notes = EXCLUDED.notes;
 
+DELETE FROM stewards.pipeline_stage_maturity
+ WHERE pipeline_family='playlist-digest' AND stage_name IN ('digest','critique','recommend');
 INSERT INTO stewards.pipeline_stage_maturity (pipeline_family, stage_name, produces_maturity) VALUES
-    ('playlist-digest','digest',   'researched'),
-    ('playlist-digest','critique', 'planned'),
-    ('playlist-digest','recommend','verified')
+    ('playlist-digest','build','verified')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET produces_maturity = EXCLUDED.produces_maturity;
 
 -- ── the video-study intent (the core ships no intents; seed our own) ─────────
