@@ -541,6 +541,7 @@ DECLARE
     v_tail_size        int := 8;
     v_provider         text;
     v_budget_tokens    int;
+    v_single_cap       int;
     v_pressure_total   numeric := 0;
     v_pressure_pct     numeric;
     v_drop_medium      boolean := false;
@@ -579,6 +580,12 @@ BEGIN
 
     -- L.1.1.1: budget cascade.
     v_budget_tokens := stewards.effective_budget(p_session_id, v_stage);
+    -- 33: per-message page-in cap (chars), window-aware via the budget. A
+    -- single rendered message over this is truncated to its head + a page-in
+    -- banner (page_in_cap) so one fat fresh fetch can't blow a small window.
+    v_single_cap := floor(GREATEST(v_budget_tokens, 1)
+        * COALESCE((stewards.config_get('page_in_single_msg_ratio', '0.5'::jsonb))::text::numeric, 0.5)
+        * 3.5)::int;
 
     -- L.1: pressure with strategy multiplier.
     SELECT sum(length(coalesce(m.content,'')) + length(coalesce(m.tool_calls::text,'')) + length(coalesce(m.reasoning_content,''))) / 3.5
@@ -621,7 +628,7 @@ BEGIN
                 AND (rn_from_end > v_tail_size OR context_state <> 'verbatim')) AS addressable
           FROM ordered
     )
-    SELECT coalesce(jsonb_agg(
+    SELECT coalesce(jsonb_agg(stewards.page_in_cap(
         CASE
             -- Strict-template safety (2026-06-18): a system-role row in the
             -- HISTORY (e.g. the soft-cap "[STEWARD NOTICE]") must never render
@@ -697,6 +704,7 @@ BEGIN
             ELSE
                 jsonb_build_object('role', role, 'content', content)
         END
+        , v_single_cap, handle)
         ORDER BY pos
     ), '[]'::jsonb)
     INTO v_history

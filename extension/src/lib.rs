@@ -365,6 +365,16 @@ extension_sql_file!(
     requires = ["create_model_aliases"],
 );
 
+// 33: page in large tool results — compose_messages caps a single oversized
+// rendered message to a head + a page-in banner (page_in_cap), and the model
+// reads the rest via result_read / result_search. Stops one fat fresh fetch
+// from blowing a small window; pairs with the window-aware budget (15a 2.5).
+extension_sql_file!(
+    "../33-page-in.sql",
+    name = "create_page_in",
+    requires = ["create_alias_failover"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
