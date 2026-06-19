@@ -87,6 +87,25 @@ research-summary. Then generalize.
 3. Which models are the "builders" (tool-loop doers) per stage (gemma/qwen; nemotron?).
 4. Pilot scope = playlist-digest only, then a go/no-go before generalizing.
 
+## ★ PILOT — THESIS PROVEN 2026-06-19 (Phase 1 + isolated build test)
+Phase 1 (the tool surface, `34-doc-builder.sql`) shipped + chained (OSS `6145d51`). Then the core
+thesis was proven in isolation on the *broken model*: a tools-on `build` stage on **qwen** (the model
+that 500'd with "peg-native format" on the one-shot digest) was given a short transcript and told to
+build via the doc tools. Result: **8 flexllama chats, 0 errors, 0 peg failures** — qwen ran
+doc_create → 4× doc_append_section → doc_read → doc_finalize, pooled a coherent 2356-char digest
+(proper Thesis / How-it-builds / Key-passages / Themes), and its final message was a short JOURNAL
+(not the doc). The reframe works: tool-call construction + think-then-call sidesteps the grammar that
+one-shot generation tripped. Test artifacts cleaned up.
+**Remaining for the full playlist recast (the "wiring", thesis already proven):**
+- `playlist_publish_draft(handle, video_id, title, playlist)` bridge — pulls the draft body
+  SERVER-SIDE and runs the existing publish logic (seen-mark, brain, file, 11-char guard). Critical:
+  the model must NEVER pass the full body as a tool arg (that's the one-shot generation again); it
+  passes only the handle.
+- Recast playlist-digest stages: read (unchanged) → build (tools-on doc construction, collapses
+  digest+critique+recommend; re-add a critic doc_patch pass later). halt_on stays read→(NO PLAYLISTS/
+  NOTHING NEW). Update stage_models + pipeline_stage_maturity for the new stage set.
+- Live test on a fresh video (needs an unseen video / a fresh playlist).
+
 ## Verify-first checklist before build
 - [ ] Confirm reaper scope is per-call (else raise threshold instead).
 - [ ] Confirm `doc_*` tool calls round-trip on local qwen + gemma (think-then-call works).
