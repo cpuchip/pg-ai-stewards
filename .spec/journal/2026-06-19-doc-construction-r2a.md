@@ -42,3 +42,28 @@ Full list in `local-learnings-rollout.md` → Execution log. Short: R2b research
 research-write (with a `doc_finalize` project-from-work-item fallback), R3 reaper config + judges→local,
 then the pgrx **rebuild + virgin-smoke** (which gates the held OSS push `d38b336`) + sweep `doc-build-test`.
 Plus: critique-convergence prompt tuning; purge the historical `playlist-digest-cron--*` pool junk (Michael's call).
+
+## Update 2 — the carry-forwards (same session, "keep going")
+
+Almost the whole tail landed + the OSS push went public (`e8a040c`, ws `558bedf`):
+- **Pool junk purged** (20 double-pool docs; canonical pools intact: 33 yt + 27 book).
+- **Critique tuning**: book + research critiques now work from the draft only (no web re-search) so they
+  converge — the book e2e had the critic wander into source re-verification (it found a real Swift-satire
+  misread, but slow on local).
+- **`doc_finalize` project-fallback** (34): pools kind `doc`; tags the pooled doc with the work item's
+  project when the draft has none (research has no static project). Proven in virgin-smoke OK 20.
+- **R2b/R2c**: `35-research-doc-construction.sql` recasts research-summary + research-write to
+  gather/build/critique (doc_* build + doc_finalize critique); preserves the tuned gather stages.
+- **Dockerfile bug** the rebuild gate caught: 34 was in lib.rs but never the Dockerfile COPY → the image
+  wouldn't build (CI would've gone red). Fixed (+35).
+- **Rebuild + virgin-smoke 20/20** (00→35) + **overlay-clobber PASS** (which caught cut3's stale
+  `on_maturity_verified` re-author → mirrored the `pools_via_tool` guard). Swept `doc-build-test`.
+
+**New finding:** research-summary's GATHER stage (gemma, multi-round web research) can **wedge** on a large
+accumulated context (a controlled run hung 13+ min on one gather turn; rig otherwise healthy). This is the
+UNCHANGED gather stage, not the doc-construction recast. Self-heals via the reaper requeue. Follow: cap
+gather rounds or route the heavy-web gather to a bigger-context model on local.
+
+**Remaining (small):** R3 (reaper config + judges→local, both want the next rebuild — but doc-construction
+already mitigates the reaper, so low urgency) + the gather-wedge follow + the live research e2e once gather
+is unblocked (machinery already proven by OK 20 + the book e2e).

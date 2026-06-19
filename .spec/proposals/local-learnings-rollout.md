@@ -88,25 +88,44 @@ A council-moment read of the pipeline machinery surfaced two things the plan did
   book_publish_draft). A Modest Proposal digested e2e on local (gemma+qwen): pooled once as
   `book-a-modest-proposal` (project=books, 6 sections incl. Tensions), **0 double-pool junk**, $0, 0 errors.
 
-**Carry-forward (next focused session — foundation in place makes these fast):**
-- **R2b research-summary + R2c research-write** doc-construction recast in OSS core `13-research-pipelines.sql`:
-  recast synthesize→build (doc_*) + review→critique (doc_current → doc_read → doc_patch → **doc_finalize**),
-  set `auto_materialize_on_verified=false` + `metadata.pools_via_tool=true`, drop `file_content_jsonpath`.
-  **New sub-task: `doc_finalize` project fallback** — research has no static project (unlike book='books'),
-  so `doc_finalize` (and the publish bridges) should default the pooled doc's `project_association` to the
-  WORK ITEM's project when the draft's project is empty (look up `work_items` by the `wi--<uuid8>` session
-  prefix). Without this the research pool docs won't be project-findable. Then update `role-aliases.sql`
-  to target the new build/critique stage names. Prove each e2e on local before the next.
-- **R3** reaper_stale_minutes config (raise ~30 local) + route the 3 background judges to the reason alias.
-- **The pgrx rebuild** (bakes `08-gates` pools_via_tool + `34` work-item drafts/doc_current + R2b/c `13` +
-  R3 reaper) + **virgin-smoke + overlay-clobber** → THEN **push the held OSS commit `d38b336`** (public
-  push is gated on virgin-smoke per the rebuild discipline) + sweep the FK-pinned `doc-build-test` pipeline.
-- **Critique-convergence tuning**: the critic stage inherits the research agent's web tools and uses them
-  to re-verify the source (slow, ~2 extra turns on local; it DID inform real corrections, so not pure
-  waste). Consider: critique prompt "work from the draft only, do NOT re-search," or deny web tools for
-  the critique stage. Structural, not a defect — book still converged + published.
-- **Pool cleanup (Michael's call):** purge the historical `playlist-digest-cron--*` journal/duplicate
-  docs (project='ai') now that the double-pool is fixed; verify each has a clean `yt-<id>` twin first.
+## Execution log — Session 2 (2026-06-19 PM, "keep going with the carry-forwards")
+
+Almost the whole tail landed + the OSS push is now public (`e8a040c`; ws `558bedf`):
+- **Pool junk cleanup — DONE.** Purged 20 double-pool artifacts (`playlist-digest-cron--*` + the
+  old one-shot `book-digest-hourly--*` journal/duplicate docs); canonical pools intact (33 yt + 27 book).
+- **Critique-convergence tuning — DONE.** book + research critique prompts now say "work ONLY from the
+  draft; do NOT fetch_url/web_search — you are reviewing the draft, not re-researching." (The e2e showed
+  the critic wandering into source re-verification — it found a real Swift-satire misread, but slow.)
+- **`doc_finalize` project-from-work-item fallback — DONE** (34): pools as kind `doc` (was `digest`) and
+  falls back to the work item's `project_association` (derived from the `wi--<uuid8>` session) when the
+  draft has no project. Proven in virgin-smoke OK 20.
+- **R2b research-summary + R2c research-write — DONE** (new `35-research-doc-construction.sql`, chained in
+  lib.rs): gather→build→critique / context_gather→gather→build→critique; synthesize→doc_* build,
+  review→doc_patch+doc_finalize critique; `auto_materialize` off + `pools_via_tool`; roles named; gather
+  stages preserved. Applied live + virgin-smoke-asserted.
+- **Dockerfile bug FIXED** (rebuild gate caught it): 34 was added to lib.rs last session but never to the
+  Dockerfile COPY → the image would FAIL to build (CI red on next push). Added 34 + 35.
+- **Rebuild + virgin-smoke — DONE: 20/20 PASS** (chain 00→35; OK 20 = doc-construction layer) +
+  **overlay-clobber PASS** (caught that `cut3` re-authored `on_maturity_verified` with the stale body →
+  mirrored the `pools_via_tool` guard so cut3 stays a core superset). Swept the FK-pinned `doc-build-test`.
+- **OSS pushed public** (gate satisfied): `e8a040c`. Workspace `558bedf`.
+
+**New finding (separate from the rollout):** research-summary's GATHER stage (gemma/ingest doing
+multi-round web research) can **wedge** on a large accumulated context — a controlled run hung 13+ min on
+one gather turn after 3 web_search_exa results (the rig was otherwise healthy, 41 flexllama chats done).
+This is the *unchanged* gather stage, not the doc-construction build/critique (which is proven). A wedged
+gather self-heals via the reaper requeue. Worth a follow: cap gather web-rounds, or route gather to a
+larger-context/faster model (nemotron 512k or kimi) for the heavy-web pipelines on local.
+
+**Carry-forward (small remainder):**
+- **R3** — `reaper_stale_minutes` config (Rust, bgworker.rs `interval '15 minutes'` ×2) + route the 3
+  background judges (engram-extractor / judge-brief / watchman-consolidator, ~5 hardcoded `opencode_go`
+  sites in 15a/16) to the local `reason` alias. Both want the next pgrx rebuild — fold them together.
+  NOTE: doc-construction already MITIGATES the reaper concern (its short diffs never approach 15 min), so
+  the reaper raise lost its urgency; the gather-wedge above is the remaining 15-min-reaper trigger.
+- The gather-wedge follow above (cap rounds / bigger gather model on local).
+- e2e-prove research-summary/write build+critique on local once gather is unblocked (machinery already
+  proven by virgin-smoke OK 20 + the book-digest e2e; only the live run is pending the gather fix).
 
 ## Cross-project
 Leave a note in the general-workspace session to review this session and apply what transfers to
