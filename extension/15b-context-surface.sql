@@ -623,6 +623,17 @@ BEGIN
     )
     SELECT coalesce(jsonb_agg(
         CASE
+            -- Strict-template safety (2026-06-18): a system-role row in the
+            -- HISTORY (e.g. the soft-cap "[STEWARD NOTICE]") must never render
+            -- mid-array. qwen-class chat templates require the system message
+            -- FIRST and raise "System message must be at the beginning" → the
+            -- provider 400s (llama.cpp can't build the tool-call grammar).
+            -- gemma/nemotron tolerate it but a buried system note is also
+            -- semantically weak for them. Relabel to 'user' IN PLACE — the
+            -- notice is temporally relevant (keep its position); the single
+            -- leading system block is prepended separately below.
+            WHEN role = 'system' THEN
+                jsonb_build_object('role', 'user', 'content', content)
             -- ============ CT2.2 state overrides (gated; come first) ============
             WHEN v_tools_on AND context_state = 'muted' THEN
                 jsonb_build_object('role', role,
