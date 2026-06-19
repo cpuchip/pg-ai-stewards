@@ -1060,4 +1060,62 @@ BEGIN
     RAISE NOTICE 'OK 20: doc-construction — 6 doc tools + work-item-scoped drafts (cross-stage doc_current) + doc_finalize project-fallback + pools_via_tool skips the double-pool; research-summary/write recast (build/critique, auto_mat off)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→35) is sound =='
+-- ── 21: judge local-routing (36) — config-gated reroute of the 3 background judges
+DO $$
+DECLARE v_prov text; v_reqm text; v_bodym text;
+BEGIN
+    -- ships OFF with public defaults (a bare install is unchanged)
+    ASSERT stewards.config_get_text('judge_dispatch_local','x') = 'false',
+        'judge_dispatch_local must default false (public install unchanged)';
+    ASSERT stewards.config_get_text('judge_dispatch_provider','x') = 'opencode_go',
+        'judge_dispatch_provider must default opencode_go';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='reroute_judge_to_local'),
+        'the reroute function must ship';
+    ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='work_queue_reroute_judge_to_local'),
+        'the BEFORE-INSERT reroute trigger must be installed';
+
+    INSERT INTO stewards.sessions (id,kind) VALUES ('smoke-judge','tool') ON CONFLICT DO NOTHING;
+
+    -- OFF: a judge dispatch is left on its declared provider/model
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat','opencode_go',
+            jsonb_build_object('agent_family','engram-extractor','requested_model','deepseek-v4-flash',
+                               'session_id','smoke-judge','body', jsonb_build_object('model','deepseek-v4-flash')),
+            'pending')
+    RETURNING provider, payload->>'requested_model', payload->'body'->>'model' INTO v_prov, v_reqm, v_bodym;
+    ASSERT v_prov='opencode_go' AND v_reqm='deepseek-v4-flash' AND v_bodym='deepseek-v4-flash',
+        format('with routing OFF a judge dispatch is unchanged, got %s/%s/%s', v_prov, v_reqm, v_bodym);
+
+    -- ON: a judge dispatch is repointed to the configured local provider + model (BOTH fields)
+    PERFORM stewards.config_set('judge_dispatch_local','true'::jsonb,NULL);
+    PERFORM stewards.config_set('judge_dispatch_provider', to_jsonb('flexllama'::text), NULL);
+    PERFORM stewards.config_set('judge_dispatch_model', to_jsonb('gemma-12b'::text), NULL);
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat','opencode_go',
+            jsonb_build_object('agent_family','engram-extractor','requested_model','deepseek-v4-flash',
+                               'session_id','smoke-judge','body', jsonb_build_object('model','deepseek-v4-flash')),
+            'pending')
+    RETURNING provider, payload->>'requested_model', payload->'body'->>'model' INTO v_prov, v_reqm, v_bodym;
+    ASSERT v_prov='flexllama' AND v_reqm='gemma-12b' AND v_bodym='gemma-12b',
+        format('with routing ON a judge dispatch must reroute provider + requested_model + body.model, got %s/%s/%s', v_prov, v_reqm, v_bodym);
+
+    -- a NON-judge dispatch is never touched, even with routing on
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat','opencode_go',
+            jsonb_build_object('agent_family','research','requested_model','kimi-k2.6',
+                               'session_id','smoke-judge','body', jsonb_build_object('model','kimi-k2.6')),
+            'pending')
+    RETURNING provider, payload->'body'->>'model' INTO v_prov, v_bodym;
+    ASSERT v_prov='opencode_go' AND v_bodym='kimi-k2.6',
+        format('a non-judge dispatch must be untouched, got %s/%s', v_prov, v_bodym);
+
+    -- restore virgin state
+    PERFORM stewards.config_set('judge_dispatch_local','false'::jsonb,NULL);
+    PERFORM stewards.config_set('judge_dispatch_provider', to_jsonb('opencode_go'::text), NULL);
+    PERFORM stewards.config_set('judge_dispatch_model', to_jsonb('deepseek-v4-flash'::text), NULL);
+    DELETE FROM stewards.work_queue WHERE payload->>'session_id'='smoke-judge';
+    DELETE FROM stewards.sessions WHERE id='smoke-judge';
+    RAISE NOTICE 'OK 21: judge local-routing — default off leaves judges unchanged; on reroutes the 3 judge families (provider + requested_model + body.model); non-judge dispatches untouched';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→36) is sound =='

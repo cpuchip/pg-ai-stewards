@@ -396,6 +396,16 @@ extension_sql_file!(
     requires = ["create_research_pipelines", "create_doc_builder"],
 );
 
+// Route the 3 background judges (engram-extractor/judge-brief/watchman-consolidator)
+// to a local model via a config-gated BEFORE-INSERT reroute on work_queue, instead of
+// their hardcoded opencode_go. Needs work_queue (04) + the engram/subagent/watchman
+// judges (15a/16/03) to exist as the families it targets.
+extension_sql_file!(
+    "../36-judge-local-routing.sql",
+    name = "create_judge_local_routing",
+    requires = ["create_subagents"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
