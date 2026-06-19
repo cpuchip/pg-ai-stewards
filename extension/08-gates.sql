@@ -1121,8 +1121,18 @@ BEGIN
     -- project trigger in 25-corpus) so any project-tagged verified work pools; the
     -- auto_materialize+file arm preserves the prior reflect/planning pooling.
     -- import_doc is idempotent by slug; we then tag the doc with the project.
-    IF (v_auto_mat AND NEW.file_destination IS NOT NULL)
-       OR NEW.project_association IS NOT NULL THEN
+    --
+    -- pools_via_tool (2026-06-19, doc-construction): a doc-construction pipeline
+    -- BUILDS its artifact with doc_* tool-call diffs and pools the CANONICAL doc
+    -- itself via a publish/finalize tool (playlist_publish_draft / book_publish_draft
+    -- / doc_finalize). Its final-stage output is a short JOURNAL, not the document —
+    -- so auto-pooling that output here would pool a journal as if it were the digest
+    -- (and the OLD one-shot digesters double-pooled a near-duplicate). When the
+    -- pipeline declares metadata.pools_via_tool, skip this arm entirely; the tool
+    -- already pooled the real doc (and project-tagged it). See agentic-doc-construction.md.
+    IF ((v_auto_mat AND NEW.file_destination IS NOT NULL)
+        OR NEW.project_association IS NOT NULL)
+       AND NOT COALESCE((v_pipeline.metadata->>'pools_via_tool')::boolean, false) THEN
         BEGIN
             v_content := stewards.extract_work_item_file_content(NEW.id);
             IF v_content IS NULL OR length(btrim(v_content)) = 0 THEN

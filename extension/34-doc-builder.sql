@@ -37,7 +37,27 @@ CREATE TABLE IF NOT EXISTS stewards.doc_drafts (
 );
 CREATE INDEX IF NOT EXISTS doc_drafts_session_idx ON stewards.doc_drafts (session_id);
 COMMENT ON TABLE stewards.doc_drafts IS
-'34: work-in-progress docs the model builds incrementally via doc_* tool calls. Scoped to the building session; finalize -> import_doc pool + delete. Self-contained (no core search/embedding touch).';
+'34: work-in-progress docs the model builds incrementally via doc_* tool calls. Scoped to the building WORK ITEM (all its stages), so a build stage can construct a draft and a separate critic/publish stage can read+patch+publish it. finalize -> import_doc pool + delete. Self-contained (no core search/embedding touch).';
+
+-- ── work-item-scoped access (cross-stage drafts) ──────────────────────
+-- A pipeline dispatches each stage under its own session id of the form
+-- `wi--<uuid8>--<stage>` (04-work-items.sql work_item_dispatch_stage). Scoping a
+-- draft to the EXACT session would lock it to the stage that created it — so a
+-- build stage's draft would be invisible to a separate critic/publish stage of
+-- the SAME run. Match on the shared `wi--<uuid8>` work-item prefix instead: a
+-- draft is reachable from any stage of the work item that built it, but stays
+-- isolated across different work items and from persona/chat sessions (which use
+-- a different id shape → exact-match only). The handle is a random PK, so this is
+-- a scoping convenience, not the security boundary.
+CREATE OR REPLACE FUNCTION stewards.doc_draft_session_match(p_draft_session text, p_caller_session text)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS $fn$
+    SELECT p_draft_session = p_caller_session
+        OR ( left(p_draft_session, 4) = 'wi--'
+             AND left(p_caller_session, 4) = 'wi--'
+             AND split_part(p_draft_session, '--', 2) = split_part(p_caller_session, '--', 2) );
+$fn$;
+COMMENT ON FUNCTION stewards.doc_draft_session_match(text, text) IS
+'34: true if a draft session belongs to the same work item (wi--<uuid8>) as the caller, or is the exact same session. Lets a draft built in one stage be reached by a later stage of the same run.';
 
 -- ── doc_create: start a draft (outline-first, for coherence) ──────────
 CREATE OR REPLACE FUNCTION stewards.doc_create_tool(p_args jsonb)
@@ -83,7 +103,7 @@ BEGIN
                           THEN '## ' || btrim(v_heading) || E'\n\n' ELSE '' END
                   || v_body,
            updated_at = now()
-     WHERE handle = v_handle AND session_id = v_sess
+     WHERE handle = v_handle AND stewards.doc_draft_session_match(session_id, v_sess)
     RETURNING length(body) INTO v_chars;
     IF v_chars IS NULL THEN RETURN jsonb_build_object('error', 'no draft ' || v_handle || ' in your session (doc_create first)'); END IF;
     RETURN jsonb_build_object('ok', true, 'handle', v_handle, 'total_chars', v_chars,
@@ -106,14 +126,14 @@ BEGIN
     IF v_sess IS NULL OR v_sess = '' THEN RETURN jsonb_build_object('error', 'no session context'); END IF;
     IF v_handle = '' THEN RETURN jsonb_build_object('error', 'handle required'); END IF;
     IF v_find IS NULL OR v_find = '' THEN RETURN jsonb_build_object('error', 'find (the exact text to replace) required'); END IF;
-    SELECT body INTO v_body FROM stewards.doc_drafts WHERE handle = v_handle AND session_id = v_sess;
+    SELECT body INTO v_body FROM stewards.doc_drafts WHERE handle = v_handle AND stewards.doc_draft_session_match(session_id, v_sess);
     IF v_body IS NULL THEN RETURN jsonb_build_object('error', 'no draft ' || v_handle || ' in your session'); END IF;
     v_pos := position(v_find IN v_body);
     IF v_pos = 0 THEN RETURN jsonb_build_object('error', 'find text not present — doc_read to see the current body', 'handle', v_handle); END IF;
     UPDATE stewards.doc_drafts
        SET body = left(v_body, v_pos - 1) || v_repl || substr(v_body, v_pos + length(v_find)),
            updated_at = now()
-     WHERE handle = v_handle AND session_id = v_sess;
+     WHERE handle = v_handle AND stewards.doc_draft_session_match(session_id, v_sess);
     RETURN jsonb_build_object('ok', true, 'handle', v_handle, 'note', 'patched the first occurrence.');
 END;
 $fn$;
@@ -129,7 +149,7 @@ DECLARE
 BEGIN
     IF v_sess IS NULL OR v_sess = '' THEN RETURN jsonb_build_object('error', 'no session context'); END IF;
     IF v_handle = '' THEN RETURN jsonb_build_object('error', 'handle required'); END IF;
-    SELECT * INTO v_d FROM stewards.doc_drafts WHERE handle = v_handle AND session_id = v_sess;
+    SELECT * INTO v_d FROM stewards.doc_drafts WHERE handle = v_handle AND stewards.doc_draft_session_match(session_id, v_sess);
     IF v_d.handle IS NULL THEN RETURN jsonb_build_object('error', 'no draft ' || v_handle || ' in your session'); END IF;
     RETURN jsonb_build_object('ok', true, 'handle', v_handle, 'title', v_d.title,
         'total_chars', length(v_d.body), 'body', v_d.body);
@@ -149,7 +169,7 @@ DECLARE
 BEGIN
     IF v_sess IS NULL OR v_sess = '' THEN RETURN jsonb_build_object('error', 'no session context'); END IF;
     IF v_handle = '' THEN RETURN jsonb_build_object('error', 'handle required'); END IF;
-    SELECT * INTO v_d FROM stewards.doc_drafts WHERE handle = v_handle AND session_id = v_sess;
+    SELECT * INTO v_d FROM stewards.doc_drafts WHERE handle = v_handle AND stewards.doc_draft_session_match(session_id, v_sess);
     IF v_d.handle IS NULL THEN RETURN jsonb_build_object('error', 'no draft ' || v_handle || ' in your session'); END IF;
     IF length(btrim(v_d.body)) < 80 THEN
         RETURN jsonb_build_object('error', 'draft too short to finalize (' || length(v_d.body) || ' chars) — build it first'); END IF;
@@ -169,8 +189,37 @@ END;
 $fn$;
 COMMENT ON FUNCTION stewards.doc_finalize_tool(jsonb) IS '34: pool a finished draft via import_doc + delete the draft.';
 
+-- ── doc_current: find the active draft for THIS work item (cross-stage) ──
+-- A later stage (critic / publish) needs the handle of the draft an earlier
+-- stage built. Rather than parse it out of the prior stage's free-text journal,
+-- this returns the most-recently-touched draft reachable from the caller's
+-- work item (doc_draft_session_match). One draft per run is the common case.
+CREATE OR REPLACE FUNCTION stewards.doc_current_tool(p_args jsonb)
+RETURNS jsonb LANGUAGE plpgsql STABLE AS $fn$
+DECLARE
+    v_sess text := p_args ->> '_session_id';
+    v_d    stewards.doc_drafts%ROWTYPE;
+BEGIN
+    IF v_sess IS NULL OR v_sess = '' THEN RETURN jsonb_build_object('error', 'no session context'); END IF;
+    SELECT * INTO v_d FROM stewards.doc_drafts
+     WHERE stewards.doc_draft_session_match(session_id, v_sess)
+     ORDER BY updated_at DESC LIMIT 1;
+    IF v_d.handle IS NULL THEN
+        RETURN jsonb_build_object('ok', true, 'handle', NULL,
+            'note', 'no active draft for this work item — an earlier stage should have doc_create''d one'); END IF;
+    RETURN jsonb_build_object('ok', true, 'handle', v_d.handle, 'title', v_d.title,
+        'total_chars', length(v_d.body),
+        'note', 'the active draft. doc_read it, revise with doc_patch, then publish/finalize.');
+END;
+$fn$;
+COMMENT ON FUNCTION stewards.doc_current_tool(jsonb) IS '34: return the active draft handle for the caller''s work item (cross-stage handoff).';
+
 -- ── register the tools (sql_fn — no bridge refresh needed) ────────────
 INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, active) VALUES
+( 'doc_current',
+  'Find the document draft your run is building (its handle), when a previous stage created it and you need to read, revise, or publish it. Returns {handle, title, total_chars}. Use this at the start of a critic or publish stage to pick up the draft the build stage made.',
+  '{"type":"object","additionalProperties":false,"properties":{}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"doc_current_tool"}'::jsonb, true ),
 ( 'doc_create',
   'Start building a document incrementally. You do NOT write the whole document as one chat reply — you BUILD it with tool calls (this is how good agents write anything large). Returns a handle. Sketch an outline, then add sections with doc_append_section, fix with doc_patch, and doc_finalize when done. Your final chat reply is a short JOURNAL of what you did, not the document itself.',
   '{"type":"object","additionalProperties":false,"properties":{'
@@ -216,7 +265,7 @@ ON CONFLICT (name) DO UPDATE SET
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source)
 SELECT v.a, v.b, 'allow', 'manual'
   FROM (SELECT a, b FROM unnest(ARRAY['research','stewards-explore']) a
-                  CROSS JOIN unnest(ARRAY['doc_create','doc_append_section','doc_patch','doc_read','doc_finalize']) b) v
+                  CROSS JOIN unnest(ARRAY['doc_create','doc_append_section','doc_patch','doc_read','doc_finalize','doc_current']) b) v
  WHERE NOT EXISTS (
         SELECT 1 FROM stewards.agent_tool_perms p
          WHERE p.agent_family = v.a AND p.tool_pattern = v.b AND p.action = 'allow');

@@ -72,3 +72,18 @@ ON CONFLICT (provider, model) DO NOTHING;
 INSERT INTO stewards.model_pricing (provider, model, input_micro_per_mtok, output_micro_per_mtok, effective_at, notes) VALUES
   ('lm_studio', 'qwen/qwen3.6-27b', 0, 0, now(), 'local — no per-token cost')
 ON CONFLICT (provider, model, effective_at) DO NOTHING;
+
+-- ── role aliases (the digesters dispatch by ROLE, not a concrete model) ───────
+-- The example digesters (book/playlist) and the doc-construction loops name a
+-- ROLE — ingest (big-context doer), reason (strong doer/synthesizer), critic
+-- (reviewer) — so a deployer repoints the whole fleet by editing these rows (e.g.
+-- to local models) instead of every pipeline. pick_alias_member picks the
+-- lowest-priority AVAILABLE member, failing over within the role. These are the
+-- PUBLIC defaults at priority 5 (a low-precedence floor): a deployer who adds
+-- local members at priority 0 (see the workspace overlay) overrides them, while a
+-- bare public install still dispatches. Requires the model_aliases table (core 31).
+INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority, notes) VALUES
+  ('ingest', 'opencode_go', 'kimi-k2.6',    5, 'public default: big-context doer'),
+  ('reason', 'opencode_go', 'kimi-k2.6',    5, 'public default: strong doer / synthesizer'),
+  ('critic', 'opencode_go', 'qwen3.7-plus', 5, 'public default: strong reviewer')
+ON CONFLICT (alias, provider, provider_model) DO NOTHING;

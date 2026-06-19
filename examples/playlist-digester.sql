@@ -160,11 +160,12 @@ DECLARE
     v_title  text := coalesce(p_args ->> 'title', p_args ->> 'video_title');
     v_play   text := coalesce(p_args ->> 'playlist', p_args ->> 'playlist_slug');
     v_body   text;
+    v_proj   text;
     v_res    jsonb;
 BEGIN
     IF v_sess IS NULL OR v_sess = '' THEN RETURN '{"ok":false,"note":"no session context"}'; END IF;
     IF v_handle = '' THEN RETURN '{"ok":false,"note":"handle required (from doc_create)"}'; END IF;
-    SELECT body, COALESCE(v_title, title) INTO v_body, v_title
+    SELECT body, COALESCE(v_title, title), project INTO v_body, v_title, v_proj
       FROM stewards.doc_drafts WHERE handle = v_handle AND session_id = v_sess;
     IF v_body IS NULL THEN
         RETURN jsonb_build_object('ok', false, 'note', 'no draft ' || v_handle || ' in your session — doc_create + doc_append_section first')::text;
@@ -172,6 +173,13 @@ BEGIN
     -- reuse the exact publish boundary (video-id guard, import_doc, file write, brain, seen-set)
     v_res := stewards.playlist_publish(v_vid, v_title, v_body, v_play);
     IF (v_res->>'ok')::boolean THEN
+        -- project-tag the CANONICAL pooled doc (slug yt-<id>) so the real digest is
+        -- findable in the project pool. on_maturity_verified no longer auto-pools the
+        -- journal for this pipeline (metadata.pools_via_tool) — this is the one pool.
+        IF v_proj IS NOT NULL AND btrim(v_proj) <> '' THEN
+            UPDATE stewards.docs SET project_association = v_proj
+             WHERE slug = 'yt-' || btrim(coalesce(v_vid, ''));
+        END IF;
         DELETE FROM stewards.doc_drafts WHERE handle = v_handle AND session_id = v_sess;
         v_res := v_res || jsonb_build_object('note', 'published from draft ' || v_handle || ' and cleared it. Your reply now is a short JOURNAL of what you did — do NOT paste the digest.');
     END IF;
@@ -353,7 +361,10 @@ ON CONFLICT (slug) DO NOTHING;
 UPDATE stewards.pipelines
    SET metadata = COALESCE(metadata, '{}'::jsonb)
                 || jsonb_build_object('halt_on',
-                       jsonb_build_object('stage','read','outputs', jsonb_build_array('NO PLAYLISTS','NOTHING NEW'))),
+                       jsonb_build_object('stage','read','outputs', jsonb_build_array('NO PLAYLISTS','NOTHING NEW')))
+                -- doc-construction: build_publish_draft pools the canonical doc; the
+                -- build stage's final output is a journal, so DON'T auto-pool it.
+                || jsonb_build_object('pools_via_tool', true),
        updated_at = now()
  WHERE family = 'playlist-digest';
 DROP TRIGGER IF EXISTS work_items_playlist_digest_skip_empty ON stewards.work_items;

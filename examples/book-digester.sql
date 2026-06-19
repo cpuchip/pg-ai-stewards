@@ -99,6 +99,52 @@ RETURNS text LANGUAGE sql AS $func$
     SELECT stewards.book_publish(COALESCE(p_args->>'body', p_args->>'digest', p_args->>'document'))::text;
 $func$;
 
+-- ── book_publish_draft(): publish a doc-construction DRAFT (the doc-builder path).
+--    The build/critique stages built the digest incrementally with doc_create/
+--    doc_append/doc_patch; here we pull its body SERVER-SIDE by handle (the model
+--    never re-emits the whole body as a tool arg — that is the one-shot generation
+--    we are avoiding), run the same publish boundary as book_publish, project-tag
+--    the pooled doc, then clear the draft. Mirrors playlist_publish_draft.
+CREATE OR REPLACE FUNCTION stewards.book_publish_draft_tool(p_args jsonb)
+RETURNS text LANGUAGE plpgsql AS $func$
+DECLARE
+    v_sess     text := p_args ->> '_session_id';
+    v_handle   text := lower(btrim(coalesce(p_args ->> 'handle', '')));
+    v_body     text;
+    v_proj     text;
+    v_res      jsonb;
+    v_bookslug text;
+BEGIN
+    IF v_sess IS NULL OR v_sess = '' THEN RETURN '{"ok":false,"note":"no session context"}'; END IF;
+    IF v_handle = '' THEN
+        -- handle omitted — fall back to the active draft for this work item
+        SELECT handle INTO v_handle FROM stewards.doc_drafts
+         WHERE stewards.doc_draft_session_match(session_id, v_sess)
+         ORDER BY updated_at DESC LIMIT 1;
+        IF v_handle IS NULL THEN RETURN '{"ok":false,"note":"no draft for this work item — doc_create + doc_append_section first"}'; END IF;
+    END IF;
+    SELECT body, project INTO v_body, v_proj
+      FROM stewards.doc_drafts
+     WHERE handle = v_handle AND stewards.doc_draft_session_match(session_id, v_sess);
+    IF v_body IS NULL THEN
+        RETURN jsonb_build_object('ok', false, 'note', 'no draft ' || v_handle || ' for this work item — doc_create + doc_append_section first')::text;
+    END IF;
+    -- reuse the exact publish boundary (currently-reading book, import_doc, file write, brain, shelf done)
+    v_res := stewards.book_publish(v_body);
+    IF (v_res->>'ok')::boolean THEN
+        v_bookslug := v_res->>'book';
+        -- project-tag the CANONICAL pooled doc (slug book-<slug>) so the real digest
+        -- is findable in the project pool. on_maturity_verified no longer auto-pools
+        -- the journal for this pipeline (metadata.pools_via_tool) — this is the one pool.
+        IF v_proj IS NOT NULL AND btrim(v_proj) <> '' AND v_bookslug IS NOT NULL THEN
+            UPDATE stewards.docs SET project_association = v_proj WHERE slug = 'book-' || v_bookslug;
+        END IF;
+        DELETE FROM stewards.doc_drafts WHERE handle = v_handle;
+        v_res := v_res || jsonb_build_object('note', 'published from draft ' || v_handle || ' and cleared it. Your reply now is a short JOURNAL of what you did — do NOT paste the digest.');
+    END IF;
+    RETURN v_res::text;
+END $func$;
+
 -- ── book_add(url,title): queue a book ───────────────────────────────────────
 CREATE OR REPLACE FUNCTION stewards.book_add(p_title text, p_author text DEFAULT NULL,
                                              p_url text DEFAULT NULL, p_position int DEFAULT 100)
@@ -129,6 +175,10 @@ INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target) 
   'Save the finished digest of the book you are currently reading. Pass the COMPLETE digest document as `body`. Writes a study doc at study/books/<slug>.md + a brain entry and marks the book done. Call this LAST, once.',
   '{"type":"object","required":["body"],"properties":{"body":{"type":"string","minLength":100,"description":"The complete digest document (markdown)."}}}'::jsonb,
   '{"kind":"sql_fn","schema":"stewards","name":"book_publish_tool"}'::jsonb ),
+( 'book_publish_draft',
+  'Publish the book digest you BUILT with the doc tools (doc_create/doc_append_section/doc_patch). Pass the draft `handle` (or omit it to use this run''s active draft) — NOT the body (the body is pulled from your draft server-side, so you never re-emit the whole document). Marks the currently-reading book done. Call this LAST, once, after the draft is complete.',
+  '{"type":"object","properties":{"handle":{"type":"string","description":"the draft handle from doc_create (optional; defaults to this run''s active draft)"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"book_publish_draft_tool"}'::jsonb ),
 ( 'book_add',
   'Queue a book on the reading shelf for a future digest. Provide title (required), author, and optionally a source_url hint.',
   '{"type":"object","required":["title"],"properties":{"title":{"type":"string"},"author":{"type":"string"},"url":{"type":"string"}}}'::jsonb,
@@ -141,77 +191,109 @@ ON CONFLICT (name) DO UPDATE SET
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
     ('research','book_next','allow','manual'),
     ('research','book_publish','allow','manual'),
+    ('research','book_publish_draft','allow','manual'),
     ('research','book_add','allow','manual'),
     ('research','fetch_url','allow','manual'),
     ('research','web_search_exa','allow','manual')
 ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET
     action = EXCLUDED.action, source = COALESCE(EXCLUDED.source, stewards.agent_tool_perms.source);
 
--- ── the book-digest pipeline ────────────────────────────────────────────────
+-- ── the book-digest pipeline (doc-construction recast) ──────────────────────
+-- read (find the text, emit a reference — no echo) -> build (page the text in,
+-- BUILD the digest as a DOCUMENT via doc_* tool-call diffs) -> critique (a
+-- second pass: doc_read + doc_patch the null-case in, then book_publish_draft).
+-- The model never one-shots the digest; its reply each stage is a journal. This
+-- fixes the local reaper/contention/grammar failures (agentic-doc-construction.md).
+-- Stages name ROLES (ingest/reason/critic); the alias router picks the best
+-- available member (local-first via the workspace overlay). Uses the research agent.
 INSERT INTO stewards.pipelines (
     family, description, stages, sabbath_enabled, atonement_enabled,
     file_destination_template, file_content_jsonpath, maturity_ladder,
-    auto_materialize_on_verified
+    auto_materialize_on_verified, metadata
 ) VALUES (
     'book-digest',
-    'Read a book the way we read scripture: read (find + fetch the text) -> digest -> critique(null-case) -> recommend, then book_publish saves a study doc + brain entry. Single-pass v1 (short books). Uses the research agent.',
+    'Read a book the way we read scripture, building the digest as a document: read (find the text, emit a reference, no echo) -> build (page the text in, construct the digest via doc_* tool-call diffs) -> critique (second pass: doc_patch the null-case in, then book_publish_draft). Doc-construction recast (agentic-doc-construction.md). Uses the research agent.',
     jsonb_build_array(
-        jsonb_build_object('name','read','next','digest',
-            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
+        -- READ: find the book + a fetchable full-text URL, emit ONLY a header.
+        -- Does NOT fetch/echo the book (a whole-book re-emit is itself a one-shot
+        -- generation that trips the reaper on a local model). The build stage
+        -- fetches the text via fetch_url (large content pages in automatically).
+        jsonb_build_object('name','read','next','build',
+            'model','ingest','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
             'input_template',
               'You are the READ stage of the book digester.' || E'\n\n' ||
-              '1. Call `book_next` to get your assigned book ({slug,title,author,source_url}). If it returns book:null, reply exactly "SHELF EMPTY" and stop.' || E'\n' ||
-              '2. Get the FULL public-domain text. If source_url is given, `fetch_url` it. Otherwise `web_search_exa` for "<title> <author> full text Project Gutenberg" (or Standard Ebooks) and `fetch_url` the plain-text page.' || E'\n' ||
-              '3. Output the full book text (or as much as you fetched), prefixed with a line: BOOK: <title> by <author>. The next stage digests it. Do NOT digest yourself.' ),
-        jsonb_build_object('name','digest','next','critique',
-            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
-            'auto_advance',true,'tools_disabled',true,
-            'input_template',
-              'You are the DIGEST stage. Here is the book text from the read stage:' || E'\n\n' ||
-              '{{stage_results.read.output}}' || E'\n\n' ||
-              'Digest it the way a careful student studies a text — depth over breadth. Produce, in markdown:' || E'\n' ||
-              '- **The core argument / thesis** (2-4 sentences).' || E'\n' ||
-              '- **Structure** — how the book builds its case.' || E'\n' ||
-              '- **Key passages** — 3-6 quoted verbatim, each with a one-line gloss.' || E'\n' ||
-              '- **Themes** — the recurring ideas.' || E'\n\n' ||
-              'Be faithful to the text. Quote only what is actually there.' ),
-        jsonb_build_object('name','critique','next','recommend',
-            'model','qwen3.7-plus','provider','opencode_go','agent_family','research',
-            'auto_advance',true,'tools_disabled',true,
-            'input_template',
-              'You are the CRITIQUE / null-case stage. The book text and the digest:' || E'\n\n' ||
-              'TEXT (excerpt):' || E'\n' || '{{stage_results.read.output}}' || E'\n\n' ||
-              'DIGEST:' || E'\n' || '{{stage_results.digest.output}}' || E'\n\n' ||
-              'Pressure-test the digest: What did it flatten or miss? Is any claim unfaithful to the text? What is the STRONGEST objection to the book''s argument (the null case)? Return the digest, corrected where it was wrong, with a new "## Tensions & objections" section. Keep the good parts verbatim.' ),
-        jsonb_build_object('name','recommend','next',NULL,
-            'model','kimi-k2.6','provider','opencode_go','agent_family','research',
+              '1. Call `book_next` to get your assigned book ({slug,title,author,source_url}). If it returns book:null, reply EXACTLY "SHELF EMPTY" and stop.' || E'\n' ||
+              '2. Determine a fetchable FULL-TEXT URL. If source_url is given, use it. Otherwise `web_search_exa` for "<title> <author> full text Project Gutenberg" (or Standard Ebooks / archive.org) and pick the plain-text page URL. Do NOT fetch the book here — just find the URL.' || E'\n' ||
+              '3. Output EXACTLY these four lines and NOTHING ELSE (no book text — the build stage fetches it):' || E'\n' ||
+              '   BOOK_SLUG: <the slug>' || E'\n' ||
+              '   TITLE: <the title>' || E'\n' ||
+              '   AUTHOR: <the author>' || E'\n' ||
+              '   SOURCE_URL: <the full-text url>' ),
+        -- BUILD: construct the digest as a DOCUMENT via doc_* tool-call diffs.
+        -- Never emits the whole digest as one generation — builds it section by
+        -- section; its chat reply is a short journal. Does NOT publish (critique does).
+        jsonb_build_object('name','build','next','critique',
+            'model','reason','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
             'input_template',
-              'You are the RECOMMEND stage — the final one. The refined digest:' || E'\n\n' ||
-              '{{stage_results.critique.output}}' || E'\n\n' ||
-              'Add a final section "## What''s worth learning — and what we could do with it": 3-6 concrete, actionable takeaways (not platitudes — things a person or this substrate could actually try). Then assemble the COMPLETE document (title, the digest, tensions, recommendations) and call `book_publish` with it as `body`. After publishing, output the document.' )
+              'You are the BUILD stage. BUILD the digest as a document using your doc tools — do NOT write the digest as your reply.' || E'\n\n' ||
+              'The read stage gave you this header:' || E'\n\n' ||
+              '{{stage_results.read.output}}' || E'\n\n' ||
+              'Steps:' || E'\n' ||
+              '1. Read TITLE, AUTHOR, and SOURCE_URL from the header above.' || E'\n' ||
+              '2. Call `fetch_url` with the SOURCE_URL to get the book text. If it is large you will see a [page-in] banner with a handle — use `result_read`(handle, offset, limit) to read it in chunks; do not pull it all at once.' || E'\n' ||
+              '3. Call `doc_create` with title = "Digest: <TITLE> — <AUTHOR>" and project "books".' || E'\n' ||
+              '4. Build the digest with `doc_append_section` (one call each, keep each small, depth over breadth, faithful to the text, quote only what is actually there):' || E'\n' ||
+              '   - "The core argument" — the thesis in 2-4 sentences.' || E'\n' ||
+              '   - "Structure" — how the book builds its case.' || E'\n' ||
+              '   - "Key passages" — 3-6 verbatim quotes, each with a one-line gloss.' || E'\n' ||
+              '   - "Themes" — the recurring ideas.' || E'\n' ||
+              '   - "What''s worth learning" — 3-6 concrete, actionable takeaways (not platitudes — things a person or this substrate could actually try).' || E'\n' ||
+              '5. Call `doc_read` to review the whole draft; fix anything weak or unfaithful with `doc_patch`. Do NOT publish — the critique stage does that.' || E'\n' ||
+              '6. Reply with a short JOURNAL (2-4 sentences): the book, what you built, and the draft handle. Do NOT paste the document.' ),
+        -- CRITIQUE: a second pass (the D&C 88:122 review). Picks up the draft via
+        -- doc_current (work-item-scoped), pressure-tests it, patches the null-case
+        -- in, then publishes. Tools on (doc_*, book_publish_draft).
+        jsonb_build_object('name','critique','next',NULL,
+            'model','critic','agent_family','research',
+            'auto_advance',true,'tools_disabled',false,
+            'input_template',
+              'You are the CRITIQUE stage — the final review before publish. The build stage built a digest draft for this run.' || E'\n\n' ||
+              'Steps:' || E'\n' ||
+              '1. Call `doc_current` to get the draft handle, then `doc_read` it.' || E'\n' ||
+              '2. Pressure-test it: What did it flatten or miss? Is any claim unfaithful to the book? Fix the weak/unfaithful parts with `doc_patch` (find the exact text, replace it).' || E'\n' ||
+              '3. Add the null case: `doc_append_section` a "Tensions & objections" section with the STRONGEST objection to the book''s argument. Be honest, not agreeable.' || E'\n' ||
+              '4. Call `book_publish_draft` with the handle. This saves the digest as a study doc + brain entry and marks the book done.' || E'\n' ||
+              '5. Reply with a short JOURNAL (2-4 sentences): what you corrected, the objection you added, and that you published. Do NOT paste the document.' )
     ),
     false, false,
     NULL, NULL,
-    '["raw","researched","planned","verified"]'::jsonb,
-    false   -- book_publish does the persistence directly (no file auto-materialize)
+    '["raw","verified"]'::jsonb,
+    false,  -- book_publish_draft persists directly (no file auto-materialize)
+    -- doc-construction: book_publish_draft pools the canonical doc; the critique
+    -- stage's final output is a journal, so DON'T auto-pool it (pools_via_tool).
+    jsonb_build_object('pools_via_tool', true)
 )
 ON CONFLICT (family) DO UPDATE SET
-    description = EXCLUDED.description, stages = EXCLUDED.stages, updated_at = now();
+    description = EXCLUDED.description, stages = EXCLUDED.stages,
+    maturity_ladder = EXCLUDED.maturity_ladder, metadata = stewards.pipelines.metadata || EXCLUDED.metadata,
+    updated_at = now();
 
+-- recast read/build/critique (drop the old digest/recommend rows — orphaned by the recast)
+DELETE FROM stewards.stage_models
+ WHERE pipeline_family='book-digest' AND stage_name IN ('digest','recommend');
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model, notes) VALUES
-    ('book-digest','read',     'kimi-k2.6',    'Find + fetch the text; tools on (book_next, web_search_exa, fetch_url).'),
-    ('book-digest','digest',   'kimi-k2.6',    'Faithful study digest; tools off.'),
-    ('book-digest','critique', 'qwen3.7-plus', 'Null-case the digest; NOT qwen3.7-max (cost). Tools off.'),
-    ('book-digest','recommend','kimi-k2.6',    'Actionable takeaways + book_publish; tools on (book_publish).')
+    ('book-digest','read',     'ingest', 'Find the text + a full-text URL, emit header only; tools on (book_next, web_search_exa). Local ingest alias (gemma).'),
+    ('book-digest','build',    'reason', 'Build the digest as a doc via doc_* tool-call diffs (no publish); tools on. Local reason alias (qwen).'),
+    ('book-digest','critique', 'critic', 'Second pass: doc_patch the null-case in + book_publish_draft; tools on. Local critic alias (qwen).')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
     default_model = EXCLUDED.default_model, notes = EXCLUDED.notes;
 
+DELETE FROM stewards.pipeline_stage_maturity
+ WHERE pipeline_family='book-digest' AND stage_name IN ('digest','recommend');
 INSERT INTO stewards.pipeline_stage_maturity (pipeline_family, stage_name, produces_maturity) VALUES
-    ('book-digest','digest',   'researched'),
-    ('book-digest','critique', 'planned'),
-    ('book-digest','recommend','verified')
+    ('book-digest','critique','verified')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET produces_maturity = EXCLUDED.produces_maturity;
 
 -- ── the book-study intent (the core ships no intents; seed our own) ─────────
@@ -326,7 +408,7 @@ VALUES (
     'book-curate',
     'Presiding curator for the book line: keep the shelf fed with verified, non-duplicate books that further book-study; brainstorm new directions when it runs dry. Feeds only when the queue is low. Single tools-on stage (research agent).',
     jsonb_build_array(jsonb_build_object(
-        'name','curate','next',NULL,'model','kimi-k2.6','provider','opencode_go',
+        'name','curate','next',NULL,'model','reason',
         'agent_family','research','auto_advance',true,'tools_disabled',false,'max_tokens',6000,
         'input_template',
           'You are the BOOK-STUDY CURATOR. Keep the reading shelf fed with books worth digesting, and never let it sit empty. Today: {{input.today}}.' || E'\n\n' ||
