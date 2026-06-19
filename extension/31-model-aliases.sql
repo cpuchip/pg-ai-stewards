@@ -55,6 +55,17 @@ ALTER TABLE stewards.model_capability
 COMMENT ON COLUMN stewards.model_capability.trains_on_data IS
 '31: true when the provider trains on data submitted to this model (free public tiers — nvidia, opencode_zen free). NULL/absent => false. A file_private intent''s dispatch drops train-on-data alias members and refuses a literal train-on-data resolution. Operator policy — flag via the overlay.';
 
+-- Per-model REAL context window (2026-06-18). A provider-level window can't
+-- capture local models loaded at a fixed n_ctx — one provider (flexllama)
+-- serves many windows (qwen 65k, gemma 256k, nemotron 1M). effective_budget
+-- (15a, Layer 2.5) uses window*0.70 so 30% stays free for reasoning+output.
+-- NULL = fall through to provider.context_window (unchanged for paid providers).
+ALTER TABLE stewards.model_capability
+    ADD COLUMN IF NOT EXISTS context_window int;
+
+COMMENT ON COLUMN stewards.model_capability.context_window IS
+'31: real per-model context window (n_ctx) in tokens, when known (local models loaded at a fixed n_ctx). effective_budget reserves 30% for reasoning+output (window*0.70). NULL => fall through to provider.context_window. Operator sets it via the overlay to match the loaded runtime config.';
+
 CREATE OR REPLACE FUNCTION stewards.model_trains_on_data(p_provider text, p_model text)
 RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT COALESCE(

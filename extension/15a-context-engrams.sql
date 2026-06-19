@@ -422,6 +422,8 @@ DECLARE
     v_budget       int;
     v_provider     text;
     v_context_win  int;
+    v_model        text;
+    v_model_win    int;
 BEGIN
     SELECT * INTO v_work_item
       FROM stewards.work_items
@@ -458,8 +460,36 @@ BEGIN
         END IF;
     END IF;
 
-    -- Layer 3: provider.context_window.
     v_provider := stewards.provider_for_session(p_session_id);
+
+    -- Layer 2.5 (2026-06-18): per-model REAL context window (window-aware).
+    -- A provider-level window can't capture local models loaded at a fixed
+    -- n_ctx — one provider (e.g. flexllama) serves many windows (qwen 65k,
+    -- gemma 256k, nemotron 1M). When the dispatched model has a known window,
+    -- budget = window * 0.70 so 30% stays free for reasoning + output. A
+    -- near-full window starves generation: a reasoning model spends its
+    -- residual budget thinking and emits empty content (qwen@65k did exactly
+    -- this). Only fires for models with context_window set; all else falls
+    -- through to the provider layer unchanged.
+    SELECT payload -> 'body' ->> 'model' INTO v_model
+      FROM stewards.work_queue
+     WHERE payload ->> 'session_id' = p_session_id
+       AND kind = 'chat'
+     ORDER BY id DESC
+     LIMIT 1;
+    IF v_model IS NOT NULL THEN
+        SELECT context_window INTO v_model_win
+          FROM stewards.model_capability
+         WHERE model = v_model
+           AND context_window IS NOT NULL
+         ORDER BY (provider = v_provider) DESC NULLS LAST
+         LIMIT 1;
+        IF v_model_win IS NOT NULL AND v_model_win > 0 THEN
+            RETURN floor(v_model_win * 0.70)::int;
+        END IF;
+    END IF;
+
+    -- Layer 3: provider.context_window.
     IF v_provider IS NOT NULL THEN
         SELECT context_window INTO v_context_win
           FROM stewards.provider_rules
@@ -475,7 +505,7 @@ END;
 $FN$;
 
 COMMENT ON FUNCTION stewards.effective_budget(text, text) IS
-'Resolve the effective working budget (tokens) for a session+stage. Cascade: pipeline-stage.working_budget > agent.working_budget > provider.context_window. Final fallback 64000.';
+'Resolve the effective working budget (tokens) for a session+stage. Cascade: pipeline-stage.working_budget > agent.working_budget > model.context_window*0.70 (window-aware; reserves 30% for reasoning+output) > provider.context_window > 64000.';
 
 
 -- effective_extraction_threshold (l12).

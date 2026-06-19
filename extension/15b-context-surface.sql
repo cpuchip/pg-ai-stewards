@@ -2275,7 +2275,11 @@ BEGIN
         END IF;
     END IF;
 
-    IF v_inject_soft_notice THEN
+    -- Soft-cap notice is globally gateable (config 'soft_cap_notice_enabled',
+    -- default true). compose_messages now relabels it to 'user' at render so it
+    -- no longer breaks strict templates; this flag turns it off entirely.
+    IF v_inject_soft_notice
+       AND stewards.config_get('soft_cap_notice_enabled', 'true'::jsonb) = 'true'::jsonb THEN
         v_notice_text := stewards.build_soft_cap_notice(
             v_rounds_so_far, v_soft_cap, v_hard_cap, v_stage_name);
         INSERT INTO stewards.messages (session_id, role, content, model)
