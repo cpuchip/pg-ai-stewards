@@ -375,6 +375,17 @@ extension_sql_file!(
     requires = ["create_alias_failover"],
 );
 
+// 34: agentic doc construction — the model BUILDS a doc via small tool-call
+// diffs (doc_create/append/patch/read/finalize over a self-contained
+// doc_drafts table) instead of one-shot emitting it; its chat output becomes
+// a journal. Sidesteps the local-model soak's reaper/contention/grammar
+// failures; pairs with the page-in tools (33) for bounded source reads.
+extension_sql_file!(
+    "../34-doc-builder.sql",
+    name = "create_doc_builder",
+    requires = ["create_page_in"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
