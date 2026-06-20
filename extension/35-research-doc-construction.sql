@@ -107,7 +107,7 @@ v_write_critique := jsonb_build_object(
 UPDATE stewards.pipelines p SET stages = (
     SELECT jsonb_agg(
         CASE
-            WHEN e->>'name' = 'gather'                  THEN (e - 'provider') || jsonb_build_object('model','ingest','next','build','max_tool_rounds',5,'max_tool_rounds_hard',8)
+            WHEN e->>'name' = 'gather'                  THEN (e - 'provider') || jsonb_build_object('model','ingest','next','build','max_tool_rounds',5,'max_tool_rounds_hard',8,'tool_groups',jsonb_build_array('web-research'))
             WHEN e->>'name' IN ('synthesize','build')   THEN v_summary_build
             WHEN e->>'name' IN ('review','critique')    THEN v_summary_critique
             ELSE e
@@ -119,8 +119,8 @@ WHERE p.family = 'research-summary';
 UPDATE stewards.pipelines p SET stages = (
     SELECT jsonb_agg(
         CASE
-            WHEN e->>'name' = 'context_gather'          THEN (e - 'provider') || jsonb_build_object('model','ingest','max_tool_rounds',4,'max_tool_rounds_hard',6)
-            WHEN e->>'name' = 'gather'                  THEN (e - 'provider') || jsonb_build_object('model','ingest','next','build','max_tool_rounds',5,'max_tool_rounds_hard',8)
+            WHEN e->>'name' = 'context_gather'          THEN (e - 'provider') || jsonb_build_object('model','ingest','max_tool_rounds',4,'max_tool_rounds_hard',6,'tool_groups',jsonb_build_array('substrate-read'))
+            WHEN e->>'name' = 'gather'                  THEN (e - 'provider') || jsonb_build_object('model','ingest','next','build','max_tool_rounds',5,'max_tool_rounds_hard',8,'tool_groups',jsonb_build_array('web-research'))
             WHEN e->>'name' IN ('synthesize','build')   THEN v_write_build
             WHEN e->>'name' IN ('review','critique')    THEN v_write_critique
             ELSE e

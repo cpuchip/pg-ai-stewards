@@ -406,6 +406,16 @@ extension_sql_file!(
     requires = ["create_subagents"],
 );
 
+// Per-stage TOOL scoping (the tool-side mirror of skill groups): a pipeline stage
+// names tool_groups it needs, and dry_run_chat narrows compose_tools to that scope —
+// so a research gather turn ships ~15 tools, not ~150. Needs compose_tools (26 final)
+// + dry_run_chat + work-items/pipelines.
+extension_sql_file!(
+    "../37-tool-groups.sql",
+    name = "create_tool_groups",
+    requires = ["create_productivity"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

@@ -1166,4 +1166,51 @@ BEGIN
     RAISE NOTICE 'OK 22: page-in tool cap — config off by default; page_in_cap truncates+handles; compose_messages caps a big TOOL result to the low tool cap while a big ASSISTANT stays on the ratio cap (the research notebook)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→36) is sound =='
+-- ── 23: tool-groups (37) — per-stage tool scoping (the tool-side mirror of skills)
+DO $$
+DECLARE v_full int; v_scoped int; v_wid uuid; v_sess text;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='tool_groups'),
+        'tool_groups table must ship';
+    ASSERT (SELECT count(*) FROM stewards.tool_groups WHERE name IN ('web-research','substrate-read','doc-build')) = 3,
+        'the core tool groups must seed';
+    -- resolver: a named group -> its patterns; empty/null -> NULL (unscoped)
+    ASSERT array_length(stewards.resolve_tool_scope('["web-research"]'::jsonb), 1) > 5,
+        'resolve_tool_scope(web-research) must return the group''s patterns';
+    ASSERT stewards.resolve_tool_scope('[]'::jsonb) IS NULL AND stewards.resolve_tool_scope(NULL) IS NULL,
+        'empty/null tool_groups must resolve to NULL (unscoped)';
+
+    -- compose_tools_scoped narrows; NULL scope = full set (backward-compatible)
+    INSERT INTO stewards.agents (family,model_match,description,mode,prompt,temperature)
+      VALUES ('smoke-tg','*','tg smoke','primary','x',0.2)
+      ON CONFLICT (family,model_match) DO UPDATE SET prompt='x';
+    v_full   := jsonb_array_length(stewards.compose_tools('smoke-tg'));
+    v_scoped := jsonb_array_length(stewards.compose_tools_scoped('smoke-tg', ARRAY['doc_*']));  -- core sql_fn tools (glob uses *)
+    ASSERT v_full > v_scoped AND v_scoped >= 1,
+        format('a scoped set must be smaller than the full set, got full=%s scoped=%s', v_full, v_scoped);
+    ASSERT jsonb_array_length(stewards.compose_tools_scoped('smoke-tg', NULL)) = v_full,
+        'a NULL scope must return the full set (byte-for-byte backward compatible)';
+
+    -- session_tool_scope derives the scope from a stage that declares tool_groups
+    INSERT INTO stewards.intents (slug,purpose) VALUES ('tg-smoke','tg') ON CONFLICT (slug) DO NOTHING;
+    INSERT INTO stewards.pipelines (family,stages) VALUES
+      ('tg-smoke-pipe', jsonb_build_array(jsonb_build_object('name','gather','tool_groups',jsonb_build_array('web-research'))))
+      ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages;
+    INSERT INTO stewards.work_items (pipeline_family,current_stage,intent_id,slug)
+      VALUES ('tg-smoke-pipe','gather',(SELECT id FROM stewards.intents WHERE slug='tg-smoke'),'tg-wi')
+      RETURNING id INTO v_wid;
+    v_sess := 'wi--'||left(v_wid::text,8)||'--gather';
+    ASSERT array_length(stewards.session_tool_scope(v_sess),1) > 5,
+        'session_tool_scope must derive a stage''s declared tool_groups';
+    ASSERT stewards.session_tool_scope('persona-x') IS NULL,
+        'a non-wi session must be unscoped (NULL)';
+
+    -- restore virgin state
+    DELETE FROM stewards.work_items WHERE id=v_wid;
+    DELETE FROM stewards.pipelines WHERE family='tg-smoke-pipe';
+    DELETE FROM stewards.intents WHERE slug='tg-smoke';
+    DELETE FROM stewards.agents WHERE family='smoke-tg';
+    RAISE NOTICE 'OK 23: tool-groups — table+3 seeds; resolve unions patterns (empty/null->unscoped); compose_tools_scoped narrows (NULL=full set); session_tool_scope derives a stage''s tool_groups (non-wi->NULL)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→37) is sound =='
