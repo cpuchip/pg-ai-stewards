@@ -258,7 +258,7 @@ INSERT INTO stewards.pipelines (
               '4. Build the digest with `doc_append_section` (one call each, keep each small, depth over breadth, faithful to the text, quote only what is actually there):' || E'\n' ||
               '   - "The core argument" — the thesis in 2-4 sentences.' || E'\n' ||
               '   - "Structure" — how the book builds its case.' || E'\n' ||
-              '   - "Key passages" — 3-6 verbatim quotes, each with a one-line gloss.' || E'\n' ||
+              '   - "Key passages" — 3-6 quotes copied VERBATIM from the source text, each with a one-line gloss. A quotation mark is a promise the words are EXACT: copy them character-for-character from what you read. If you are paraphrasing, summarizing, or recalling the gist, do NOT use quotation marks — write it as your own prose. Never quote from memory.' || E'\n' ||
               '   - "Themes" — the recurring ideas.' || E'\n' ||
               '   - "What''s worth learning" — 3-6 concrete, actionable takeaways (not platitudes — things a person or this substrate could actually try).' || E'\n' ||
               '5. Call `doc_read` to review the whole draft; fix anything weak or unfaithful with `doc_patch`. Do NOT publish — the critique stage does that.' || E'\n' ||
