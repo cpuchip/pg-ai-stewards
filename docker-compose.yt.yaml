@@ -24,6 +24,15 @@ services:
       # Writable store for downloaded transcripts. YT_DIR is set on the yt
       # mcp_server row (examples/playlist-digester.sql) to /yt.
       - yt-transcripts:/yt
+  pg:
+    volumes:
+      # READ-ONLY mount of the same transcript store so import_yt_transcript
+      # (examples/yt-transcripts.sql, path = config yt_dir, default /yt) can
+      # pg_read_file the downloaded transcript/metadata/cues for a video and
+      # persist it to yt_transcripts — without the digester re-emitting the
+      # (possibly large/paged-in) transcript as a tool arg. pgdata is a separate
+      # named volume, so adding this mount + recreating pg is data-safe.
+      - yt-transcripts:/yt:ro
 
 volumes:
   yt-transcripts:

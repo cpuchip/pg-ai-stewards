@@ -273,7 +273,8 @@ INSERT INTO stewards.pipelines (
               '2. Call `yt_playlist` with url = playlist_url to list the playlist''s videos (id, title, url).' || E'\n' ||
               '3. Choose the FIRST video whose id is NOT in seen_video_ids. If every listed video is already in seen_video_ids, reply EXACTLY "NOTHING NEW" and stop.' || E'\n' ||
               '4. Call `yt_download` with that video''s url to fetch + CACHE its transcript. You do NOT need to read or repeat the transcript.' || E'\n' ||
-              '5. Output EXACTLY these three lines and NOTHING ELSE (no transcript — the build stage fetches it):' || E'\n' ||
+              '5. Call `yt_persist_transcript` with video_id = the 11-char id, to save the transcript into the database so its quotes can be verified later.' || E'\n' ||
+              '6. Output EXACTLY these three lines and NOTHING ELSE (no transcript — the build stage fetches it):' || E'\n' ||
               '   VIDEO_ID: <the video id>' || E'\n' ||
               '   PLAYLIST: <the playlist_slug>' || E'\n' ||
               '   TITLE: <the video title>' ),
