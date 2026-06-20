@@ -1374,7 +1374,17 @@ EXECUTE FUNCTION stewards.trigger_screen_injection_on_small_tool();
 -- §5. Routing + observability triggers.
 -- =====================================================================
 
--- Embed-provider routing (es2): force every kind=embed row to lm_studio.
+-- Embed-provider + embed-model routing (es2): force every kind=embed row to a
+-- real local embedding model on lm_studio. Two invariants, enforced in ONE place
+-- so no enqueue site can misroute:
+--   (1) provider := lm_studio  (embeddings run on local LM Studio; OpenCode Go
+--       has no embeddings endpoint).
+--   (2) payload.model + payload.dimensions := the embedding model, when absent.
+--       Without this an enqueue site that omits the model (e.g. the engram
+--       populate trigger) falls back to the lm_studio DEFAULT model, which is a
+--       CHAT model (qwen3.6-27b) — LM Studio's /v1/embeddings then 400s
+--       "invalid model identifier" and the vector is never written. docs/brain
+--       enqueue with model+dimensions already set, so COALESCE leaves them be.
 CREATE OR REPLACE FUNCTION stewards.trigger_embed_provider_route()
 RETURNS trigger LANGUAGE plpgsql AS $FN$
 BEGIN
@@ -1383,12 +1393,25 @@ BEGIN
             COALESCE(NEW.provider, '(null)');
         NEW.provider := 'lm_studio';
     END IF;
+    IF NEW.kind = 'embed' THEN
+        IF NEW.payload IS NULL THEN
+            NEW.payload := '{}'::jsonb;
+        END IF;
+        IF COALESCE(NEW.payload->>'model', '') = '' THEN
+            NEW.payload := jsonb_set(NEW.payload, '{model}',
+                to_jsonb(stewards.config_get_text('embed_model', 'nomic-embed-text-v1.5')), true);
+        END IF;
+        IF COALESCE(NEW.payload->>'dimensions', '') = '' THEN
+            NEW.payload := jsonb_set(NEW.payload, '{dimensions}',
+                to_jsonb(stewards.config_get_text('embed_dimensions', '768')::int), true);
+        END IF;
+    END IF;
     RETURN NEW;
 END;
 $FN$;
 
 COMMENT ON FUNCTION stewards.trigger_embed_provider_route() IS
-'BEFORE INSERT trigger on work_queue. Forces every kind=embed row to provider=lm_studio (embeddings run on local LM Studio; OpenCode Go has no embeddings endpoint). Enforces the routing invariant in one place so no enqueue site can misroute.';
+'BEFORE INSERT trigger on work_queue. Forces every kind=embed row to (1) provider=lm_studio and (2) a real embedding model in payload.model + payload.dimensions (config embed_model/embed_dimensions, default nomic-embed-text-v1.5 / 768) when the enqueue site omitted them. Enforces both the routing AND the model invariant in one place so no enqueue site can misroute to the chat-model default.';
 
 DROP TRIGGER IF EXISTS work_queue_embed_provider_route ON stewards.work_queue;
 

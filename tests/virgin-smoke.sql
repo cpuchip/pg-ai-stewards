@@ -1213,4 +1213,40 @@ BEGIN
     RAISE NOTICE 'OK 23: tool-groups — table+3 seeds; resolve unions patterns (empty/null->unscoped); compose_tools_scoped narrows (NULL=full set); session_tool_scope derives a stage''s tool_groups (non-wi->NULL)';
 END $$;
 
+-- ── 24: embed-model invariant (15a es2) — an embed job with no model MUST be
+--    filled to a real embedding model; one that names a model is left untouched.
+--    (Bug: engram embeds omitted the model -> fell to the lm_studio CHAT default
+--    -> /v1/embeddings 400 -> vectors never written. The es2 trigger now enforces
+--    BOTH provider AND model in one place.)
+DO $$
+DECLARE v_no_model bigint; v_has_model bigint;
+BEGIN
+    -- a) no model + wrong provider -> trigger fills model+dimensions AND forces lm_studio
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('embed','opencode_go',
+            jsonb_build_object('target_table','engram_embeddings','target_id','SMOKE-embed-nomodel','text','x'),
+            'pending')
+    RETURNING id INTO v_no_model;
+    ASSERT (SELECT provider FROM stewards.work_queue WHERE id=v_no_model) = 'lm_studio',
+        'es2 must force provider=lm_studio';
+    ASSERT (SELECT payload->>'model' FROM stewards.work_queue WHERE id=v_no_model) = 'nomic-embed-text-v1.5',
+        'es2 must fill the embed model when absent (the engram-misroute fix)';
+    ASSERT (SELECT jsonb_typeof(payload->'dimensions') FROM stewards.work_queue WHERE id=v_no_model) = 'number'
+       AND (SELECT payload->>'dimensions' FROM stewards.work_queue WHERE id=v_no_model) = '768',
+        'es2 must fill dimensions as a JSON number (matches docs/brain)';
+
+    -- b) an explicit model is left untouched (COALESCE leaves docs/brain enqueues be)
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('embed','lm_studio',
+            jsonb_build_object('target_table','docs','target_id','SMOKE-embed-hasmodel',
+                               'text','x','model','some-other-embed','dimensions',1024),
+            'pending')
+    RETURNING id INTO v_has_model;
+    ASSERT (SELECT payload->>'model' FROM stewards.work_queue WHERE id=v_has_model) = 'some-other-embed',
+        'es2 must NOT overwrite a model the enqueue site already set';
+
+    DELETE FROM stewards.work_queue WHERE id IN (v_no_model, v_has_model);
+    RAISE NOTICE 'OK 24: embed-model invariant — es2 fills model(nomic)+dimensions(768 number) when absent and forces lm_studio; an explicit model is preserved (the engram-misroute fix)';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→37) is sound =='
