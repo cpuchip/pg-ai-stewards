@@ -39,7 +39,20 @@ INSERT INTO stewards.tool_groups (name, description, tool_patterns) VALUES
   ('doc-build', 'build a document with the doc_* tool-call diffs + page-in readers + the publish bridges',
      ARRAY['doc_create','doc_append_section','doc_patch','doc_read','doc_current','doc_finalize',
            'book_publish_draft','playlist_publish_draft','book_publish','playlist_publish',
-           'result_read','result_search','fetch_url','fetch_urls','yt_get'])
+           'result_read','result_search','fetch_url','fetch_urls','yt_get']),
+  -- Narrow, single-finalize groups so a PUBLISHING stage sees exactly ONE finalize tool.
+  -- The broad doc-build group above bundles every finalize tool together, which lets a
+  -- local model on a book/playlist critique stage reach for the generic doc_finalize
+  -- instead of the domain book_publish_draft. doc_finalize pools a digest-<slug> doc but
+  -- does NOT run the domain boundary (mark the book/video done), so the item gets
+  -- re-digested → a duplicate doc. doc-edit (no finalize) + exactly one *-finalize group
+  -- per publishing stage makes the misroute structurally impossible.
+  ('doc-edit', 'build/patch a draft document (NO finalize) + the page-in readers',
+     ARRAY['doc_create','doc_append_section','doc_patch','doc_read','doc_current',
+           'result_read','result_search']),
+  ('book-finalize',     'the one finalize tool for the book-digest publishing stage',     ARRAY['book_publish_draft']),
+  ('playlist-finalize', 'the one finalize tool for the playlist-digest publishing stage', ARRAY['playlist_publish_draft']),
+  ('research-finalize', 'the one finalize tool for the research doc-construction publishing stage', ARRAY['doc_finalize'])
 ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, tool_patterns=EXCLUDED.tool_patterns;
 
 -- ── resolve a stages[].tool_groups jsonb array → the union of glob patterns (NULL = unscoped)

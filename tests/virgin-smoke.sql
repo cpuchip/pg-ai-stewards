@@ -1249,4 +1249,29 @@ BEGIN
     RAISE NOTICE 'OK 24: embed-model invariant — es2 fills model(nomic)+dimensions(768 number) when absent and forces lm_studio; an explicit model is preserved (the engram-misroute fix)';
 END $$;
 
+-- ── 25: single-finalize tool groups (37) — a PUBLISHING stage must see exactly ONE
+--    finalize tool. The broad doc-build group bundles every finalize tool, which let a
+--    book/playlist critique stage reach the generic doc_finalize instead of the domain
+--    publish (→ a digest-<slug> dup that skipped the book-done boundary). doc-edit (no
+--    finalize) + one *-finalize group per stage makes the misroute impossible.
+DO $$
+DECLARE v_scope text[];
+BEGIN
+    -- doc-edit is the build/patch set with NO finalize tool
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_groups WHERE name='doc-edit'),
+        'doc-edit group must ship';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.tool_groups WHERE name='doc-edit' AND 'doc_finalize' = ANY(tool_patterns)),
+        'doc-edit must NOT contain a finalize tool';
+    -- each single-finalize group names exactly one finalize tool
+    ASSERT (SELECT tool_patterns FROM stewards.tool_groups WHERE name='book-finalize') = ARRAY['book_publish_draft'],
+        'book-finalize must be exactly {book_publish_draft}';
+    ASSERT (SELECT tool_patterns FROM stewards.tool_groups WHERE name='research-finalize') = ARRAY['doc_finalize'],
+        'research-finalize must be exactly {doc_finalize}';
+    -- a book-critique scope resolves to build tools + the ONE book finalize, NOT doc_finalize
+    v_scope := stewards.resolve_tool_scope('["doc-edit","book-finalize"]'::jsonb);
+    ASSERT 'book_publish_draft' = ANY(v_scope), 'book-critique scope must include book_publish_draft';
+    ASSERT NOT ('doc_finalize' = ANY(v_scope)), 'book-critique scope must EXCLUDE doc_finalize (the dedup fix)';
+    RAISE NOTICE 'OK 25: single-finalize tool groups — doc-edit has no finalize; book/research-finalize each name one tool; a book-critique scope keeps book_publish_draft and drops doc_finalize (the double-publish fix)';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→37) is sound =='

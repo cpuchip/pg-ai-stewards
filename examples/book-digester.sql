@@ -136,7 +136,18 @@ BEGIN
         -- project-tag the CANONICAL pooled doc (slug book-<slug>) so the real digest
         -- is findable in the project pool. on_maturity_verified no longer auto-pools
         -- the journal for this pipeline (metadata.pools_via_tool) — this is the one pool.
-        IF v_proj IS NOT NULL AND btrim(v_proj) <> '' AND v_bookslug IS NOT NULL THEN
+        -- Prefer the draft's explicit project; else fall back to the WORK ITEM's
+        -- project (the book-study intent->project map). The draft only carries a
+        -- project if the model passed one to doc_create; the work-item fallback makes
+        -- the tag robust regardless (mirrors doc_finalize). Session = wi--<uuid8>--<stage>.
+        v_proj := nullif(btrim(coalesce(v_proj, '')), '');
+        IF v_proj IS NULL AND left(v_sess, 4) = 'wi--' THEN
+            SELECT project_association INTO v_proj FROM stewards.work_items
+             WHERE left(id::text, 8) = split_part(v_sess, '--', 2)
+               AND project_association IS NOT NULL
+             LIMIT 1;
+        END IF;
+        IF v_proj IS NOT NULL AND v_bookslug IS NOT NULL THEN
             UPDATE stewards.docs SET project_association = v_proj WHERE slug = 'book-' || v_bookslug;
         END IF;
         DELETE FROM stewards.doc_drafts WHERE handle = v_handle;
@@ -258,6 +269,10 @@ INSERT INTO stewards.pipelines (
         jsonb_build_object('name','critique','next',NULL,
             'model','critic','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
+            -- 37: scope this PUBLISHING stage to doc-edit + the ONE book finalize tool.
+            -- Excludes the generic doc_finalize so the model can't pool a stray
+            -- digest-<slug> doc that skips the book-done boundary (→ re-digest dup).
+            'tool_groups', jsonb_build_array('doc-edit','book-finalize'),
             'input_template',
               'You are the CRITIQUE stage — the final review before publish. The build stage built a digest draft for this run.' || E'\n\n' ||
               'Work ONLY from the draft. Your tools are doc_current, doc_read, doc_patch, doc_append_section, and book_publish_draft. Do NOT fetch_url or web_search — the build stage already read the source; re-researching wastes a slow round and risks not finishing. Judge faithfulness from the draft''s own quotes and internal consistency.' || E'\n\n' ||

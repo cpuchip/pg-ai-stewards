@@ -176,7 +176,17 @@ BEGIN
         -- project-tag the CANONICAL pooled doc (slug yt-<id>) so the real digest is
         -- findable in the project pool. on_maturity_verified no longer auto-pools the
         -- journal for this pipeline (metadata.pools_via_tool) — this is the one pool.
-        IF v_proj IS NOT NULL AND btrim(v_proj) <> '' THEN
+        -- Prefer the draft's explicit project; else fall back to the WORK ITEM's project
+        -- (the video-study intent->project map), so the tag is robust even when the
+        -- model didn't pass a project to doc_create. Mirrors doc_finalize/book.
+        v_proj := nullif(btrim(coalesce(v_proj, '')), '');
+        IF v_proj IS NULL AND left(v_sess, 4) = 'wi--' THEN
+            SELECT project_association INTO v_proj FROM stewards.work_items
+             WHERE left(id::text, 8) = split_part(v_sess, '--', 2)
+               AND project_association IS NOT NULL
+             LIMIT 1;
+        END IF;
+        IF v_proj IS NOT NULL THEN
             UPDATE stewards.docs SET project_association = v_proj
              WHERE slug = 'yt-' || btrim(coalesce(v_vid, ''));
         END IF;
