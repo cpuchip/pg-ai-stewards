@@ -98,11 +98,16 @@ v_write_critique := jsonb_build_object(
       '3. Call doc_finalize with the handle to pool the piece.' || E'\n' ||
       '4. Reply with a short JOURNAL (1-3 sentences): what you fixed and that you pooled it. Do NOT paste the piece.' );
 
--- ── research-summary: swap synthesize->build, review->critique; gather->ingest+next=build
+-- gather/context_gather get a HARD tool-round cap so a weak local model can't loop
+-- searching forever without producing its brief — the dispatch force-stops tool
+-- calls after max_tool_rounds_hard and the model must emit its final answer (the
+-- brief). The notebook (33) bounds the per-turn CONTEXT; this bounds the NUMBER of
+-- rounds. (gather over-searched ~10 rounds without converging on the local rig.)
+-- ── research-summary: swap synthesize->build, review->critique; gather->ingest+next=build+caps
 UPDATE stewards.pipelines p SET stages = (
     SELECT jsonb_agg(
         CASE
-            WHEN e->>'name' = 'gather'                  THEN (e - 'provider') || jsonb_build_object('model','ingest','next','build')
+            WHEN e->>'name' = 'gather'                  THEN (e - 'provider') || jsonb_build_object('model','ingest','next','build','max_tool_rounds',5,'max_tool_rounds_hard',8)
             WHEN e->>'name' IN ('synthesize','build')   THEN v_summary_build
             WHEN e->>'name' IN ('review','critique')    THEN v_summary_critique
             ELSE e
@@ -110,12 +115,12 @@ UPDATE stewards.pipelines p SET stages = (
     FROM jsonb_array_elements(p.stages) WITH ORDINALITY t(e, ord))
 WHERE p.family = 'research-summary';
 
--- ── research-write: swap synthesize->build, review->critique; context_gather/gather->ingest, gather.next=build
+-- ── research-write: swap synthesize->build, review->critique; context_gather/gather->ingest, gather.next=build+caps
 UPDATE stewards.pipelines p SET stages = (
     SELECT jsonb_agg(
         CASE
-            WHEN e->>'name' = 'context_gather'          THEN (e - 'provider') || jsonb_build_object('model','ingest')
-            WHEN e->>'name' = 'gather'                  THEN (e - 'provider') || jsonb_build_object('model','ingest','next','build')
+            WHEN e->>'name' = 'context_gather'          THEN (e - 'provider') || jsonb_build_object('model','ingest','max_tool_rounds',4,'max_tool_rounds_hard',6)
+            WHEN e->>'name' = 'gather'                  THEN (e - 'provider') || jsonb_build_object('model','ingest','next','build','max_tool_rounds',5,'max_tool_rounds_hard',8)
             WHEN e->>'name' IN ('synthesize','build')   THEN v_write_build
             WHEN e->>'name' IN ('review','critique')    THEN v_write_critique
             ELSE e
