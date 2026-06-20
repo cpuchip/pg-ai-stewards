@@ -1118,4 +1118,52 @@ BEGIN
     RAISE NOTICE 'OK 21: judge local-routing — default off leaves judges unchanged; on reroutes the 3 judge families (provider + requested_model + body.model); non-judge dispatches untouched';
 END $$;
 
+-- ── 22: page-in tool cap (the research notebook) — role-aware in compose_messages
+DO $$
+DECLARE
+    v_iv uuid; v_sess text := 'smoke-pagein'; v_msgs jsonb; v_toolc text; v_asstc text;
+    v_big text := repeat('x', 6000);
+BEGIN
+    -- the config ships OFF (public default = no behavior change)
+    ASSERT stewards.config_get_text('page_in_tool_result_cap_chars','x') = '0',
+        'page_in_tool_result_cap_chars must default 0 (off; public unchanged)';
+    -- the cap helper truncates over the cap + leaves a page-in handle
+    ASSERT (stewards.page_in_cap(jsonb_build_object('role','tool','content',v_big), 500, 'abcd')->>'content') LIKE '%[page-in:%result_search%',
+        'page_in_cap must truncate over-cap content to a head + a page-in/result_search banner';
+
+    -- compose_messages role-awareness: a big TOOL result is capped to the low tool
+    -- cap; a big ASSISTANT message is NOT (it stays on the high ratio cap).
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature)
+      VALUES ('smoke-pagein','*','pagein smoke','primary','You are a smoke agent.',0.2)
+      ON CONFLICT (family, model_match) DO UPDATE SET prompt=EXCLUDED.prompt;
+    INSERT INTO stewards.sessions (id,kind) VALUES (v_sess,'agent') ON CONFLICT DO NOTHING;
+    INSERT INTO stewards.messages (session_id, role, content, tool_call_id)
+      VALUES (v_sess,'user','start',NULL),
+             (v_sess,'assistant',v_big,NULL),
+             (v_sess,'tool',v_big,'tc1');
+
+    -- ratio high so the ratio cap never fires; tool cap low so only tool results page.
+    -- compose_messages args = (agent_family, model, session_id, user_input).
+    PERFORM stewards.config_set('page_in_single_msg_ratio','0.99'::jsonb,NULL);
+    PERFORM stewards.config_set('page_in_tool_result_cap_chars','800'::jsonb,NULL);
+    v_msgs := stewards.compose_messages('smoke-pagein','smoke-model',v_sess,NULL);
+
+    SELECT e->>'content' INTO v_toolc FROM jsonb_array_elements(v_msgs) e WHERE e->>'role'='tool' LIMIT 1;
+    SELECT e->>'content' INTO v_asstc FROM jsonb_array_elements(v_msgs) e
+      WHERE e->>'role'='assistant' AND length(e->>'content') > 2000 LIMIT 1;
+    ASSERT v_toolc IS NOT NULL AND length(v_toolc) < 2000 AND v_toolc LIKE '%[page-in:%',
+        format('the big tool result must be paged to a small head+banner, got len=%s', length(coalesce(v_toolc,'')));
+    -- a big assistant message keeps the high ratio cap (well above the 800 tool cap)
+    ASSERT v_asstc IS NOT NULL AND length(v_asstc) > 2000,
+        format('a big assistant message must NOT be tool-capped (ratio cap only), got len=%s', length(coalesce(v_asstc,'')));
+
+    -- restore virgin state
+    PERFORM stewards.config_set('page_in_single_msg_ratio','0.5'::jsonb,NULL);
+    PERFORM stewards.config_set('page_in_tool_result_cap_chars','0'::jsonb,NULL);
+    DELETE FROM stewards.messages WHERE session_id=v_sess;
+    DELETE FROM stewards.sessions WHERE id=v_sess;
+    DELETE FROM stewards.agents WHERE family='smoke-pagein';
+    RAISE NOTICE 'OK 22: page-in tool cap — config off by default; page_in_cap truncates+handles; compose_messages caps a big TOOL result to the low tool cap while a big ASSISTANT stays on the ratio cap (the research notebook)';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→36) is sound =='

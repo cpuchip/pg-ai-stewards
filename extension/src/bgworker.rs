@@ -507,7 +507,9 @@ fn check_steward_tick() {
 /// Phase A (2026-05-12) — Periodic reaper.
 ///
 /// Runs every 60s (leader-only). Reaps work_queue rows that have been
-/// `in_progress` for > 15 minutes. Mirrors the startup reaper's logic:
+/// `in_progress` longer than the `reaper_stale_minutes` config (default 15;
+/// a local rig raises it since a slow local model legitimately runs longer).
+/// Mirrors the startup reaper's logic:
 /// for `tool_dispatch` parents, synthesize tool-failure replies + enqueue
 /// continuation so the chain doesn't stall; for everything else, mark
 /// status=error with a clear diagnostic.
@@ -534,7 +536,7 @@ fn run_periodic_reaper() {
                          FROM stewards.work_queue \
                          WHERE status = 'in_progress' \
                            AND kind <> 'mcp_proxy' \
-                           AND claimed_at < now() - interval '15 minutes'",
+                           AND claimed_at < now() - (stewards.config_get_text('reaper_stale_minutes', '15') || ' minutes')::interval",
                         None, &[],
                     )?;
                     rows.into_iter().filter_map(|r| {
@@ -598,7 +600,7 @@ fn run_periodic_reaper() {
                          done_at = now() \
                      WHERE status = 'in_progress' \
                        AND kind <> 'mcp_proxy' \
-                       AND claimed_at < now() - interval '15 minutes'",
+                       AND claimed_at < now() - (stewards.config_get_text('reaper_stale_minutes', '15') || ' minutes')::interval",
                     None, &[]
                 )?;
 

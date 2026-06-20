@@ -25,6 +25,16 @@
 SELECT stewards.config_set('page_in_single_msg_ratio', '0.5'::jsonb,
   '33: compose_messages caps any single rendered message to effective_budget * this ratio (tokens, ~3.5 chars/tok); over the cap -> head + a page-in banner carrying the message handle. The model reads the rest with result_read/result_search. Window-aware. 0 disables.');
 
+-- The "research notebook" cap (2026-06-19): an ABSOLUTE char cap for TOOL-role
+-- results, applied on top of the ratio cap (compose_messages takes the lower of the
+-- two for tool messages). The ratio cap is per-message, so a gather stage that does
+-- several medium web_search/fetch calls piles them up under the cap until a local
+-- model wedges. A low absolute tool cap pages EACH raw tool result to a head +
+-- handle, so the model carries a compact "notebook" and pulls the bits it needs with
+-- result_search/result_read. 0 = off (the public default; a local rig sets e.g. 3000).
+SELECT stewards.config_set('page_in_tool_result_cap_chars', '0'::jsonb,
+  '33: absolute char cap for TOOL-role results (the research-notebook lever). compose_messages caps a tool message to LEAST(ratio cap, this) when >0; the model pages the rest with result_search/result_read. 0 disables (default). A local rig sets ~3000 so gather does not accumulate raw web pages.');
+
 -- ── the cap helper (wrapped around each rendered message by compose_messages) ──
 CREATE OR REPLACE FUNCTION stewards.page_in_cap(p_obj jsonb, p_cap_chars int, p_handle text)
 RETURNS jsonb LANGUAGE sql IMMUTABLE AS $fn$

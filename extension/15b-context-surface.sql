@@ -542,6 +542,7 @@ DECLARE
     v_provider         text;
     v_budget_tokens    int;
     v_single_cap       int;
+    v_tool_cap         int;
     v_pressure_total   numeric := 0;
     v_pressure_pct     numeric;
     v_drop_medium      boolean := false;
@@ -586,6 +587,15 @@ BEGIN
     v_single_cap := floor(GREATEST(v_budget_tokens, 1)
         * COALESCE((stewards.config_get('page_in_single_msg_ratio', '0.5'::jsonb))::text::numeric, 0.5)
         * 3.5)::int;
+    -- 36/notebook (2026-06-19): an ABSOLUTE char cap for TOOL-role results, applied
+    -- on top of the ratio cap. The ratio cap is per-message, so several medium
+    -- web_search/fetch results each slip under it and pile up cumulatively until a
+    -- local gather stage wedges. A low absolute tool cap forces EACH tool result to
+    -- a head + page-in handle (the "research notebook"): the model pages through with
+    -- result_search/result_read instead of carrying every raw page. 0 = off (the
+    -- public default; the overlay sets it for a local rig). Tool results only — the
+    -- assistant/user tail stays ratio-capped.
+    v_tool_cap := COALESCE((stewards.config_get('page_in_tool_result_cap_chars', '0'::jsonb))::text::int, 0);
 
     -- L.1: pressure with strategy multiplier.
     SELECT sum(length(coalesce(m.content,'')) + length(coalesce(m.tool_calls::text,'')) + length(coalesce(m.reasoning_content,''))) / 3.5
@@ -704,7 +714,11 @@ BEGIN
             ELSE
                 jsonb_build_object('role', role, 'content', content)
         END
-        , v_single_cap, handle)
+        -- tool results get the lower of the ratio cap and the absolute tool cap
+        -- (the notebook: page each raw tool result to a head + handle); everything
+        -- else stays on the ratio cap. v_tool_cap=0 (default) → unchanged.
+        , CASE WHEN role = 'tool' AND v_tool_cap > 0 THEN LEAST(v_single_cap, v_tool_cap) ELSE v_single_cap END
+        , handle)
         ORDER BY pos
     ), '[]'::jsonb)
     INTO v_history
