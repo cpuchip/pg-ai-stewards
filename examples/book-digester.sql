@@ -261,8 +261,9 @@ INSERT INTO stewards.pipelines (
               '   - "Key passages" — 3-6 quotes copied VERBATIM from the source text, each with a one-line gloss. A quotation mark is a promise the words are EXACT: copy them character-for-character from what you read. If you are paraphrasing, summarizing, or recalling the gist, do NOT use quotation marks — write it as your own prose. Never quote from memory.' || E'\n' ||
               '   - "Themes" — the recurring ideas.' || E'\n' ||
               '   - "What''s worth learning" — 3-6 concrete, actionable takeaways (not platitudes — things a person or this substrate could actually try).' || E'\n' ||
-              '5. Call `doc_read` to review the whole draft; fix anything weak or unfaithful with `doc_patch`. Do NOT publish — the critique stage does that.' || E'\n' ||
-              '6. Reply with a short JOURNAL (2-4 sentences): the book, what you built, and the draft handle. Do NOT paste the document.' ),
+              '5. VERIFY YOUR QUOTES: for each quote in "Key passages", call `result_search` with the fetch handle and the quoted phrase. If it is NOT found verbatim in the source, fix the quote to the exact words with `doc_patch`, or remove the quotation marks (make it your own prose). A fabricated or paraphrased-in-quotes passage is the one thing that must not ship.' || E'\n' ||
+              '6. Call `doc_read` to review the whole draft; fix anything weak or unfaithful with `doc_patch`. Do NOT publish — the critique stage does that.' || E'\n' ||
+              '7. Reply with a short JOURNAL (2-4 sentences): the book, what you built, and the draft handle. Do NOT paste the document.' ),
         -- CRITIQUE: a second pass (the D&C 88:122 review). Picks up the draft via
         -- doc_current (work-item-scoped), pressure-tests it, patches the null-case
         -- in, then publishes. Tools on (doc_*, book_publish_draft).

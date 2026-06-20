@@ -300,9 +300,10 @@ INSERT INTO stewards.pipelines (
               '   - "Themes" — the recurring ideas.' || E'\n' ||
               '   - "Tensions & objections" — the STRONGEST objection to the thesis (the null case); be honest, not agreeable.' || E'\n' ||
               '   - "What''s worth learning" — 3-6 concrete, actionable takeaways (not platitudes).' || E'\n' ||
-              '5. Call `doc_read` to review the whole draft; fix anything weak with `doc_patch`.' || E'\n' ||
-              '6. Call `playlist_publish_draft` with the handle + video_id + title + playlist (from the header). This publishes the doc and marks the video seen.' || E'\n' ||
-              '7. Finally, reply with a short JOURNAL (2-4 sentences): what the video argued, what you built, and the slug. Do NOT paste the document.' )
+              '5. VERIFY YOUR QUOTES: for each quote in "Key passages", call `transcript_search` with the video_id and the quoted phrase. If found=false, fix the quote to the EXACT transcript words with `doc_patch`, or remove the quotation marks (make it your own prose). A paraphrase-in-quotes is the one thing that must not ship.' || E'\n' ||
+              '6. Call `doc_read` to review the whole draft; fix anything weak with `doc_patch`.' || E'\n' ||
+              '7. Call `playlist_publish_draft` with the handle + video_id + title + playlist (from the header). This publishes the doc and marks the video seen.' || E'\n' ||
+              '8. Finally, reply with a short JOURNAL (2-4 sentences): what the video argued, what you built, and the slug. Do NOT paste the document.' )
     ),
     false, false,
     NULL, NULL,

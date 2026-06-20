@@ -218,6 +218,50 @@ INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, sourc
     ('research','yt_persist_transcript','allow','manual')
 ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET action = EXCLUDED.action;
 
+-- ── transcript_search — verify a quote against a stored transcript (the digest
+--    self-check, Pillar 3b). Returns whether the phrase is a verbatim substring of
+--    the transcript (whitespace-normalized) + highlighted snippets, so the build
+--    stage can confirm a quote before publishing and fix/de-quote any that miss.
+CREATE OR REPLACE FUNCTION stewards.transcript_search_tool(p_args jsonb)
+RETURNS text LANGUAGE plpgsql AS $fn$
+DECLARE
+    v_vid  text := coalesce(p_args->>'video_id', p_args->>'id', '');
+    v_q    text := coalesce(p_args->>'query', p_args->>'quote', '');
+    v_full text;
+    v_found boolean;
+    v_snip text;
+BEGIN
+    IF v_vid = '' OR v_q = '' THEN
+        RETURN jsonb_build_object('error', 'video_id and query required')::text;
+    END IF;
+    SELECT full_text INTO v_full FROM stewards.yt_transcripts WHERE video_id = v_vid;
+    IF v_full IS NULL THEN
+        RETURN jsonb_build_object('found', false,
+            'note', 'no transcript stored for this video_id (read stage calls yt_persist_transcript)')::text;
+    END IF;
+    v_found := position(lower(regexp_replace(v_q, '\s+', ' ', 'g'))
+                        in lower(regexp_replace(v_full, '\s+', ' ', 'g'))) > 0;
+    v_snip := ts_headline('english', v_full, plainto_tsquery('english', v_q),
+                          'MaxFragments=2,MinWords=5,MaxWords=20,StartSel=[[,StopSel=]]');
+    RETURN jsonb_build_object('found', v_found, 'snippets', left(coalesce(v_snip, ''), 600),
+        'note', CASE WHEN v_found THEN 'verbatim match — keep the quote'
+                     ELSE 'NOT a verbatim substring — fix the quote to the EXACT transcript words or remove the quotation marks' END)::text;
+END;
+$fn$;
+
+INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target) VALUES
+( 'transcript_search',
+  'Check whether a quote appears VERBATIM in a video transcript before you publish it. Pass video_id (11-char) + query (the quoted phrase). Returns {found, snippets}. If found=false, fix the quote to the exact words or drop the quotation marks.',
+  '{"type":"object","required":["video_id","query"],"properties":{"video_id":{"type":"string"},"query":{"type":"string"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"transcript_search_tool"}'::jsonb )
+ON CONFLICT (name) DO UPDATE SET
+    description = EXCLUDED.description, args_schema = EXCLUDED.args_schema,
+    execute_target = EXCLUDED.execute_target, active = true;
+
+INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
+    ('research','transcript_search','allow','manual')
+ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET action = EXCLUDED.action;
+
 -- =====================================================================
 -- End of yt-transcripts.sql
 -- =====================================================================
