@@ -994,11 +994,29 @@ func runMaterializeWrites(ctx context.Context, args []string) {
 	}
 	defer pool.Close()
 
+	// Quote gate (Pillar 2): hold any write whose source digest the quote oracle
+	// marked 'flagged' (docs.frontmatter.quote_check) — a fabricated/paraphrased
+	// quote must not reach the repo. The oracle (scripts/verify-digest-quotes
+	// --mark) is the single source of quote-truth; the materializer only reads its
+	// verdict. Unverifiable/passed/unchecked docs still materialize.
+	var held int64
+	if err := pool.QueryRow(ctx, `
+		SELECT count(*) FROM stewards.pending_file_writes p
+		 WHERE p.materialized_at IS NULL
+		   AND EXISTS (SELECT 1 FROM stewards.docs d
+		                WHERE d.id = p.source_id
+		                  AND d.frontmatter->>'quote_check' = 'flagged')`).Scan(&held); err == nil && held > 0 {
+		fmt.Printf("materialize-writes: %d write(s) HELD by the quote gate (source digest flagged — fix or re-mark to release)\n", held)
+	}
+
 	rows, err := pool.Query(ctx, `
 		SELECT id, requested_at, requested_by, target_path, write_mode,
 		       content, coalesce(source_kind,''), coalesce(source_id,'')
-		  FROM stewards.pending_file_writes
+		  FROM stewards.pending_file_writes p
 		 WHERE materialized_at IS NULL
+		   AND NOT EXISTS (SELECT 1 FROM stewards.docs d
+		                    WHERE d.id = p.source_id
+		                      AND d.frontmatter->>'quote_check' = 'flagged')
 		 ORDER BY requested_at ASC
 		 LIMIT $1`, *limit)
 	if err != nil {

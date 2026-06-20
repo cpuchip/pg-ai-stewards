@@ -47,14 +47,25 @@ Options: `--container <name>` (default `stewards-oss-pg`), `--min-len N`
 (default 24), `--threshold R` (default 0.82), `--verbose` (show OK quotes too).
 Exit `0` if no FLAG, else `1`. Reads the live DB **read-only** via `docker exec psql`.
 
-## Where this fits — the publish gate
+## Where this fits — the publish gate (wired)
 
 Digests always pool to the DB; they materialize to the repo (`study/books/…`,
 `study/yt/…`) only when the operator runs the materializer (the `/workspace` mount
-is read-only by default). **This oracle is the pre-materialize gate**: run it
-before letting a digest reach the repo. A `FLAG` means either fix the digest
-(re-run the critique stage to requote verbatim or drop the quotation marks) or
-hold it out of the repo.
+is read-only by default). **This oracle is the pre-materialize gate**, and it is
+wired:
+
+- `--mark` writes the per-doc verdict into `docs.frontmatter.quote_check`
+  (`passed` | `flagged` | `unverifiable`). Run `verify-digest-quotes.py --all --mark`
+  to score the whole corpus.
+- `stewards-cli materialize-writes` (the Go materializer) **holds** any pending write
+  whose source digest is `flagged` — it's excluded from the drain and logged
+  (`N write(s) HELD by the quote gate`). `passed`/`unverifiable`/unchecked docs still
+  materialize (we don't block on *missing* source, only on *positive* flags). To
+  release a held doc: fix the digest (requote verbatim or drop the quote marks) and
+  re-run `--mark` (it flips to `passed`), or override the verdict by hand.
+
+The contract is a DB flag, deliberately: the oracle (Python) is the single source of
+quote-truth and the materializer (Go) only reads its verdict — no Python-from-Go.
 
 Tuning note: `FLAG` includes paraphrased-in-quotes, not only outright fabrication
 — that's deliberate (the standard is verbatim). Raise `--threshold` toward 1.0 for

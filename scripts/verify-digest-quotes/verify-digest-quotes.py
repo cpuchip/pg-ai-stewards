@@ -44,6 +44,7 @@ CONTAINER = "stewards-oss-pg"
 MIN_LEN = 24
 THRESHOLD = 0.82
 VERBOSE = False
+MARK = False  # --mark: write the verdict to docs.frontmatter.quote_check (the gate)
 UA = "pg-ai-stewards-verify-digest-quotes/1.0 (quote audit)"
 
 
@@ -57,6 +58,20 @@ def db(sql):
         sys.stderr.write(f"db error: {out.stderr}\n")
         sys.exit(2)
     return out.stdout
+
+
+def mark_doc(slug, verdict):
+    """Write the quote-check verdict into docs.frontmatter.quote_check (the gate reads it).
+    verdict ∈ {passed, flagged, unverifiable}. Single-quotes in slug are not expected."""
+    sql = (
+        "UPDATE stewards.docs SET frontmatter = "
+        "jsonb_set(coalesce(frontmatter, '{}'::jsonb), '{quote_check}', '\"" + verdict + "\"'::jsonb, true) "
+        "WHERE slug = '" + slug.replace("'", "''") + "'"
+    )
+    subprocess.run(
+        ["docker", "exec", "-i", CONTAINER, "psql", "-U", "stewards", "-d", "stewards", "-c", sql],
+        capture_output=True, text=True, encoding="utf-8",
+    )
 
 
 def norm(s):
@@ -162,10 +177,14 @@ def audit(slug):
     if not quotes:
         if VERBOSE:
             print(f"  -- {slug}: no quotes to check")
+        if MARK:
+            mark_doc(slug, "passed")  # nothing quoted = nothing to fabricate
         return (slug, 0, 0, 0)  # checked, flagged, skipped
     source = book_source(slug) if slug.startswith("book-") else video_source(slug) if slug.startswith("yt-") else None
     if not source:
         print(f"  SKIP {slug}: no source to verify against ({len(quotes)} quotes unchecked)")
+        if MARK:
+            mark_doc(slug, "unverifiable")  # no source — materialize with a warning, don't block
         return (slug, 0, 0, len(quotes))
     src_n = norm(source)
     flagged = 0
@@ -178,11 +197,13 @@ def audit(slug):
         else:
             flagged += 1
             print(f"      FLAG ({r:.2f}) {raw[:90]}")
+    if MARK:
+        mark_doc(slug, "flagged" if flagged else "passed")
     return (slug, len(quotes), flagged, 0)
 
 
 def main():
-    global CONTAINER, MIN_LEN, THRESHOLD, VERBOSE
+    global CONTAINER, MIN_LEN, THRESHOLD, VERBOSE, MARK
     args = sys.argv[1:]
     slugs, i = [], 0
     mode = None
@@ -192,6 +213,7 @@ def main():
         if a == "--min-len": MIN_LEN = int(args[i + 1]); i += 2; continue
         if a == "--threshold": THRESHOLD = float(args[i + 1]); i += 2; continue
         if a == "--verbose": VERBOSE = True; i += 1; continue
+        if a == "--mark": MARK = True; i += 1; continue
         if a in ("--all-books", "--all-videos", "--all"): mode = a; i += 1; continue
         slugs.append(a); i += 1
     if mode == "--all-books" or mode == "--all":
