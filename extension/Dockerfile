@@ -62,7 +62,7 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      32-alias-failover.sql 33-page-in.sql \
      34-doc-builder.sql 35-research-doc-construction.sql \
      36-judge-local-routing.sql 37-tool-groups.sql \
-     38-edge-vocabulary.sql ./
+     38-edge-vocabulary.sql 39-hinge.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,

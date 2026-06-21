@@ -422,6 +422,12 @@ extension_sql_file!(
     requires = ["create_tool_groups"],
 );
 
+extension_sql_file!(
+    "../39-hinge.sql",
+    name = "create_hinge",
+    requires = ["create_edge_vocabulary"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

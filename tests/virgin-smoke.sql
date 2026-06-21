@@ -1312,4 +1312,35 @@ BEGIN
     RAISE NOTICE 'OK 26: edge-verb vocabulary — registry seeds 19 verbs/4 groups; graph_link validates + writes symmetric verbs both ways + refuses unknowns; graph_vocabulary lists them (the graph''s grammar)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→38) is sound =='
+-- ── 27: the Hinge review queue (39) — bounds are ENFORCED in the substrate, never in
+--    the prompt: the claude reviewer's approval only sticks for an in-bounds kind; an
+--    out-of-bounds or escalate-always kind escalates to Michael regardless; Michael's
+--    verdict is final and can clear an escalated item.
+DO $$
+DECLARE a bigint; b bigint; c bigint;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='hinge_reviews'),
+        'hinge_reviews queue must ship';
+    ASSERT stewards.config_get('hinge_escalate_always_kinds') ? 'cutover',
+        'cutover must default to escalate-always';
+    PERFORM stewards.config_set('hinge_auto_approve_kinds', '["smoke-rule"]'::jsonb, 'smoke');
+
+    a := stewards.hinge_enqueue('smoke-rule','in-bounds','{}','smoke');
+    b := stewards.hinge_enqueue('graph-reorg','out-of-bounds','{}','smoke');
+    c := stewards.hinge_enqueue('cutover','escalate-always','{}','smoke');
+    ASSERT (stewards.hinge_record_verdict(a,'approve','x')->>'status') = 'approved',
+        'an in-bounds kind the reviewer approves must be approved';
+    ASSERT (stewards.hinge_record_verdict(b,'approve','x')->>'status') = 'escalated',
+        'an out-of-bounds approval must escalate to Michael (the reviewer cannot exceed its grant)';
+    ASSERT (stewards.hinge_record_verdict(c,'approve','x')->>'status') = 'escalated',
+        'an escalate-always kind must escalate regardless of the reviewer verdict';
+    ASSERT (stewards.hinge_record_verdict(c,'approve','his call','michael')->>'status') = 'approved',
+        'Michael can clear an escalated item (his verdict is final)';
+
+    -- restore virgin state
+    PERFORM stewards.config_set('hinge_auto_approve_kinds', '[]'::jsonb, 'reset');
+    DELETE FROM stewards.hinge_reviews WHERE proposer = 'smoke';
+    RAISE NOTICE 'OK 27: Hinge review queue — bounds enforced in the substrate (in-bounds approve sticks; out-of-bounds + escalate-always escalate to Michael regardless of the reviewer; Michael''s verdict is final)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→39) is sound =='
