@@ -296,7 +296,7 @@ INSERT INTO stewards.pipelines (
               '4. Build the digest with `doc_append_section` (one call each, keep each small, faithful to the transcript, quote only what is actually said):' || E'\n' ||
               '   - "Thesis" — the core claim in 2-4 sentences.' || E'\n' ||
               '   - "How it builds" — the structure of the argument.' || E'\n' ||
-              '   - "Key passages" — 3-6 quotes copied VERBATIM from the transcript, each with a one-line gloss. A quotation mark is a promise the words are EXACT: copy them character-for-character from the transcript. If you are paraphrasing, summarizing, or recalling the gist, do NOT use quotation marks — write it as your own prose. Never quote from memory.' || E'\n' ||
+              '   - "Key passages" — 3-6 quotes copied VERBATIM from the transcript, each with a one-line gloss. A quotation mark is a promise the words are EXACT: copy them character-for-character from the transcript. If you are paraphrasing, summarizing, or recalling the gist, do NOT use quotation marks — write it as your own prose. Never quote from memory. Also call `quote_rules` for any verbatim-discipline rules the substrate has LEARNED from past digests, and follow them.' || E'\n' ||
               '   - "Themes" — the recurring ideas.' || E'\n' ||
               '   - "Tensions & objections" — the STRONGEST objection to the thesis (the null case); be honest, not agreeable.' || E'\n' ||
               '   - "What''s worth learning" — 3-6 concrete, actionable takeaways (not platitudes).' || E'\n' ||

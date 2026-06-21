@@ -53,3 +53,19 @@ cutover … changes standing behavior and widens the active surface — that is 
 not a delegated one," AND caught that the payload was too thin to verify safety. The
 full-context shepherd, standing watch at the gate. virgin-smoke OK 27; chain 00→39 (gating).
 Unicode gotcha: Windows console is cp1252 → `sys.stdout.reconfigure(utf-8)`.
+
+**Phase G — DONE (the Reflective Tuning Engine — the oracle as a gradient).** `40-rte.sql`:
+`quote_flags` (the per-quote failure signal the oracle `--mark` now writes) + `digest_skill_rules`
+(proposed→active→retired) + `quote_rules` (the active rules the digester consults) +
+`rte_quote_contrast` (the gradient signal: flagged vs passed + corpus rate) +
+`rte_enqueue_quote_rule` (propose → a `digest_skill_rules` row + a Hinge review kind
+`digest-skill-rule`) + a trigger that AUTO-ACTIVATES the rule on Hinge approval (and marks the
+review `applied`). The `digest-tuning` pipeline (the LLM diagnoser: rte_quote_contrast →
+diagnose → rte_propose_quote_rule, scoped to a lean `self-tuning` tool group) + a DISABLED
+daily schedule. **★ THE LOOP PROVEN deterministically:** a flagged-quote signal → proposed rule
+→ before approval the digester sees only the default → Hinge approves → the trigger activates it
+→ `quote_rules` returns it → the review is `applied`. The oracle became a gradient — "build the
+oracle first" realized as self-improvement. Both build prompts now call `quote_rules`. Gotcha:
+`scheduled_pipelines.input_template` is JSONB (`{"assignment": "..."}`), not text. virgin-smoke
+OK 28; chain 00→40 (gating). The LLM auto-diagnosis (digest-tuning running on real flags) is the
+autonomous follow-up — the mechanism is proven; the schedule is disabled for Michael to enable.

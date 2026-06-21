@@ -428,6 +428,12 @@ extension_sql_file!(
     requires = ["create_edge_vocabulary"],
 );
 
+extension_sql_file!(
+    "../40-rte.sql",
+    name = "create_rte",
+    requires = ["create_hinge"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

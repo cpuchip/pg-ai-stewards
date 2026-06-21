@@ -74,6 +74,28 @@ def mark_doc(slug, verdict):
     )
 
 
+def _exec(sql):
+    subprocess.run(
+        ["docker", "exec", "-i", CONTAINER, "psql", "-U", "stewards", "-d", "stewards", "-c", sql],
+        capture_output=True, text=True, encoding="utf-8",
+    )
+
+
+def clear_flags(slug):
+    """Drop prior flags for a doc so --mark is idempotent (the RTE reads the current set)."""
+    _exec("DELETE FROM stewards.quote_flags WHERE doc_slug = '" + slug.replace("'", "''") + "'")
+
+
+def record_flag(slug, quote, score, source_kind):
+    """Persist one flagged quote — the RTE's per-quote gradient signal (Phase G)."""
+    sql = (
+        "INSERT INTO stewards.quote_flags (doc_slug, quote, score, source_kind) VALUES ('"
+        + slug.replace("'", "''") + "', '" + quote.replace("'", "''")[:1000] + "', "
+        + f"{score:.4f}, '{source_kind}')"
+    )
+    _exec(sql)
+
+
 def norm(s):
     s = (s or "").lower().replace("’", "'").replace("‘", "'")
     s = s.replace("“", '"').replace("”", '"').replace("—", "-").replace("–", "-")
@@ -189,6 +211,9 @@ def audit(slug):
     src_n = norm(source)
     flagged = 0
     print(f"  {slug}: {len(quotes)} quotes")
+    src_kind = "book" if slug.startswith("book-") else "video" if slug.startswith("yt-") else "doc"
+    if MARK:
+        clear_flags(slug)  # idempotent re-mark
     for raw, qn in quotes:
         r = verify(qn, src_n)
         if r >= THRESHOLD:
@@ -197,6 +222,8 @@ def audit(slug):
         else:
             flagged += 1
             print(f"      FLAG ({r:.2f}) {raw[:90]}")
+            if MARK:
+                record_flag(slug, raw, r, src_kind)  # the RTE's gradient signal
     if MARK:
         mark_doc(slug, "flagged" if flagged else "passed")
     return (slug, len(quotes), flagged, 0)

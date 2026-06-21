@@ -1343,4 +1343,43 @@ BEGIN
     RAISE NOTICE 'OK 27: Hinge review queue — bounds enforced in the substrate (in-bounds approve sticks; out-of-bounds + escalate-always escalate to Michael regardless of the reviewer; Michael''s verdict is final)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→39) is sound =='
+-- ── 28: the Reflective Tuning Engine (40) — the self-improvement loop. A flagged-quote
+--    signal → a proposed rule → the Hinge gate → on approval the trigger auto-applies it
+--    → the digester reads it via quote_rules. The oracle becomes a gradient.
+DO $$
+DECLARE v_res jsonb; v_rid bigint; v_hid bigint;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='quote_flags'),
+        'quote_flags (the gradient signal) must ship';
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='digest_skill_rules'),
+        'digest_skill_rules must ship';
+    ASSERT EXISTS (SELECT 1 FROM stewards.pipelines WHERE family='digest-tuning'),
+        'the digest-tuning pipeline must ship';
+
+    -- the RTE proposes a rule
+    v_res := stewards.rte_enqueue_quote_rule('smoke rule: paraphrase as prose, do not quote it', 'smoke flags');
+    ASSERT (v_res->>'ok')::boolean, 'rte_enqueue_quote_rule must propose + queue';
+    v_rid := (v_res->>'rule_id')::bigint; v_hid := (v_res->>'hinge_id')::bigint;
+
+    -- before approval: not active (the digester sees only the default)
+    ASSERT stewards.quote_rules_tool('{}'::jsonb) NOT LIKE '%smoke rule%',
+        'a proposed (un-approved) rule must NOT be active';
+
+    -- approve via the Hinge (grant the kind) → the trigger auto-activates the rule
+    PERFORM stewards.config_set('hinge_auto_approve_kinds', '["digest-skill-rule"]'::jsonb, 'smoke');
+    PERFORM stewards.hinge_record_verdict(v_hid, 'approve', 'sound');
+    ASSERT (SELECT status FROM stewards.digest_skill_rules WHERE id = v_rid) = 'active',
+        'Hinge approval must auto-activate the rule (the RTE trigger)';
+    ASSERT stewards.quote_rules_tool('{}'::jsonb) LIKE '%smoke rule%',
+        'an active rule must reach the digester via quote_rules';
+    ASSERT (SELECT status FROM stewards.hinge_reviews WHERE id = v_hid) = 'applied',
+        'the applied Hinge review must be marked applied';
+
+    -- restore virgin state
+    PERFORM stewards.config_set('hinge_auto_approve_kinds', '[]'::jsonb, 'reset');
+    DELETE FROM stewards.hinge_reviews WHERE id = v_hid;
+    DELETE FROM stewards.digest_skill_rules WHERE id = v_rid;
+    RAISE NOTICE 'OK 28: the RTE loop — a flagged-quote signal → proposed rule → Hinge gate → trigger auto-applies → the digester reads it via quote_rules (the oracle as a gradient; build-the-oracle-first realized)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→40) is sound =='
