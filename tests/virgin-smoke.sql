@@ -1274,4 +1274,42 @@ BEGIN
     RAISE NOTICE 'OK 25: single-finalize tool groups — doc-edit has no finalize; book/research-finalize each name one tool; a book-critique scope keeps book_publish_draft and drops doc_finalize (the double-publish fix)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→37) is sound =='
+-- ── 26: edge-verb vocabulary (38) — the graph's grammar for the self-tending memory.
+--    The canonical registry seeds the verbs; graph_link validates against it and writes
+--    symmetric verbs both ways; an unknown verb is refused with the valid set.
+DO $$
+DECLARE v_res jsonb; v_n int;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='stewards' AND table_name='edge_kinds'),
+        'edge_kinds registry must ship';
+    ASSERT (SELECT count(*) FROM stewards.edge_kinds) >= 18, 'the verb vocabulary must seed (>=18 verbs)';
+    ASSERT (SELECT count(DISTINCT edge_group) FROM stewards.edge_kinds) = 4,
+        'all four verb groups (provenance/causal/dialectical/associative) must seed';
+    ASSERT EXISTS (SELECT 1 FROM stewards.edge_kinds WHERE name='CONTRADICTS' AND is_symmetric),
+        'CONTRADICTS must be symmetric';
+
+    -- an unknown verb is refused (and lists the valid set)
+    v_res := stewards.graph_link('doc','smoke-a','doc','smoke-b','FROBNICATES','x');
+    ASSERT (v_res->>'ok')::boolean IS FALSE AND v_res ? 'verbs',
+        'graph_link must refuse an unknown verb and return the valid verbs';
+
+    -- a known symmetric verb links both directions
+    v_res := stewards.graph_link('doc','smoke-a','doc','smoke-b','CONTRADICTS','smoke');
+    ASSERT (v_res->>'ok')::boolean, 'graph_link must accept a canonical verb';
+    SELECT count(*) INTO v_n FROM stewards.edges e
+      JOIN stewards.nodes s ON s.id=e.src JOIN stewards.nodes d ON d.id=e.dst
+     WHERE e.kind='CONTRADICTS' AND s.ref IN ('smoke-a','smoke-b') AND d.ref IN ('smoke-a','smoke-b');
+    ASSERT v_n = 2, format('a symmetric verb must write both directions, got %s', v_n);
+
+    -- graph_vocabulary lists the verbs
+    ASSERT jsonb_array_length(stewards.graph_vocabulary_tool('{}'::jsonb)::jsonb) >= 18,
+        'graph_vocabulary must list the verbs';
+
+    -- restore virgin state
+    DELETE FROM stewards.edges WHERE src IN (SELECT id FROM stewards.nodes WHERE ref IN ('smoke-a','smoke-b'))
+                                  OR dst IN (SELECT id FROM stewards.nodes WHERE ref IN ('smoke-a','smoke-b'));
+    DELETE FROM stewards.nodes WHERE ref IN ('smoke-a','smoke-b');
+    RAISE NOTICE 'OK 26: edge-verb vocabulary — registry seeds 19 verbs/4 groups; graph_link validates + writes symmetric verbs both ways + refuses unknowns; graph_vocabulary lists them (the graph''s grammar)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→38) is sound =='

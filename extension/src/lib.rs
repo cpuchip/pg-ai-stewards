@@ -416,6 +416,12 @@ extension_sql_file!(
     requires = ["create_productivity"],
 );
 
+extension_sql_file!(
+    "../38-edge-vocabulary.sql",
+    name = "create_edge_vocabulary",
+    requires = ["create_tool_groups"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
