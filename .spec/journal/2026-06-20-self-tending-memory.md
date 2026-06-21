@@ -86,3 +86,22 @@ autonomous follow-up — the mechanism is proven; the schedule is disabled for M
 REMAINING in M: the memory-tend SCHEDULE overlay (trivial) + M5 PRUNE (contrastive edge
 reweighting — log recall/link hit-vs-miss, cut bad edges) as a follow-up. Then Phase K (the work-corpus
 tree = M specialized) + K4 cutover (Michael's Hinge).
+
+## Checkpoint — the self-tending memory CORE is LIVE
+
+In one run (full Ammon authority): **M1 (grammar) · H (the `claude -p` Hinge) · G (the RTE) ·
+M2/M3 (WALK + LINK)** — four chained core files (38→41), 19 edge verbs, 8 new tools, the
+`digest-tuning` + `memory-tend` pipelines, and two workspace overlays (the disabled schedules).
+Every phase its own tested commit (virgin-smoke OK 26→29, chain 00→41) + push + journal entry.
+The whole living core is in: a memory with a **grammar** (verbs), that **recalls by connectedness**
+(graph_recall), **grows its own typed links** (memory_link_propose → Hinge → edge), **learns from
+its checkers** (the oracle as a gradient), every change **watched at the gate** by a curated
+`claude -p` tiered under Michael, who holds the ultimate gate without being its bottleneck.
+
+Autonomy resumed at the checkpoint (the new infra is dormant — schedules disabled until Michael
+enables them; nothing self-modifies un-gated). **Remaining:** M5 PRUNE (contrastive edge
+reweighting — an optimization follow-up) + Phase K (the work-corpus two-loop = M specialized to one
+intent), whose K4 cutover is Michael's Hinge — a focused next arc on the now-proven core. The
+day's earlier work (the quote oracle, the gate, doc-construction, transcript persistence) were
+the first organs; this run gave them a nervous system. "AI entering the loop that builds AI,"
+at the substrate's own scale — watched.
