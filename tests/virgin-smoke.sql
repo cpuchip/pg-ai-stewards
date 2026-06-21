@@ -1416,4 +1416,24 @@ BEGIN
     RAISE NOTICE 'OK 29: the self-tending loops — graph_recall walks the typed graph by connectedness (reaches multi-hop neighbors, excludes the seed); the LINK loop proposes a typed edge, the Hinge gates it, and approval creates it (the memory grows its own connections, watched)';
 END $$;
 
+-- ── 30: the Hinge daemon contract (39) — the substrate DRIVES the host daemon and the
+--    emergency stop (autonomy_paused) HALTS the gate. The daemon obeys should_run.
+DO $$
+DECLARE v_hid bigint;
+BEGIN
+    ASSERT (stewards.hinge_gate_status()->>'should_run')::bool = false,
+        'a virgin queue (nothing pending) must say should_run=false';
+    v_hid := stewards.hinge_enqueue('graph-link','smoke-gate','{}'::jsonb,'smoke');
+    ASSERT (stewards.hinge_gate_status()->>'should_run')::bool = true,
+        'pending work + not paused must say should_run=true';
+    PERFORM stewards.config_set('autonomy_paused','true'::jsonb,'smoke');
+    ASSERT (stewards.hinge_gate_status()->>'should_run')::bool = false,
+        'the emergency stop (autonomy_paused) must force should_run=false — the gate obeys the global pause';
+    ASSERT (stewards.hinge_gate_status()->>'paused_reason') IS NOT NULL, 'paused must carry a reason';
+    PERFORM stewards.config_set('autonomy_paused','false'::jsonb,'restore');
+    DELETE FROM stewards.hinge_reviews WHERE id = v_hid;
+    ASSERT (stewards.hinge_gate_status()->>'interval_seconds')::int > 0, 'the substrate must dictate a poll interval';
+    RAISE NOTICE 'OK 30: the Hinge daemon contract — substrate-driven (interval from config) and obeys the emergency stop (autonomy_paused forces should_run=false; the global pause halts the gate with the source and the digesters)';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→41) is sound =='

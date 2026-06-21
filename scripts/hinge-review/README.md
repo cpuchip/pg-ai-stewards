@@ -21,11 +21,32 @@ reviewer can never exceed its delegated grant.
 An out-of-bounds or escalate-always kind the reviewer "approves" is recorded as
 **escalated** (with its recommendation), waiting for Michael. Michael's verdict is final.
 
+## It investigates, it doesn't just glance
+The curated `hinge/` folder gives the judge real scope: an `architecture.md` brief (what
+each proposal kind means + where the evidence lives) and **read-only DB access** via
+`hinge/query.sh` (writes are refused). So the reviewer reads the actual flagged quotes a
+rule claims to fix, the two docs a link claims to relate, prior verdicts — the 30,000-foot
+view, not the payload alone. (It once caught a proposed rule whose grounding was a spurious
+correlation and would have pushed the digesters toward fabrication — and revised it.)
+
 ## Usage
 ```bash
 python hinge-review.py            # review all pending
 python hinge-review.py --dry-run  # show verdicts without recording
-python hinge-review.py --model claude-sonnet-4-6   # cheaper reviewer
+python hinge-review.py --model claude-sonnet-4-6   # cheaper/faster reviewer
 ```
-Curate the reviewer by editing `hinge/CLAUDE.md`. Keep it lean — `claude -p` loads the
-folder's context, so a tight folder = focused judgment + low cost.
+Every review is logged to `hinge-review.log` (the verdict + the raw `claude -p` envelope:
+turns, cost, session id). The queue itself is `SELECT * FROM stewards.hinge_reviews`.
+
+## Running it continuously — the daemon
+```powershell
+pwsh hinge-daemon.ps1     # poll + review until Ctrl-C (or register as a scheduled task)
+```
+The daemon is **substrate-driven**: each tick it asks `stewards.hinge_gate_status()` whether
+to run, how often (`hinge_daemon_interval_seconds`), and whether the system is paused. It
+runs the reviewer only when there is pending work AND the substrate is **not** paused — so
+the global emergency stop (`autonomy_paused`, which the watchman trips on a runaway) halts
+the gate along with the source and the digesters. One switch stops everything.
+
+Curate the reviewer by editing `hinge/CLAUDE.md` + `hinge/architecture.md`. Cost is not a
+concern (a deep review is pennies); depth is the point of a Hinge.

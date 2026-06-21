@@ -51,18 +51,27 @@ $fn$;
 CREATE OR REPLACE FUNCTION stewards.rte_quote_contrast_tool(p_args jsonb)
 RETURNS text LANGUAGE plpgsql STABLE AS $fn$
 DECLARE
-    v_limit int := coalesce((p_args->>'limit')::int, 30);
-    v_flags jsonb;
-    v_rate  jsonb;
+    v_limit    int := coalesce((p_args->>'limit')::int, 30);
+    v_flags    jsonb;
+    v_rate     jsonb;
+    v_feedback jsonb;
 BEGIN
     SELECT jsonb_agg(jsonb_build_object('doc', doc_slug, 'quote', left(quote,200), 'score', score)
                      ORDER BY flagged_at DESC)
       INTO v_flags FROM (SELECT * FROM stewards.quote_flags ORDER BY flagged_at DESC LIMIT v_limit) f;
     SELECT jsonb_object_agg(qc, n) INTO v_rate FROM (
         SELECT coalesce(frontmatter->>'quote_check','unmarked') qc, count(*) n FROM stewards.docs GROUP BY 1) y;
+    -- prior rules the Hinge sent back, with WHY — so the diagnoser learns from the gate
+    -- (do not re-propose a revised/declined rule; address the feedback instead).
+    SELECT jsonb_agg(jsonb_build_object('proposed_rule', payload->>'rule',
+                                        'hinge_verdict', status, 'hinge_reason', reason) ORDER BY reviewed_at DESC)
+      INTO v_feedback FROM stewards.hinge_reviews
+     WHERE kind = 'digest-skill-rule' AND status IN ('revise','declined')
+       AND reviewed_at > now() - interval '14 days';
     RETURN jsonb_build_object('flagged_quotes', coalesce(v_flags,'[]'::jsonb),
                               'corpus_quote_check', coalesce(v_rate,'{}'::jsonb),
-                              'active_rules', stewards.quote_rules_tool('{}'::jsonb))::text;
+                              'active_rules', stewards.quote_rules_tool('{}'::jsonb),
+                              'prior_hinge_feedback', coalesce(v_feedback,'[]'::jsonb))::text;
 END;
 $fn$;
 
@@ -154,8 +163,9 @@ VALUES (
       'You are the digest-tuning stage — the Reflective Tuning Engine.' || E'\n\n' ||
       '1. Call `rte_quote_contrast` to see recent FLAGGED quotes (the failures), the corpus pass/flag counts, and the rules already active.' || E'\n' ||
       '2. Diagnose the delta: what do the flagged quotes share that the passed digests avoid — fabrication, paraphrase-in-quotes, or wrong attribution?' || E'\n' ||
-      '3. If there is ONE clear, NEW rule that would reduce these failures and is NOT already an active rule, call `rte_propose_quote_rule` with a one-sentence actionable rule + the grounding (which flagged quotes prompted it). If the active rules already cover it, propose nothing.' || E'\n' ||
-      '4. Reply with a 2-3 sentence journal: what you diagnosed and whether you proposed a rule.'
+      '3. Check `prior_hinge_feedback` in the contrast. If the Hinge revised an earlier rule, read WHY and let it sharpen you — do NOT re-propose a revised rule; address the feedback with a better-scoped, better-grounded one.' || E'\n' ||
+      '4. If there is ONE clear rule that would reduce these failures, is NOT already active, and is not the thing the Hinge just sent back, call `rte_propose_quote_rule` with a one-sentence actionable rule + the grounding (which flagged quotes prompted it). If the active rules + prior feedback already cover it, propose nothing.' || E'\n' ||
+      '5. Reply with a 2-3 sentence journal: what you diagnosed and whether you proposed a rule.'
   )),
   '["raw","verified"]'::jsonb, false, jsonb_build_object('pools_via_tool', true))
 ON CONFLICT (family) DO UPDATE SET stages = EXCLUDED.stages, description = EXCLUDED.description, updated_at = now();

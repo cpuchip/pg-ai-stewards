@@ -32,6 +32,31 @@ HINGE_DIR = os.path.join(HERE, "hinge")        # the curated subfolder (its CLAU
 CONTAINER = "stewards-oss-pg"
 MODEL = None
 DRY = False
+LOG = os.path.join(HERE, "hinge-review.log")  # easy human-readable log of every review
+
+
+def _ts():
+    import datetime
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def log_raw(text):
+    """Append the raw claude -p envelope (truncated) — for debugging a review."""
+    try:
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(f"\n----- {_ts()} claude -p raw (truncated) -----\n{(text or '')[:1800]}\n")
+    except Exception:
+        pass
+
+
+def log_review(item, verdict, reason, status):
+    """Append the human-readable verdict line (what the Hinge decided + why)."""
+    try:
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(f"{_ts()}  #{item['id']} [{item['kind']}] {item['subject']}\n"
+                    f"  VERDICT {verdict} -> {status}\n  {reason}\n\n")
+    except Exception:
+        pass
 
 
 def psql(sql):
@@ -62,10 +87,14 @@ def review(item):
         "payload:\n"
         f"{json.dumps(item.get('payload', {}), indent=2)}\n"
     )
-    cmd = ["claude", "-p", prompt, "--output-format", "json"]
+    # Give the judge real scope: read-only DB access (bash query.sh) + read its folder,
+    # so it can investigate the evidence, not just the payload. cwd = the curated folder.
+    cmd = ["claude", "-p", prompt, "--output-format", "json",
+           "--allowedTools", "Bash,Read,Grep,Glob", "--max-turns", "30"]
     if MODEL:
         cmd += ["--model", MODEL]
     out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", cwd=HINGE_DIR)
+    log_raw(out.stdout or out.stderr)
     if out.returncode != 0:
         return None, f"claude -p failed: {out.stderr[:200]}"
     try:
@@ -120,6 +149,7 @@ def main():
             print(f"  #{item['id']} [{item['kind']}] {item['subject']}\n      would: {verdict} — {reason}")
         else:
             status = record(item["id"], verdict, reason)
+            log_review(item, verdict, reason, status)
             print(f"  #{item['id']} [{item['kind']}] {item['subject']}\n      {verdict} → {status} — {reason}")
         if once:
             break

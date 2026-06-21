@@ -37,8 +37,21 @@ A single JSON object, no prose around it, no code fence:
 - **Read what's in front of you.** Judge the proposal's actual payload and its diff from
   current behavior — not a summary of it.
 
-## Each task
+## Each task — investigate, then judge
 
-You will be given one proposal: its `kind`, `subject`, and `payload`. Evaluate it against
-the above and emit the JSON verdict. Be terse. Escalate when unsure — Michael would
-rather see a borderline call than have it slip through.
+You will be given one proposal: its `kind`, `subject`, and `payload`. You are NOT limited
+to the payload — you can see the whole substrate. Take the 30,000-foot view.
+
+1. **Read `architecture.md`** (in this folder) — what the substrate is, what your `kind`
+   of proposal means, and which tables hold the evidence.
+2. **Investigate.** You have READ-ONLY database access:
+   `bash query.sh "SELECT ... ;"` (writes are refused). Verify the proposal against the
+   real data — read the flagged quotes a rule claims to fix (`stewards.quote_flags`), read
+   the two docs a link claims to relate (`stewards.docs`), check whether an active rule
+   already covers it (`stewards.digest_skill_rules`), and look at how similar proposals were
+   decided before (`stewards.hinge_reviews`). Investigate as much as you need — depth here
+   is the whole point of a Hinge; cost is not a concern.
+3. **Emit the JSON verdict and nothing else:** `{"verdict": "...", "reason": "..."}`.
+
+Do the thinking in your investigation; keep the verdict terse. Escalate when unsure —
+Michael would rather see a borderline call than have it slip through.

@@ -118,6 +118,35 @@ RETURNS jsonb LANGUAGE sql STABLE AS $fn$
       FROM (SELECT status, count(*) n FROM stewards.hinge_reviews GROUP BY status) x;
 $fn$;
 
+-- ── hinge_gate_status — the substrate DRIVES the host Hinge daemon. The daemon polls this
+--    each tick and obeys it: it runs the reviewer only when should_run is true, sleeps for
+--    interval_seconds, and — critically — STOPS when the substrate is paused (autonomy_paused,
+--    the same emergency stop the watchman trips). One switch (the pause) halts the source,
+--    the digesters, AND the gate. The cadence lives in config too, so pg-ai-stewards owns the
+--    schedule, not the host.
+CREATE OR REPLACE FUNCTION stewards.hinge_gate_status()
+RETURNS jsonb LANGUAGE plpgsql STABLE AS $fn$
+DECLARE
+    v_paused   bool := stewards.config_get_text('autonomy_paused','false') = 'true';
+    v_pending  int  := (SELECT count(*) FROM stewards.hinge_reviews WHERE status = 'pending');
+    v_interval int  := coalesce(nullif(stewards.config_get_text('hinge_daemon_interval_seconds',''),'')::int, 300);
+BEGIN
+    RETURN jsonb_build_object(
+        'should_run',       (v_pending > 0 AND NOT v_paused),
+        'pending',          v_pending,
+        'paused',           v_paused,
+        'paused_reason',    CASE WHEN v_paused THEN 'autonomy_paused (emergency stop) — Hinge daemon holds' ELSE NULL END,
+        'interval_seconds', v_interval);
+END;
+$fn$;
+COMMENT ON FUNCTION stewards.hinge_gate_status() IS
+'39: the substrate-driven contract for the host Hinge daemon. should_run = pending>0 AND NOT autonomy_paused; interval_seconds from config (hinge_daemon_interval_seconds, default 300). The daemon obeys this, so the global emergency stop pauses the gate along with everything else.';
+
+INSERT INTO stewards.config (key, value, description) VALUES
+  ('hinge_daemon_interval_seconds', '300'::jsonb,
+   'How often (seconds) the host Hinge daemon polls hinge_gate_status. The substrate owns the Hinge cadence.')
+ON CONFLICT (key) DO NOTHING;
+
 -- =====================================================================
 -- End of 39-hinge.sql
 -- =====================================================================
