@@ -70,6 +70,14 @@ RETURNS text LANGUAGE sql STABLE AS $fn$
                  SELECT 1 FROM stewards.edges e
                   WHERE e.kind IN ('RELATES_TO','SIMILAR_TO','BUILDS_ON','SUPPORTS','CONTRADICTS')
                     AND ((e.src=a.src AND e.dst=b.src) OR (e.src=b.src AND e.dst=a.src)))
+           -- and don't re-surface a pair the Hinge has already ruled on (any verdict): a
+           -- revised proposal makes no edge, so without this the same pair is proposed and
+           -- re-reviewed every cycle — pure waste (the reviewer is not free).
+           AND NOT EXISTS (
+                 SELECT 1 FROM stewards.hinge_reviews h
+                  WHERE h.kind = 'graph-link'
+                    AND ((h.payload->>'src_ref' = na.ref AND h.payload->>'dst_ref' = nb.ref)
+                      OR (h.payload->>'src_ref' = nb.ref AND h.payload->>'dst_ref' = na.ref)))
          GROUP BY na.kind, na.ref, nb.kind, nb.ref
         HAVING count(*) >= coalesce((p_args->>'min_shared')::int, 2)
          ORDER BY shared DESC
