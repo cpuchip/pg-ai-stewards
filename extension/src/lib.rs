@@ -434,6 +434,12 @@ extension_sql_file!(
     requires = ["create_hinge"],
 );
 
+extension_sql_file!(
+    "../41-memory-tend.sql",
+    name = "create_memory_tend",
+    requires = ["create_rte"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

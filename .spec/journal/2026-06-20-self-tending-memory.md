@@ -69,3 +69,20 @@ oracle first" realized as self-improvement. Both build prompts now call `quote_r
 `scheduled_pipelines.input_template` is JSONB (`{"assignment": "..."}`), not text. virgin-smoke
 OK 28; chain 00→40 (gating). The LLM auto-diagnosis (digest-tuning running on real flags) is the
 autonomous follow-up — the mechanism is proven; the schedule is disabled for Michael to enable.
+
+**Phase M2/M3 — DONE (the tending core: WALK + LINK).** `41-memory-tend.sql`:
+- **M3 the WALK — `graph_recall`:** HippoRAG-style weighted multi-hop spread over the typed
+  graph (both directions, decaying per hop, bounded), ranking reached nodes by CONNECTEDNESS.
+  ★ Proven on the real CITES graph: seeded the Maxwell "meekly drenched" talk-digest → recalled
+  "problem-with-mormon-youtube" (connected via 5 shared sources) — an association cosine misses.
+  Gotcha: a 2-hop path loops back to the seed → added `NOT IN (seed)` to the output.
+- **M2 the LINK loop — `graph_link_candidates`** (co-citation: docs citing the same sources but
+  unlinked) + **`memory_link_propose`** → a Hinge review kind `graph-link` → a trigger CREATES
+  the typed edge on approval. Proven: propose RELATES_TO → Hinge approve → edge born. The graph
+  only grows connections the Hinge approved.
+- **M4 mechanism — the `memory-tend` pipeline** (one tools-on stage scoped to a lean `memory-tend`
+  group: walk → find candidates → propose links). Dispatchable; its schedule is a workspace overlay
+  (disabled). virgin-smoke OK 29; chain 00→41 (gating).
+REMAINING in M: the memory-tend SCHEDULE overlay (trivial) + M5 PRUNE (contrastive edge
+reweighting — log recall/link hit-vs-miss, cut bad edges) as a follow-up. Then Phase K (the work-corpus
+tree = M specialized) + K4 cutover (Michael's Hinge).

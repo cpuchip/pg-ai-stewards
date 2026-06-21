@@ -1382,4 +1382,38 @@ BEGIN
     RAISE NOTICE 'OK 28: the RTE loop — a flagged-quote signal → proposed rule → Hinge gate → trigger auto-applies → the digester reads it via quote_rules (the oracle as a gradient; build-the-oracle-first realized)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→40) is sound =='
+-- ── 29: the self-tending loops (41) — the WALK (graph_recall by connectedness) + the
+--    LINK loop (propose a typed edge → the Hinge gates it → on approval the edge is born).
+DO $$
+DECLARE v_recall text; v_hid bigint;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='graph_recall' AND pronamespace='stewards'::regnamespace),
+        'graph_recall (the WALK) must ship';
+    ASSERT EXISTS (SELECT 1 FROM stewards.pipelines WHERE family='memory-tend'),
+        'the memory-tend pipeline must ship';
+
+    -- a mini graph: sm-a -BUILDS_ON-> sm-b -BUILDS_ON-> sm-c
+    PERFORM stewards.graph_link('doc','sm-a','doc','sm-b','BUILDS_ON','t');
+    PERFORM stewards.graph_link('doc','sm-b','doc','sm-c','BUILDS_ON','t');
+    v_recall := stewards.graph_recall_tool(jsonb_build_object('kind','doc','ref','sm-a','max_hops',2,'limit',10));
+    ASSERT v_recall LIKE '%sm-b%' AND v_recall LIKE '%sm-c%', 'recall must reach b (1 hop) and c (2 hops)';
+    ASSERT v_recall NOT LIKE '%sm-a%', 'recall must exclude the seed itself';
+
+    -- LINK loop: propose → Hinge approve → the edge is created
+    v_hid := (stewards.memory_link_propose('doc','sm-a','doc','sm-c','RELATES_TO','test')->>'hinge_id')::bigint;
+    PERFORM stewards.config_set('hinge_auto_approve_kinds','["graph-link"]'::jsonb,'smoke');
+    PERFORM stewards.hinge_record_verdict(v_hid,'approve','ok');
+    ASSERT EXISTS (SELECT 1 FROM stewards.edges e JOIN stewards.nodes s ON s.id=e.src JOIN stewards.nodes d ON d.id=e.dst
+                    WHERE e.kind='RELATES_TO' AND s.ref='sm-a' AND d.ref='sm-c'),
+        'an approved graph-link must create the edge (the LINK loop)';
+
+    -- restore virgin state
+    PERFORM stewards.config_set('hinge_auto_approve_kinds','[]'::jsonb,'reset');
+    DELETE FROM stewards.hinge_reviews WHERE proposer='memory-tend';
+    DELETE FROM stewards.edges WHERE src IN (SELECT id FROM stewards.nodes WHERE ref IN ('sm-a','sm-b','sm-c'))
+                                  OR dst IN (SELECT id FROM stewards.nodes WHERE ref IN ('sm-a','sm-b','sm-c'));
+    DELETE FROM stewards.nodes WHERE ref IN ('sm-a','sm-b','sm-c');
+    RAISE NOTICE 'OK 29: the self-tending loops — graph_recall walks the typed graph by connectedness (reaches multi-hop neighbors, excludes the seed); the LINK loop proposes a typed edge, the Hinge gates it, and approval creates it (the memory grows its own connections, watched)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→41) is sound =='
