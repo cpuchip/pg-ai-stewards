@@ -102,6 +102,47 @@ export type SearchResp = {
   hits: SearchHit[]
 }
 
+// Model Activity (GET /api/activity) — read-only introspection across ALL
+// providers: what model is doing what work right now + token counts.
+export type ActivityActive = {
+  slug: string
+  pipeline: string
+  stage: string
+  intent: string
+  model: string
+  provider: string
+  tokens: number
+  micro_usd: number
+  updated_at?: string
+  gpu?: string
+  local: boolean
+}
+export type ActivityRecent = {
+  provider: string
+  model: string
+  pipeline: string
+  slug: string
+  in_tokens: number
+  out_tokens: number
+  micro_usd: number
+  at?: string
+}
+export type ActivityProviderRollup = {
+  provider: string
+  model: string
+  calls: number
+  in_tokens: number
+  out_tokens: number
+  micro_usd: number
+}
+export type ActivityResp = {
+  active: ActivityActive[] | null
+  recent: ActivityRecent[] | null
+  by_provider: ActivityProviderRollup[] | null
+  gpu_by_model: Record<string, string>
+  generated_at: string
+}
+
 export type RigModel = { name: string; model?: string; state: string; ctx_size?: number; gpus?: number[] }
 export type RigGPU = { index: number; name?: string; mem_used_mib: number; mem_total_mib: number; util_pct: number; temp_c?: number }
 export type RigState = {
@@ -120,6 +161,7 @@ async function rigPost(path: string): Promise<{ status?: string; autonomy_paused
 
 export const api = {
   dashboard: () => getJSON<DashboardResp>('/api/dashboard'),
+  activity: () => getJSON<ActivityResp>('/api/activity'),
   rigState: () => getJSON<RigState>('/api/rig/state'),
   rigBrainOn: () => rigPost('/api/rig/brain-on'),
   rigBrainOff: () => rigPost('/api/rig/brain-off'),

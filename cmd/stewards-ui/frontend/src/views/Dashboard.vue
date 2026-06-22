@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
-import { api, scheduledApi, type DashboardResp, type ScheduledRunRow, type RigState } from '@/api'
+import { api, scheduledApi, type DashboardResp, type ScheduledRunRow, type RigState, type ActivityResp } from '@/api'
 
 const router = useRouter()
 
@@ -40,6 +40,16 @@ async function toggleAutonomy() {
   finally { rigBusy.value = ''; await loadRig() }
 }
 
+// Model Activity — what model is doing what work right now, across ALL
+// providers (not just the local rig). Polled on its own ~4s cadence,
+// independent of the dashboard health refresh, and tolerant of failure.
+const activity = ref<ActivityResp | null>(null)
+const activityErr = ref('')
+async function loadActivity() {
+  try { activity.value = await api.activity(); activityErr.value = '' }
+  catch (e) { activityErr.value = String(e) }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -63,13 +73,19 @@ async function load() {
 }
 
 let timer: number | undefined
+let activityTimer: number | undefined
 onMounted(() => {
   load()
+  loadActivity()
   // 5s auto-refresh — cheap (single dashboard endpoint)
   timer = window.setInterval(load, 5000)
+  // Activity has its own faster ~4s pulse — it's the "what's the brain
+  // doing right now" glance, so it wants to feel live.
+  activityTimer = window.setInterval(loadActivity, 4000)
 })
 onUnmounted(() => {
   if (timer) window.clearInterval(timer)
+  if (activityTimer) window.clearInterval(activityTimer)
 })
 
 function fmtRelative(s?: string) {
@@ -87,8 +103,23 @@ function fmtRelative(s?: string) {
   return `${days}d ago`
 }
 
+// Token count -> compact form (27_100 -> "27.1k", 5_252_464 -> "5.3M").
+function fmtTokens(n: number) {
+  if (n == null) return '0'
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k'
+  return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
+}
+// micro-dollars -> "$0.0000". Sub-cent spend is the norm here.
+function fmtUSD(micro: number) {
+  return '$' + ((micro || 0) / 1e6).toFixed(4)
+}
+
 const inFlightCount = computed(() => data.value?.in_flight?.length ?? 0)
 const errorCount = computed(() => data.value?.recent_errors?.length ?? 0)
+const activeWork = computed(() => activity.value?.active ?? [])
+const recentDispatches = computed(() => activity.value?.recent ?? [])
+const byProvider = computed(() => activity.value?.by_provider ?? [])
 </script>
 
 <template>
@@ -228,6 +259,115 @@ const errorCount = computed(() => data.value?.recent_errors?.length ?? 0)
         </div>
         <div v-else-if="rig?.llamachip_up" class="text-xs text-zinc-500">
           No models loaded — GPUs are free. Click <b>Start brain</b> to load the dance.
+        </div>
+      </div>
+    </section>
+
+    <!-- Model Activity — what model is doing what work right now, across ALL
+         providers (opencode_go, google_gemini, opencode_zen, nvidia,
+         flexllama, lm_studio). Read-only introspection. -->
+    <section class="rounded-md border border-zinc-800 bg-zinc-900/50 overflow-hidden">
+      <div class="px-4 py-3 border-b border-zinc-800 flex items-center gap-2">
+        <span
+          class="inline-block w-2 h-2 rounded-full"
+          :class="activeWork.length > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'"
+        ></span>
+        <h3 class="text-sm font-semibold">Model activity</h3>
+        <span class="text-xs text-zinc-500">
+          {{ activeWork.length > 0 ? `${activeWork.length} dispatching now` : 'idle' }}
+        </span>
+        <span v-if="activityErr" class="ml-auto text-xs text-red-400">{{ activityErr }}</span>
+      </div>
+
+      <!-- Now working -->
+      <div class="p-4 space-y-4">
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500 mb-2">Now working</div>
+          <div v-if="activeWork.length === 0" class="text-xs text-zinc-500">
+            Nothing dispatching this instant — no model is mid-call.
+          </div>
+          <ul v-else class="space-y-1.5">
+            <li
+              v-for="a in activeWork"
+              :key="a.slug"
+              class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm rounded px-2 py-1.5 bg-zinc-900/60 hover:bg-zinc-900 cursor-pointer"
+              @click="router.push(`/work-items/${a.slug}`)"
+            >
+              <span class="font-mono text-zinc-100">{{ a.model || '—' }}</span>
+              <span
+                class="text-xs px-1.5 py-0.5 rounded"
+                :class="a.local ? 'bg-sky-900/50 text-sky-300' : 'bg-zinc-800 text-zinc-300'"
+              >{{ a.provider || 'unknown' }}</span>
+              <span
+                v-if="a.gpu"
+                class="text-xs px-1.5 py-0.5 rounded bg-emerald-900/40 text-emerald-300 font-mono"
+              >{{ a.gpu }}</span>
+              <span class="text-xs text-zinc-400">
+                {{ a.pipeline }} · <span class="text-zinc-500">{{ a.stage }}</span>
+              </span>
+              <span class="text-xs font-mono text-zinc-500 truncate max-w-[16rem]">{{ a.slug }}</span>
+              <span class="ml-auto text-xs tabular-nums text-zinc-400">{{ fmtTokens(a.tokens) }} tok</span>
+              <span class="text-xs tabular-nums text-zinc-500">{{ fmtUSD(a.micro_usd) }}</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Recent dispatches — the pulse across providers -->
+        <div>
+          <div class="text-xs uppercase tracking-wide text-zinc-500 mb-2">Recent dispatches</div>
+          <div v-if="recentDispatches.length === 0" class="text-xs text-zinc-500">
+            No dispatches recorded yet.
+          </div>
+          <ul v-else class="space-y-0.5">
+            <li
+              v-for="(r, i) in recentDispatches"
+              :key="i"
+              class="flex flex-wrap items-center gap-x-3 text-xs py-0.5"
+            >
+              <span class="font-mono text-zinc-200 min-w-[10rem]">{{ r.model }}</span>
+              <span
+                class="px-1.5 py-0.5 rounded"
+                :class="(r.provider === 'flexllama' || r.provider === 'lm_studio') ? 'bg-sky-900/40 text-sky-300' : 'bg-zinc-800 text-zinc-400'"
+              >{{ r.provider }}</span>
+              <span class="text-zinc-500">{{ r.pipeline || '—' }}</span>
+              <span class="tabular-nums text-zinc-400">
+                {{ fmtTokens(r.in_tokens) }}<span class="text-zinc-600">→</span>{{ fmtTokens(r.out_tokens) }}
+              </span>
+              <span class="ml-auto text-zinc-500">{{ fmtRelative(r.at) }}</span>
+            </li>
+          </ul>
+        </div>
+
+        <!-- by provider (24h) -->
+        <div v-if="byProvider.length > 0">
+          <div class="text-xs uppercase tracking-wide text-zinc-500 mb-2">By provider · model (24h)</div>
+          <table class="w-full text-xs">
+            <thead class="text-zinc-600">
+              <tr>
+                <th class="text-left font-medium py-1">Provider</th>
+                <th class="text-left font-medium py-1">Model</th>
+                <th class="text-right font-medium py-1">Calls</th>
+                <th class="text-right font-medium py-1">In</th>
+                <th class="text-right font-medium py-1">Out</th>
+                <th class="text-right font-medium py-1">$</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="(p, i) in byProvider" :key="i" class="border-t border-zinc-800/50">
+                <td class="py-1">
+                  <span
+                    class="px-1.5 py-0.5 rounded"
+                    :class="(p.provider === 'flexllama' || p.provider === 'lm_studio') ? 'bg-sky-900/40 text-sky-300' : 'bg-zinc-800 text-zinc-400'"
+                  >{{ p.provider }}</span>
+                </td>
+                <td class="py-1 font-mono text-zinc-300">{{ p.model }}</td>
+                <td class="py-1 text-right tabular-nums text-zinc-400">{{ p.calls.toLocaleString() }}</td>
+                <td class="py-1 text-right tabular-nums text-zinc-400">{{ fmtTokens(p.in_tokens) }}</td>
+                <td class="py-1 text-right tabular-nums text-zinc-400">{{ fmtTokens(p.out_tokens) }}</td>
+                <td class="py-1 text-right tabular-nums text-zinc-500">{{ fmtUSD(p.micro_usd) }}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
     </section>
