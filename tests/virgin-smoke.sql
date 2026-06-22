@@ -1436,4 +1436,56 @@ BEGIN
     RAISE NOTICE 'OK 30: the Hinge daemon contract — substrate-driven (interval from config) and obeys the emergency stop (autonomy_paused forces should_run=false; the global pause halts the gate with the source and the digesters)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→41) is sound =='
+-- ── 31: route_on (42) — the data-driven conditional / loop-back stage edge that
+--    generalizes the old hardcoded code-pr loop-backs. Loop-back increments a
+--    counter; the cap routes to on_max_goto; a non-match falls through to the
+--    normal forward advance; a null-goto rule halts. AND the code-pr migration
+--    landed (review/plan_review carry route_on, not the retired hardcode).
+DO $$
+DECLARE
+  v_intent uuid; v_wi uuid; v_wi2 uuid; v_ret text; v_n int; v_stage text; v_status text;
+  v_review jsonb;
+BEGIN
+  INSERT INTO stewards.intents (slug, purpose) VALUES ('rt-smoke','route_on smoke')
+    RETURNING id INTO v_intent;
+  INSERT INTO stewards.pipelines (family, stages) VALUES
+  ('rt-test', jsonb_build_array(
+    jsonb_build_object('name','a','next','b','route_on', jsonb_build_array(
+      jsonb_build_object('when','BACK','goto','a','count_key','n','max',2,'on_max_goto','b'),
+      jsonb_build_object('when','STOP','goto', null))),
+    jsonb_build_object('name','b','next', null)));
+
+  -- loop-back (n 0->1->2), then cap -> on_max_goto
+  INSERT INTO stewards.work_items (pipeline_family, current_stage, intent_id, status)
+    VALUES ('rt-test','a',v_intent,'in_progress') RETURNING id INTO v_wi;
+  v_ret := stewards.work_item_advance(v_wi, '{"output":"go BACK"}'::jsonb);
+  SELECT current_stage, (input->>'n')::int INTO v_stage, v_n FROM stewards.work_items WHERE id=v_wi;
+  ASSERT v_ret='a' AND v_stage='a' AND v_n=1, format('route_on loop-back: ret=%s stage=%s n=%s', v_ret, v_stage, v_n);
+  v_ret := stewards.work_item_advance(v_wi, '{"output":"BACK"}'::jsonb);
+  ASSERT v_ret='a' AND (SELECT (input->>'n')::int FROM stewards.work_items WHERE id=v_wi)=2, 'route_on 2nd loop';
+  v_ret := stewards.work_item_advance(v_wi, '{"output":"BACK"}'::jsonb);
+  ASSERT v_ret='b', format('route_on cap->on_max_goto: ret=%s', v_ret);
+
+  -- no match -> normal advance; null-goto -> halt
+  INSERT INTO stewards.work_items (pipeline_family, current_stage, intent_id, status)
+    VALUES ('rt-test','a',v_intent,'in_progress') RETURNING id INTO v_wi2;
+  ASSERT stewards.work_item_advance(v_wi2, '{"output":"DONE"}'::jsonb)='b', 'route_on no-match must advance to b';
+  INSERT INTO stewards.work_items (pipeline_family, current_stage, intent_id, status)
+    VALUES ('rt-test','a',v_intent,'in_progress') RETURNING id INTO v_wi2;
+  v_ret := stewards.work_item_advance(v_wi2, '{"output":"STOP"}'::jsonb);
+  SELECT status INTO v_status FROM stewards.work_items WHERE id=v_wi2;
+  ASSERT v_ret IS NULL AND v_status='cancelled', format('route_on null-goto halt: ret=%s status=%s', v_ret, v_status);
+
+  -- the code-pr loop-backs migrated to route_on data (the hardcode is retired)
+  SELECT s INTO v_review FROM stewards.pipelines, jsonb_array_elements(stages) s
+   WHERE family='code-pr' AND s->>'name'='review';
+  ASSERT v_review->'route_on'->0->>'goto' = 'implement',
+    'code-pr review must carry route_on goto=implement (cv6 migrated)';
+
+  DELETE FROM stewards.work_items WHERE pipeline_family='rt-test';
+  DELETE FROM stewards.pipelines WHERE family='rt-test';
+  DELETE FROM stewards.intents WHERE id=v_intent;
+  RAISE NOTICE 'OK 31: route_on — loop-back + counter + cap->on_max_goto + no-match-advance + null-goto-halt; code-pr cv6/cv11 migrated to route_on data (hardcode retired)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→42) is sound =='

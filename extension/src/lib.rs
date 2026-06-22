@@ -440,6 +440,16 @@ extension_sql_file!(
     requires = ["create_rte"],
 );
 
+// 42-route-on — the route_on primitive: re-authors work_item_advance to replace
+// the hardcoded code-pr loop-backs (cv6/cv11) with one data-driven conditional /
+// loop-back evaluator (when/unless -> goto, with a counted loop guard). Tail of
+// the chain (pure re-author of work_item_advance).
+extension_sql_file!(
+    "../42-route-on.sql",
+    name = "create_route_on",
+    requires = ["create_memory_tend"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
