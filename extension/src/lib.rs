@@ -450,6 +450,17 @@ extension_sql_file!(
     requires = ["create_memory_tend"],
 );
 
+// 43-request-research — primitive B (the analyze->gather feedback loop) as core:
+// request_research parks a targeted, deduped, approve-gated research proposal that
+// drains into the pool; the gather-feedback tool_group is the opt-in per-stage scope.
+// The tool-side dual of route_on (42 loops within a run; this feeds the pool for a
+// later cycle). Composes existing core (work_item_create, the reflect queue, tool_groups).
+extension_sql_file!(
+    "../43-request-research.sql",
+    name = "create_request_research",
+    requires = ["create_route_on"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

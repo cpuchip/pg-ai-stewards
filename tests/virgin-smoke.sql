@@ -1488,4 +1488,53 @@ BEGIN
   RAISE NOTICE 'OK 31: route_on — loop-back + counter + cap->on_max_goto + no-match-advance + null-goto-halt; code-pr cv6/cv11 migrated to route_on data (hardcode retired)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→42) is sound =='
+-- ── 32: request_research + gather-feedback (43) — primitive B as core. The
+--    gather-feedback tool_group resolves to request_research; a scoped analyze stage
+--    ships it as a real allow-list that narrows the firehose; calling request_research
+--    parks a targeted, deduped, approve-gated reqres proposal into the reflect queue.
+DO $$
+DECLARE
+  v_intent uuid; v_scope text[]; v_full jsonb; v_scoped jsonb;
+  v_has_rr bool; v_all_in_scope bool; v_ret text; v_q text := 'rr-smoke gap question';
+  v_wi stewards.work_items; v_dupe int;
+BEGIN
+  INSERT INTO stewards.intents (slug, purpose) VALUES ('rr-smoke','request_research smoke')
+    RETURNING id INTO v_intent;
+
+  -- the group resolves to exactly request_research
+  ASSERT stewards.resolve_tool_scope('["gather-feedback"]'::jsonb) = ARRAY['request_research'],
+    'gather-feedback must resolve to request_research';
+
+  -- a scoped analyze stage (research family) ships request_research as a real allow-list
+  v_scope  := stewards.resolve_tool_scope('["substrate-read","gather-feedback"]'::jsonb);
+  v_full   := stewards.compose_tools('research');
+  v_scoped := stewards.compose_tools_scoped('research', v_scope);
+  SELECT bool_or(e->'function'->>'name'='request_research') INTO v_has_rr
+    FROM jsonb_array_elements(v_scoped) e;
+  ASSERT v_has_rr, 'scoped research stage must ship request_research';
+  SELECT bool_and(EXISTS (SELECT 1 FROM unnest(v_scope) pat
+            WHERE stewards.glob_match(pat, e->'function'->>'name'))) INTO v_all_in_scope
+    FROM jsonb_array_elements(v_scoped) e;
+  ASSERT v_all_in_scope, 'every scoped tool must match a declared pattern (allow-list)';
+  ASSERT jsonb_array_length(v_scoped) < jsonb_array_length(v_full),
+    'scope must narrow the research firehose';
+
+  -- calling request_research parks a targeted reqres proposal; dedup holds
+  v_ret := stewards.request_research_tool(jsonb_build_object('question', v_q, 'project', 'rr-smoke'));
+  ASSERT (v_ret::jsonb->>'ok')::bool AND (v_ret::jsonb ? 'queued_as'), format('request_research queue: %s', v_ret);
+  SELECT * INTO v_wi FROM stewards.work_items
+   WHERE slug LIKE 'reqres-%' AND lower(input->>'binding_question')=lower(v_q) ORDER BY id DESC LIMIT 1;
+  ASSERT v_wi.status='pending' AND v_wi.origin='agent_planning' AND v_wi.pipeline_family='research-write',
+    'reqres parked pending/agent_planning/research-write';
+  v_ret := stewards.request_research_tool(jsonb_build_object('question', v_q, 'project', 'rr-smoke'));
+  ASSERT (v_ret::jsonb->>'note') LIKE '%not duplicated%', 'second identical request must dedup';
+  SELECT count(*) INTO v_dupe FROM stewards.work_items
+   WHERE slug LIKE 'reqres-%' AND lower(input->>'binding_question')=lower(v_q) AND status='pending';
+  ASSERT v_dupe=1, 'exactly one pending reqres after dedup';
+
+  DELETE FROM stewards.work_items WHERE intent_id=v_intent;
+  DELETE FROM stewards.intents WHERE id=v_intent;
+  RAISE NOTICE 'OK 32: request_research + gather-feedback (B) — group resolves, scoped allow-list narrows the firehose, targeted reqres proposal parked, dedup holds';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→43) is sound =='
