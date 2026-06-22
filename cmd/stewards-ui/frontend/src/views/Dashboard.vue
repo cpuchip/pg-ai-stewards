@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
-import { api, scheduledApi, type DashboardResp, type ScheduledRunRow } from '@/api'
+import { api, scheduledApi, type DashboardResp, type ScheduledRunRow, type RigState } from '@/api'
 
 const router = useRouter()
 
@@ -13,6 +13,33 @@ const loading = ref(false)
 const scheduledRuns = ref<ScheduledRunRow[]>([])
 const scheduledRunsError = ref('')
 
+// Local rig (llama-chip) — control + state, so the GPUs can be freed for games.
+const rig = ref<RigState | null>(null)
+const rigErr = ref('')
+const rigBusy = ref('')
+const rigModelsLoaded = computed(() => (rig.value?.models ?? []).filter(m => m.state === 'healthy').length)
+
+async function loadRig() {
+  try { rig.value = await api.rigState(); rigErr.value = '' }
+  catch (e) { rigErr.value = String(e) }
+}
+async function brainOn() {
+  rigBusy.value = 'starting'; rigErr.value = ''
+  try { await api.rigBrainOn() } catch (e) { rigErr.value = String(e) }
+  finally { rigBusy.value = ''; await loadRig() }
+}
+async function brainOff() {
+  rigBusy.value = 'freeing'; rigErr.value = ''
+  try { await api.rigBrainOff() } catch (e) { rigErr.value = String(e) }
+  finally { rigBusy.value = ''; await loadRig() }
+}
+async function toggleAutonomy() {
+  const next = !(rig.value?.autonomy_paused)
+  rigBusy.value = 'autonomy'; rigErr.value = ''
+  try { await api.rigAutonomy(next) } catch (e) { rigErr.value = String(e) }
+  finally { rigBusy.value = ''; await loadRig() }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -23,6 +50,7 @@ async function load() {
   } finally {
     loading.value = false
   }
+  loadRig() // independent of dashboard health; tolerates llama-chip being offline
   // Scheduled-runs is independent of dashboard health and tolerated to
   // fail without flagging the overall dashboard error.
   try {
@@ -132,6 +160,77 @@ const errorCount = computed(() => data.value?.recent_errors?.length ?? 0)
         <div class="text-xs text-zinc-400 mt-1">active work_items</div>
       </div>
     </div>
+
+    <!-- Local rig control (llama-chip) — free the GPUs for games, bring the brain back -->
+    <section class="rounded-md border border-zinc-800 bg-zinc-900/50 overflow-hidden">
+      <div class="px-4 py-3 border-b border-zinc-800 flex items-center gap-2">
+        <span
+          class="inline-block w-2 h-2 rounded-full"
+          :class="rig?.llamachip_up ? 'bg-emerald-500' : 'bg-red-500'"
+        ></span>
+        <h3 class="text-sm font-semibold">Local rig — llama-chip</h3>
+        <span class="text-xs text-zinc-500">
+          {{ rig?.llamachip_up ? `${rigModelsLoaded} model(s) loaded` : 'offline' }}
+        </span>
+        <span
+          class="ml-auto text-xs px-2 py-0.5 rounded"
+          :class="rig?.autonomy_paused ? 'bg-amber-900/40 text-amber-300' : 'bg-emerald-900/40 text-emerald-300'"
+        >autonomy {{ rig?.autonomy_paused ? 'paused' : 'running' }}</span>
+      </div>
+      <div class="p-4 space-y-3">
+        <div class="flex flex-wrap items-center gap-2">
+          <button
+            @click="brainOn"
+            :disabled="!!rigBusy"
+            class="text-sm px-3 py-1.5 rounded bg-emerald-700/80 hover:bg-emerald-700 disabled:opacity-50"
+          >{{ rigBusy === 'starting' ? 'starting…' : '▶ Start brain' }}</button>
+          <button
+            @click="brainOff"
+            :disabled="!!rigBusy"
+            class="text-sm px-3 py-1.5 rounded bg-red-800/80 hover:bg-red-800 disabled:opacity-50"
+          >{{ rigBusy === 'freeing' ? 'freeing…' : '■ Free GPUs (for games)' }}</button>
+          <button
+            @click="toggleAutonomy"
+            :disabled="!!rigBusy"
+            class="text-sm px-3 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800 disabled:opacity-50"
+          >{{ rig?.autonomy_paused ? 'Resume autonomy only' : 'Pause autonomy only' }}</button>
+          <span class="text-xs text-zinc-500">
+            Start = load the dance + resume · Free = pause + unload (frees both GPUs)
+          </span>
+        </div>
+        <div v-if="rigErr" class="text-xs text-red-400">{{ rigErr }}</div>
+        <div v-if="rig?.note" class="text-xs text-amber-400">{{ rig.note }}</div>
+
+        <!-- GPU memory bars -->
+        <div v-if="rig?.gpus?.length" class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div v-for="g in rig.gpus" :key="g.index" class="text-xs">
+            <div class="flex justify-between text-zinc-400 mb-1">
+              <span>GPU {{ g.index }} <span class="text-zinc-600">{{ g.name }}</span></span>
+              <span class="tabular-nums">{{ g.mem_used_mib }} / {{ g.mem_total_mib }} MiB · {{ g.util_pct }}%</span>
+            </div>
+            <div class="h-1.5 rounded bg-zinc-800 overflow-hidden">
+              <div
+                class="h-full rounded"
+                :class="(g.mem_used_mib / g.mem_total_mib) > 0.85 ? 'bg-red-500' : 'bg-sky-500'"
+                :style="{ width: Math.round(100 * g.mem_used_mib / Math.max(1, g.mem_total_mib)) + '%' }"
+              ></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- loaded models -->
+        <div v-if="(rig?.models?.length ?? 0) > 0" class="flex flex-wrap gap-2">
+          <span
+            v-for="m in rig?.models"
+            :key="m.name"
+            class="text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-300"
+          >{{ m.name }} <span class="text-zinc-500">{{ m.state }}</span></span>
+        </div>
+        <div v-else-if="rig?.llamachip_up" class="text-xs text-zinc-500">
+          No models loaded — GPUs are free. Click <b>Start brain</b> to load the dance.
+        </div>
+      </div>
+    </section>
 
     <!-- In-flight detail table -->
     <section

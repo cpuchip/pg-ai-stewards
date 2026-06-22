@@ -102,8 +102,35 @@ export type SearchResp = {
   hits: SearchHit[]
 }
 
+export type RigModel = { name: string; model?: string; state: string; ctx_size?: number; gpus?: number[] }
+export type RigGPU = { index: number; name?: string; mem_used_mib: number; mem_total_mib: number; util_pct: number; temp_c?: number }
+export type RigState = {
+  autonomy_paused: boolean
+  llamachip_up: boolean
+  models: RigModel[]
+  gpus: RigGPU[]
+  note?: string
+}
+
+async function rigPost(path: string): Promise<{ status?: string; autonomy_paused?: boolean }> {
+  const r = await fetch(path, { method: 'POST' })
+  if (!r.ok) { let m = `HTTP ${r.status}`; try { const b = await r.json(); if (b.error) m = b.error } catch { /* ignore */ } throw new Error(m) }
+  return r.json()
+}
+
 export const api = {
   dashboard: () => getJSON<DashboardResp>('/api/dashboard'),
+  rigState: () => getJSON<RigState>('/api/rig/state'),
+  rigBrainOn: () => rigPost('/api/rig/brain-on'),
+  rigBrainOff: () => rigPost('/api/rig/brain-off'),
+  rigAutonomy: async (paused: boolean): Promise<{ autonomy_paused: boolean }> => {
+    const r = await fetch('/api/rig/autonomy', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ paused }),
+    })
+    if (!r.ok) { let m = `HTTP ${r.status}`; try { const b = await r.json(); if (b.error) m = b.error } catch { /* ignore */ } throw new Error(m) }
+    return r.json()
+  },
   studiesList: (params?: { kind?: string; limit?: number; offset?: number }) => {
     const q = new URLSearchParams()
     if (params?.kind) q.set('kind', params.kind)
