@@ -125,11 +125,12 @@ func (d *Deps) rigAutonomyHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"autonomy_paused": body.Paused})
 }
 
-// rigBrainOnHandler loads the dance profile and resumes autonomy.
+// rigBrainOnHandler loads the dance-moe profile (qwen-35b-a3b + gemma-26b-a4b, both MoE,
+// parallel-2 — the substrate's reason/critic/ingest defaults) and resumes autonomy.
 func (d *Deps) rigBrainOnHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	if err := rigPost(ctx, "/api/profile", map[string]string{"name": "dance"}); err != nil {
+	if err := rigPost(ctx, "/api/profile", map[string]string{"name": "dance-moe"}); err != nil {
 		writeErr(w, http.StatusBadGateway, "llama-chip unreachable (start it first): "+err.Error())
 		return
 	}
