@@ -1537,4 +1537,51 @@ BEGIN
   RAISE NOTICE 'OK 32: request_research + gather-feedback (B) — group resolves, scoped allow-list narrows the firehose, targeted reqres proposal parked, dedup holds';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→43) is sound =='
+-- ── 33: the organize keystone (44) — graph_node creates a freshness-stamped node;
+--    graph_link asserts a typed edge; graph_supersede ages a node out (status +
+--    SUPERSEDES edge); graph_recall fresh_only omits the superseded node while plain
+--    recall still reaches it. The graph-organize/graph-read tool_groups resolve.
+DO $$
+DECLARE
+  v_n1 text; v_sup text; v_recall_all jsonb; v_recall_fresh jsonb; v_status text;
+BEGIN
+  -- node-maker stamps observed_at + status=current
+  v_n1 := stewards.graph_node_tool('{"kind":"oz-fault","ref":"oz-billing-1","label":"billing glitch"}'::jsonb);
+  ASSERT (v_n1::jsonb->>'ok')::bool, format('graph_node: %s', v_n1);
+  ASSERT (SELECT props->>'status' FROM stewards.nodes WHERE kind='oz-fault' AND ref='oz-billing-1')='current'
+     AND (SELECT props ? 'observed_at' FROM stewards.nodes WHERE kind='oz-fault' AND ref='oz-billing-1'),
+     'graph_node must stamp status=current + observed_at';
+
+  -- a successor + supersede: old marked, new SUPERSEDES old
+  PERFORM stewards.graph_node_tool('{"kind":"oz-fault","ref":"oz-billing-2","label":"billing fixed in v2"}'::jsonb);
+  v_sup := stewards.graph_supersede_tool('{"old_kind":"oz-fault","old_ref":"oz-billing-1","new_kind":"oz-fault","new_ref":"oz-billing-2","reason":"resolved in v2"}'::jsonb);
+  ASSERT (v_sup::jsonb->>'ok')::bool, format('graph_supersede: %s', v_sup);
+  SELECT props->>'status' INTO v_status FROM stewards.nodes WHERE kind='oz-fault' AND ref='oz-billing-1';
+  ASSERT v_status='superseded', format('old node must be superseded, got %s', v_status);
+  ASSERT EXISTS (SELECT 1 FROM stewards.edges e
+                  JOIN stewards.nodes s ON s.id=e.src JOIN stewards.nodes d ON d.id=e.dst
+                 WHERE e.kind='SUPERSEDES' AND s.ref='oz-billing-2' AND d.ref='oz-billing-1'),
+     'a SUPERSEDES edge (new->old) must exist';
+
+  -- recall from the successor: plain reaches the superseded old; fresh_only omits it
+  v_recall_all   := stewards.graph_recall_tool('{"kind":"oz-fault","ref":"oz-billing-2","max_hops":2}'::jsonb)::jsonb;
+  v_recall_fresh := stewards.graph_recall_tool('{"kind":"oz-fault","ref":"oz-billing-2","max_hops":2,"fresh_only":true}'::jsonb)::jsonb;
+  ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v_recall_all) e WHERE e->>'ref'='oz-billing-1'),
+     'plain recall must reach the superseded node';
+  ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_recall_fresh) e WHERE e->>'ref'='oz-billing-1'),
+     'fresh_only recall must omit the superseded node';
+
+  -- the scopes resolve
+  ASSERT 'graph_node' = ANY(stewards.resolve_tool_scope('["graph-organize"]'::jsonb))
+     AND 'graph_supersede' = ANY(stewards.resolve_tool_scope('["graph-organize"]'::jsonb)),
+     'graph-organize must scope graph_node + graph_supersede';
+  ASSERT stewards.resolve_tool_scope('["graph-read"]'::jsonb) @> ARRAY['graph_recall'],
+     'graph-read must scope graph_recall';
+
+  DELETE FROM stewards.edges WHERE src IN (SELECT id FROM stewards.nodes WHERE kind='oz-fault')
+                                OR dst IN (SELECT id FROM stewards.nodes WHERE kind='oz-fault');
+  DELETE FROM stewards.nodes WHERE kind='oz-fault';
+  RAISE NOTICE 'OK 33: organize keystone — graph_node (freshness-stamped), graph_supersede (status + SUPERSEDES edge), graph_recall fresh_only filter, graph-organize/graph-read scopes';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→44) is sound =='

@@ -461,6 +461,16 @@ extension_sql_file!(
     requires = ["create_route_on"],
 );
 
+// 44-graph-organize — the ORGANIZE keystone: corpus -> graph, time-aware. Adds the
+// missing node-maker (graph_node), supersession (graph_supersede + SUPERSEDES), an
+// opt-in fresh_only on graph_recall, and the graph-organize/graph-read tool_groups so
+// a deliberate gather->organize stage can build typed, freshness-stamped knowledge.
+extension_sql_file!(
+    "../44-graph-organize.sql",
+    name = "create_graph_organize",
+    requires = ["create_request_research"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
