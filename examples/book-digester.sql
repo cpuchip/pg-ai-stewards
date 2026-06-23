@@ -59,7 +59,7 @@ $func$;
 -- ── book_publish(body): save the digest of the CURRENTLY-reading book ───────
 CREATE OR REPLACE FUNCTION stewards.book_publish(p_body text)
 RETURNS jsonb LANGUAGE plpgsql AS $func$
-DECLARE v_row stewards.book_shelf%ROWTYPE; v_doc text;
+DECLARE v_row stewards.book_shelf%ROWTYPE; v_doc text; v_has_corpus boolean := false;
 BEGIN
     SELECT * INTO v_row FROM stewards.book_shelf
      WHERE status = 'reading' ORDER BY position, added_at LIMIT 1;
@@ -69,13 +69,22 @@ BEGIN
     IF p_body IS NULL OR length(trim(p_body)) < 100 THEN
         RETURN '{"ok": false, "note": "digest body too short to publish"}'::jsonb;
     END IF;
+    -- Did the build stage persist the source corpus? (examples/book-corpus.sql). Guard
+    -- with to_regclass + dynamic SQL so this digester stays standalone if it isn't applied.
+    IF to_regclass('stewards.book_text') IS NOT NULL THEN
+        EXECUTE 'SELECT EXISTS(SELECT 1 FROM stewards.book_text WHERE book_slug = $1)'
+          INTO v_has_corpus USING v_row.slug;
+    END IF;
     v_doc := stewards.import_doc(
         'book-' || v_row.slug,
         'study/books/' || v_row.slug || '.md',
         'Digest: ' || v_row.title || COALESCE(' — ' || v_row.author, ''),
         p_body,
+        -- frontmatter carries the durable backlink to the source corpus (source_url +
+        -- has_corpus) so a book-study chat can quote the book's own passages (book_search).
         jsonb_build_object('source_type','book-digest','book_slug',v_row.slug,
-                           'book_title',v_row.title,'book_author',v_row.author),
+                           'book_title',v_row.title,'book_author',v_row.author,
+                           'source_url',v_row.source_url,'has_corpus',v_has_corpus),
         'doc');
     -- Queue the file write too, so the digest materializes to disk IF the
     -- operator has the materializer on (/workspace RW). With /workspace RO
@@ -254,6 +263,7 @@ INSERT INTO stewards.pipelines (
               'Steps:' || E'\n' ||
               '1. Read TITLE, AUTHOR, and SOURCE_URL from the header above.' || E'\n' ||
               '2. Call `fetch_url` with the SOURCE_URL to get the book text. If it is large you will see a [page-in] banner with a handle — use `result_read`(handle, offset, limit) to read it in chunks; do not pull it all at once.' || E'\n' ||
+              '2b. Call `book_persist_corpus` with that page-in handle plus book_slug, title, author, and source_url. This saves the book''s source text so its passages stay quotable after this run (e.g. when chatting with the finished study). Server-side — you pass the handle, NOT the text. If book_persist_corpus is not available, skip this step.' || E'\n' ||
               '3. Call `doc_create` with title = "Digest: <TITLE> — <AUTHOR>" and project "books".' || E'\n' ||
               '4. Build the digest with `doc_append_section` (one call each, keep each small, depth over breadth, faithful to the text, quote only what is actually there):' || E'\n' ||
               '   - "The core argument" — the thesis in 2-4 sentences.' || E'\n' ||
