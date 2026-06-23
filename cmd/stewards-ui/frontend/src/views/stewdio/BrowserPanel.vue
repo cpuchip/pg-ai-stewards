@@ -1,17 +1,90 @@
 <script setup lang="ts">
-// Stewdio left panel — the project-filtered work-item / doc browser (the
-// "manager surface"). P0: placeholder. P1 wires /api/work-items/list
-// (project-filtered) + /api/studies/list into a tree; selecting an item sets
-// the store's selectedRef and opens it in the center panel.
-defineOptions({ inheritAttrs: false }) // dockview passes panel props (api/containerApi); absorb, don't render
+// Stewdio left panel — project-filtered browser of work items + their docs (the
+// "manager surface"). Clicking an item sets the shared selection, which drives
+// the center artifact view and the chat panel. (Stewdio P1)
+import { ref, onMounted, watch } from 'vue'
+import { api, type StudyBrief, type WorkItemBrief } from '@/api'
+import { useStewdioStore } from '../../stores/stewdio'
+
+defineOptions({ inheritAttrs: false })
+const store = useStewdioStore()
+
+const projects = ref<{ slug: string; name?: string }[]>([])
+const docs = ref<StudyBrief[]>([])
+const items = ref<WorkItemBrief[]>([])
+const err = ref('')
+const loading = ref(false)
+
+async function loadProjects() {
+  try { projects.value = (await api.projectsList()).items ?? [] } catch { /* projects optional */ }
+}
+async function loadItems() {
+  loading.value = true; err.value = ''
+  try {
+    const proj = store.projectFilter || undefined
+    const [d, w] = await Promise.allSettled([
+      api.studiesList({ limit: 200 }),
+      api.workItemsList({ project_association: proj, limit: 100 }),
+    ])
+    docs.value = d.status === 'fulfilled' ? (d.value.items ?? []) : []
+    items.value = w.status === 'fulfilled' ? (w.value.items ?? []) : []
+  } catch (e) { err.value = String(e) } finally { loading.value = false }
+}
+
+const stateClass = (s: string) =>
+  s === 'completed' ? 'text-emerald-400'
+  : s === 'failed' || s === 'cancelled' ? 'text-rose-400'
+  : s === 'in_progress' ? 'text-amber-400' : 'text-zinc-400'
+
+onMounted(() => { loadProjects(); loadItems() })
+watch(() => store.projectFilter, loadItems)
 </script>
 
 <template>
-  <div class="h-full overflow-auto p-3 text-sm bg-zinc-950">
-    <div class="text-zinc-200 font-medium mb-1">Work items</div>
-    <div class="text-zinc-500 text-xs leading-relaxed">
-      Project-filtered browser of work items + their docs.
-      <span class="text-zinc-600">Wired in P1.</span>
+  <div class="h-full overflow-auto bg-zinc-950 text-sm">
+    <div class="sticky top-0 bg-zinc-950 border-b border-zinc-800 px-3 py-2 flex items-center gap-2">
+      <span class="text-zinc-400 text-xs">Project</span>
+      <select v-model="store.projectFilter"
+              class="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-200">
+        <option :value="null">all</option>
+        <option v-for="p in projects" :key="p.slug" :value="p.slug">{{ p.name || p.slug }}</option>
+      </select>
+      <button class="text-xs text-zinc-500 hover:text-zinc-300" @click="loadItems" title="refresh">↻</button>
+    </div>
+
+    <div v-if="err" class="px-3 py-2 text-rose-400 text-xs">{{ err }}</div>
+
+    <div class="px-3 py-2">
+      <div class="text-zinc-500 text-[11px] uppercase tracking-wide mb-1">Docs</div>
+      <ul class="space-y-0.5">
+        <li v-for="d in docs" :key="d.slug">
+          <button
+            class="w-full text-left px-2 py-1 rounded hover:bg-zinc-900 truncate"
+            :class="store.selectedRef === d.slug ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300'"
+            :title="d.title || d.slug"
+            @click="store.select(d.slug, 'doc', d.title || d.slug)">
+            <span class="text-zinc-600 text-[10px] mr-1">{{ d.kind }}</span>{{ d.title || d.slug }}
+          </button>
+        </li>
+        <li v-if="!docs.length && !loading" class="text-zinc-600 text-xs px-2 py-1">no docs</li>
+      </ul>
+    </div>
+
+    <div class="px-3 py-2 border-t border-zinc-900">
+      <div class="text-zinc-500 text-[11px] uppercase tracking-wide mb-1">Work items</div>
+      <ul class="space-y-0.5">
+        <li v-for="w in items" :key="w.id">
+          <button
+            class="w-full text-left px-2 py-1 rounded hover:bg-zinc-900 truncate"
+            :class="store.selectedRef === w.id ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300'"
+            :title="w.slug || w.id"
+            @click="store.select(w.id, 'work_item', w.slug || w.id)">
+            <span class="text-[10px] mr-1" :class="stateClass(w.status)">●</span>{{ w.slug || w.id.slice(0, 8) }}
+            <span class="text-zinc-600 text-[10px]">{{ w.pipeline }}</span>
+          </button>
+        </li>
+        <li v-if="!items.length && !loading" class="text-zinc-600 text-xs px-2 py-1">no work items</li>
+      </ul>
     </div>
   </div>
 </template>

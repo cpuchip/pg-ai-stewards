@@ -528,6 +528,11 @@ export const api = {
   // Models catalog (UI 2026-05-29 — backs Brainstorm datalist + /models view).
   modelsList: () => getJSON<ModelsListResp>('/api/models'),
 
+  // Stewdio chat-with-a-work-item (P1). chatSend appends a turn + dispatches it;
+  // the reply is streamed separately via EventSource('/api/chat/stream?session_id=').
+  chatSend: (req: { session_id?: string; target_ref?: string; message: string; model?: string }) =>
+    postJSON<{ session_id: string; work_queue_id: number }>('/api/chat/send', req),
+
   // Brainstorm (J.8 + J.9, MCP wrapper 0c1926c, UI batch 2026-05-29).
   brainstormLenses: () => getJSON<BrainstormLensesResp>('/api/brainstorm/lenses'),
   brainstormStart: async (req: BrainstormStartReq): Promise<BrainstormStartResp> => {
