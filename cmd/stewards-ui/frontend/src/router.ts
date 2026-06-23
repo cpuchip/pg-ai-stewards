@@ -25,6 +25,7 @@ const Projects = () => import('./views/Projects.vue')
 const Scheduled = () => import('./views/Scheduled.vue')
 const Brainstorm = () => import('./views/Brainstorm.vue')
 const Models = () => import('./views/Models.vue')
+const Stewdio = () => import('./views/Stewdio.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/',           name: 'dashboard',  component: Dashboard },
@@ -49,6 +50,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/scheduled',  name: 'scheduled',  component: Scheduled, meta: { title: 'Scheduled' } },
   { path: '/brainstorm', name: 'brainstorm', component: Brainstorm, meta: { title: 'Brainstorm' } },
   { path: '/models',     name: 'models',     component: Models, meta: { title: 'Models catalog' } },
+  { path: '/stewdio',    name: 'stewdio',    component: Stewdio, meta: { title: 'Stewdio' } },
 ]
 
 export default createRouter({

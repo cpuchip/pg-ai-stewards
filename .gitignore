@@ -2,6 +2,8 @@
 *.exe
 *.log
 bin/
+# playwright-cli scratch (browser snapshots/screenshots from UI verification)
+**/.playwright-cli/
 
 # Local stack
 .env
