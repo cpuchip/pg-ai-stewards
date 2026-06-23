@@ -313,6 +313,10 @@ export const api = {
   workItemGateDecisions: (id: string) =>
     getJSON<GateDecisionsResp>(`/api/work-items/gate-decisions?id=${encodeURIComponent(id)}`),
   pipelinesList: () => getJSON<PipelinesListResp>('/api/pipelines/list'),
+  // Stewdio P2: a pipeline's ordered stages (the "plan" for plan=progress).
+  pipelineGet: (family: string) =>
+    getJSON<{ family: string; description: string; stages: { name: string; next?: string; agent_family?: string; model?: string }[] }>(
+      `/api/pipelines/get?family=${encodeURIComponent(family)}`),
   workItemSetFileDestination: async (req: SetFileDestinationReq): Promise<SetFileDestinationResp> => {
     const r = await fetch('/api/work-items/set-file-destination', {
       method: 'POST',

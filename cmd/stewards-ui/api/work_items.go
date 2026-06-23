@@ -194,7 +194,7 @@ func (d *Deps) workItemsGetHandler(w http.ResponseWriter, r *http.Request) {
 		whereArg = slug
 	}
 	err := d.Pool.QueryRow(ctx,
-		`SELECT wi.id::text, wi.slug, wi.pipeline_family, wi.current_stage, wi.status,
+		`SELECT wi.id::text, coalesce(wi.slug, ''), wi.pipeline_family, wi.current_stage, wi.status,
 		        coalesce(wi.actor, ''),
 		        coalesce(wi.tokens_in, 0), coalesce(wi.tokens_out, 0),
 		        wi.token_budget,

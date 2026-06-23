@@ -6,12 +6,51 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 )
 
 func (d *Deps) registerPipelines(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/pipelines/list", d.pipelinesListHandler)
+	mux.HandleFunc("GET /api/pipelines/get", d.pipelinesGetHandler)
+}
+
+// pipelineStage is one entry in a pipeline's ordered plan (Stewdio P2 renders
+// these as the plan=progress checklist against a work item's stage_results).
+type pipelineStage struct {
+	Name        string `json:"name"`
+	Next        string `json:"next,omitempty"`
+	AgentFamily string `json:"agent_family,omitempty"`
+	Model       string `json:"model,omitempty"`
+}
+
+type pipelineDetail struct {
+	Family      string          `json:"family"`
+	Description string          `json:"description"`
+	Stages      []pipelineStage `json:"stages"`
+}
+
+// GET /api/pipelines/get?family=X — the pipeline's ordered stages (the "plan").
+func (d *Deps) pipelinesGetHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	fam := r.URL.Query().Get("family")
+	if fam == "" {
+		writeErr(w, http.StatusBadRequest, "family query param required")
+		return
+	}
+	var desc string
+	var stagesJSON []byte
+	if err := d.Pool.QueryRow(ctx,
+		`SELECT coalesce(description, ''), stages FROM stewards.pipelines WHERE family = $1`, fam,
+	).Scan(&desc, &stagesJSON); err != nil {
+		writeErr(w, http.StatusNotFound, "pipeline not found: "+err.Error())
+		return
+	}
+	resp := pipelineDetail{Family: fam, Description: desc, Stages: []pipelineStage{}}
+	_ = json.Unmarshal(stagesJSON, &resp.Stages) // stages is a jsonb array in declared order
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type pipelineRow struct {
