@@ -536,6 +536,9 @@ export const api = {
   // the reply is streamed separately via EventSource('/api/chat/stream?session_id=').
   chatSend: (req: { session_id?: string; target_ref?: string; message: string; model?: string }) =>
     postJSON<{ session_id: string; work_queue_id: number }>('/api/chat/send', req),
+  // Stewdio P4: the conversation-history sidebar — all chat sessions for a target.
+  chatSessions: (targetRef: string) =>
+    getJSON<ChatSessionsResp>(`/api/chat/sessions?target_ref=${encodeURIComponent(targetRef)}`),
 
   // Brainstorm (J.8 + J.9, MCP wrapper 0c1926c, UI batch 2026-05-29).
   brainstormLenses: () => getJSON<BrainstormLensesResp>('/api/brainstorm/lenses'),
@@ -1122,6 +1125,20 @@ export type MessageRow = {
   reasoning_tokens?: number
   parent_work_id?: number
   created_at?: string
+}
+
+// Stewdio P4 — chat conversation history sidebar.
+export type ChatSessionRow = {
+  session_id: string
+  preview?: string
+  last_at?: string
+  msg_count: number
+  is_default: boolean
+}
+
+export type ChatSessionsResp = {
+  default_session: string
+  sessions: ChatSessionRow[]
 }
 
 export type ChatDispatch = {

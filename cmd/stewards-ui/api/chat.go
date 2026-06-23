@@ -26,6 +26,7 @@ import (
 func (d *Deps) registerChat(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/chat/send", d.chatSendHandler)
 	mux.HandleFunc("GET /api/chat/stream", d.chatStreamHandler)
+	mux.HandleFunc("GET /api/chat/sessions", d.chatSessionsHandler) // Stewdio P4: multi-session history
 }
 
 // session ids are derived from a target ref; keep them to a safe charset.
@@ -58,7 +59,11 @@ func chatSessionFor(targetRef string) string {
 }
 
 func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	// dispatch_chat_turn enqueues synchronously, but it composes the system prompt
+	// + tool schemas (and seeds grounding on the first turn) inline — that can take
+	// several seconds for a tools-on agent, so give it real headroom. The reply
+	// itself streams back over /api/chat/stream; this is just the enqueue.
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
 	defer cancel()
 
 	var req chatSendReq
@@ -101,12 +106,13 @@ func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type chatStreamMsg struct {
-	ID           int64  `json:"id"`
-	Role         string `json:"role"`
-	Content      string `json:"content"`
-	FinishReason string `json:"finish_reason,omitempty"`
-	ToolCalls    int    `json:"tool_calls"`
-	CreatedAt    string `json:"created_at,omitempty"`
+	ID           int64    `json:"id"`
+	Role         string   `json:"role"`
+	Content      string   `json:"content"`
+	FinishReason string   `json:"finish_reason,omitempty"`
+	ToolCalls    int      `json:"tool_calls"`
+	Tools        []string `json:"tools,omitempty"` // tool names called this turn → provenance chips (P4)
+	CreatedAt    string   `json:"created_at,omitempty"`
 }
 
 // chatStreamHandler tails a chat session's messages over SSE. It replays from
@@ -141,6 +147,11 @@ func (d *Deps) chatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		rows, err := d.Pool.Query(ctx,
 			`SELECT id, role, coalesce(content,''), coalesce(finish_reason,''),
 			        CASE WHEN jsonb_typeof(tool_calls)='array' THEN jsonb_array_length(tool_calls) ELSE 0 END,
+			        CASE WHEN jsonb_typeof(tool_calls)='array'
+			             THEN ARRAY(SELECT e->'function'->>'name'
+			                          FROM jsonb_array_elements(tool_calls) e
+			                         WHERE e->'function'->>'name' IS NOT NULL)
+			             ELSE ARRAY[]::text[] END,
 			        to_char(created_at,'HH24:MI:SS')
 			   FROM stewards.messages
 			  WHERE session_id=$1 AND id > $2
@@ -151,7 +162,7 @@ func (d *Deps) chatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var m chatStreamMsg
-			if rows.Scan(&m.ID, &m.Role, &m.Content, &m.FinishReason, &m.ToolCalls, &m.CreatedAt) == nil {
+			if rows.Scan(&m.ID, &m.Role, &m.Content, &m.FinishReason, &m.ToolCalls, &m.Tools, &m.CreatedAt) == nil {
 				last = m.ID
 				if b, e := json.Marshal(m); e == nil {
 					fmt.Fprintf(w, "data: %s\n\n", b)
@@ -181,4 +192,63 @@ func (d *Deps) chatStreamHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// ── chat sessions — the conversation history sidebar (Stewdio P4). ──
+// A target can have several conversations: the deterministic base session
+// (stewdio-<ref>) plus "new chat" sessions (base + "-" + a short suffix).
+// List them all for a target_ref, newest activity first, with a preview.
+type chatSessionRow struct {
+	SessionID string `json:"session_id"`
+	Preview   string `json:"preview,omitempty"`
+	LastAt    string `json:"last_at,omitempty"`
+	MsgCount  int    `json:"msg_count"`
+	IsDefault bool   `json:"is_default"`
+}
+
+type chatSessionsResp struct {
+	DefaultSession string           `json:"default_session"`
+	Sessions       []chatSessionRow `json:"sessions"`
+}
+
+func (d *Deps) chatSessionsHandler(w http.ResponseWriter, r *http.Request) {
+	ref := strings.TrimSpace(r.URL.Query().Get("target_ref"))
+	if ref == "" {
+		writeErr(w, http.StatusBadRequest, "target_ref required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+
+	base := chatSessionFor(ref)
+	rows, err := d.Pool.Query(ctx,
+		`SELECT s.id,
+		        coalesce((SELECT m.content FROM stewards.messages m
+		                   WHERE m.session_id = s.id AND m.role='user'
+		                     AND m.content NOT LIKE '(Context:%'
+		                   ORDER BY m.id LIMIT 1), ''),
+		        coalesce(to_char((SELECT max(m.created_at) FROM stewards.messages m WHERE m.session_id=s.id),
+		                         'YYYY-MM-DD HH24:MI'), ''),
+		        (SELECT count(*)::int FROM stewards.messages m WHERE m.session_id=s.id)
+		   FROM stewards.sessions s
+		  WHERE s.kind='chat' AND (s.id = $1 OR s.id LIKE $1 || '-%')
+		  ORDER BY (SELECT max(m.created_at) FROM stewards.messages m WHERE m.session_id=s.id) DESC NULLS LAST, s.id`,
+		base)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "sessions: "+err.Error())
+		return
+	}
+	defer rows.Close()
+	out := chatSessionsResp{DefaultSession: base, Sessions: []chatSessionRow{}}
+	for rows.Next() {
+		var s chatSessionRow
+		if rows.Scan(&s.SessionID, &s.Preview, &s.LastAt, &s.MsgCount) == nil {
+			s.IsDefault = s.SessionID == base
+			if len(s.Preview) > 80 {
+				s.Preview = s.Preview[:80]
+			}
+			out.Sessions = append(out.Sessions, s)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }
