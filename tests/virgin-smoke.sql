@@ -1584,4 +1584,32 @@ BEGIN
   RAISE NOTICE 'OK 33: organize keystone — graph_node (freshness-stamped), graph_supersede (status + SUPERSEDES edge), graph_recall fresh_only filter, graph-organize/graph-read scopes';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→44) is sound =='
+-- ---------------------------------------------------------------------
+-- 45-work-item-chat — "chat with a work item": a read-only retrieval agent +
+-- dispatch_chat_turn (persistent chat sessions). Assert the objects exist and
+-- the grant is a read-only allow-list (deny '*' base). No dispatch here — smoke
+-- is vector-only / no rig.
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+  ASSERT EXISTS (SELECT 1 FROM stewards.agents WHERE family='work-item-chat' AND active),
+     'work-item-chat agent must exist + be active';
+  ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                  WHERE agent_family='work-item-chat' AND tool_pattern='*' AND action='deny'),
+     'work-item-chat must deny * (read-only allow-list base)';
+  ASSERT (SELECT action FROM stewards.agent_tool_perms
+           WHERE agent_family='work-item-chat' AND tool_pattern='doc_get')='allow',
+     'work-item-chat must allow doc_get';
+  ASSERT NOT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                      WHERE agent_family='work-item-chat'
+                        AND tool_pattern IN ('fetch_url','doc_create','work_item_create')
+                        AND action='allow'),
+     'work-item-chat must NOT allow write/egress tools';
+  ASSERT EXISTS (SELECT 1 FROM pg_proc
+                  WHERE proname='dispatch_chat_turn'
+                    AND pg_get_function_identity_arguments(oid)='text, text, text, text, text'),
+     'dispatch_chat_turn(text,text,text,text,text) must exist';
+  RAISE NOTICE 'OK 34: work-item-chat — read-only retrieval agent (deny * + allow-list) + dispatch_chat_turn helper';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→45) is sound =='

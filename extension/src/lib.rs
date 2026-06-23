@@ -471,6 +471,15 @@ extension_sql_file!(
     requires = ["create_request_research"],
 );
 
+// 45-work-item-chat — "chat with a work item": a read-only retrieval agent +
+// dispatch_chat_turn (persistent chat sessions over chat_enqueue) — the backend
+// for Stewdio's chat panel (.spec/proposals/stewards-studio.md).
+extension_sql_file!(
+    "../45-work-item-chat.sql",
+    name = "create_work_item_chat",
+    requires = ["create_graph_organize"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
