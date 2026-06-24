@@ -1214,14 +1214,23 @@ fn process_one_pending() -> bool {
                     // tool_calls AND we haven't exhausted agent.steps,
                     // enqueue a tool_dispatch row. The bgworker will
                     // pick it up on the next poll (~500ms).
+                    //
+                    // Key off the PRESENCE of a non-empty tool_calls array, not
+                    // finish_reason: most providers signal a tool turn with
+                    // finish_reason="tool_calls", but Gemini's OpenAI-compat
+                    // endpoint returns finish_reason="stop" alongside a COMPLETE
+                    // tool_calls array. Only genuine token-limit truncation
+                    // (finish_reason="length") yields a partial/corrupt call list
+                    // we must not dispatch.
                     let has_tool_calls = assistant_tool_calls
                         .as_ref()
                         .and_then(|v| v.as_array())
                         .map(|a| !a.is_empty())
                         .unwrap_or(false);
+                    let truncated_mid_call = finish_reason.as_deref() == Some("length");
                     let mut continuation_enqueued: Option<i64> = None;
                     let mut stop_reason: Option<&'static str> = None;
-                    if has_tool_calls && finish_reason.as_deref() == Some("tool_calls") {
+                    if has_tool_calls && !truncated_mid_call {
                         // Pull iteration count and agent.steps in one
                         // round-trip. Default steps to 8 if the agent
                         // row's steps column is somehow NULL.
@@ -1264,12 +1273,11 @@ fn process_one_pending() -> bool {
                             stop_reason = Some("steps_exhausted");
                         }
                     } else if has_tool_calls {
-                        // Provider returned tool_calls but with a
-                        // finish_reason other than 'tool_calls'
-                        // (e.g., 'length' truncation mid-call). Don't
-                        // try to continue — the call list may be
-                        // incomplete and dispatching it would corrupt
-                        // the conversation.
+                        // Reached only when truncated_mid_call: the provider
+                        // returned tool_calls but finish_reason='length', so the
+                        // call list was cut off by the token limit. Don't
+                        // dispatch — an incomplete call list would corrupt the
+                        // conversation.
                         stop_reason = Some("truncated_tool_calls");
                     }
 
@@ -1975,6 +1983,11 @@ struct ToolCallAccum {
     id: String,
     name: String,
     arguments: String,
+    // Provider-specific passthrough that must round-trip on the follow-up
+    // request. Gemini 3.x thinking models attach a `thought_signature` here
+    // (extra_content.google.thought_signature) and 400 the next call with
+    // "Function call is missing a thought_signature" if it isn't echoed back.
+    extra_content: Option<serde_json::Value>,
 }
 
 /// Parse an OpenAI-compatible SSE chat-completion stream and reassemble
@@ -2062,7 +2075,33 @@ fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value
         }
         if let Some(tcs) = delta.get("tool_calls").and_then(|v| v.as_array()) {
             for tc in tcs {
-                let idx = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                let id_opt = tc
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty());
+                // Separate parallel/sequential tool calls by the delta `index`
+                // when the provider sends it (OpenAI / Moonshot / qwen). Gemini's
+                // OpenAI-compat stream OMITS index — so two calls would both
+                // default to slot 0 and their names+args would concatenate into
+                // one malformed call ("coder_sandbox_startdoc_get"). Fall back to
+                // the per-call `id` (which Gemini does send on each new call's
+                // first delta); an id-less continuation delta appends to the last.
+                let idx = if let Some(i) = tc.get("index").and_then(|v| v.as_u64()) {
+                    i as usize
+                } else if let Some(id) = id_opt {
+                    match tool_calls.iter().position(|t| t.id == id) {
+                        Some(pos) => pos,
+                        None => {
+                            tool_calls.push(ToolCallAccum::default());
+                            tool_calls.len() - 1
+                        }
+                    }
+                } else if tool_calls.is_empty() {
+                    tool_calls.push(ToolCallAccum::default());
+                    0
+                } else {
+                    tool_calls.len() - 1
+                };
                 while tool_calls.len() <= idx {
                     tool_calls.push(ToolCallAccum::default());
                 }
@@ -2082,6 +2121,13 @@ fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value
                         acc.arguments.push_str(a);
                     }
                 }
+                // Preserve provider passthrough (Gemini's thought_signature lives
+                // in extra_content) so it can be echoed back next turn.
+                if let Some(ec) = tc.get("extra_content") {
+                    if !ec.is_null() {
+                        acc.extra_content = Some(ec.clone());
+                    }
+                }
             }
         }
     }
@@ -2099,11 +2145,19 @@ fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value
         let arr: Vec<serde_json::Value> = tool_calls
             .iter()
             .map(|tc| {
-                serde_json::json!({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": { "name": tc.name, "arguments": tc.arguments }
-                })
+                let mut o = serde_json::Map::new();
+                o.insert("id".to_string(), serde_json::Value::String(tc.id.clone()));
+                o.insert("type".to_string(), serde_json::Value::String("function".to_string()));
+                o.insert(
+                    "function".to_string(),
+                    serde_json::json!({ "name": tc.name, "arguments": tc.arguments }),
+                );
+                // Echo provider passthrough (Gemini thought_signature) back into
+                // the stored tool_call so compose_messages replays it next turn.
+                if let Some(ec) = &tc.extra_content {
+                    o.insert("extra_content".to_string(), ec.clone());
+                }
+                serde_json::Value::Object(o)
             })
             .collect();
         message.insert("tool_calls".to_string(), serde_json::Value::Array(arr));
