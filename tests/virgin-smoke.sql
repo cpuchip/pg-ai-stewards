@@ -1875,4 +1875,32 @@ BEGIN
   RAISE NOTICE 'OK 41: artifact gate (empty doc-build → failed) + chat→brainstorm + generate_image grants';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→51) is sound =='
+-- ---------------------------------------------------------------------
+-- 52 — session-scoped tools: the dispatcher (not the model) owns session_id.
+-- The mcp_proxy tool_defs for generate_image / coder_export_artifact are
+-- populated at runtime by refresh-tools, so on a virgin boot they don't
+-- exist yet. We test the MECHANISM that guarantees the flag: a BEFORE
+-- INSERT/UPDATE trigger that stamps inject_session=true whenever such a
+-- row is written (surviving the refresh-tools execute_target rebuild).
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_flag boolean;
+BEGIN
+  -- the trigger exists on the virgin chain
+  ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='tool_def_inject_session_trg'),
+     '52: tool_def_inject_session_trg must exist (re-stamps the flag on every write)';
+  -- simulate refresh-tools inserting the mcp_proxy tool_def with NO inject_session;
+  -- the BEFORE trigger must stamp it true.
+  INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, active)
+  VALUES ('generate_image', 'smoke', '{}'::jsonb,
+          '{"kind":"mcp_proxy","server":"pg-ai-stewards","tool":"generate_image"}'::jsonb, true)
+  ON CONFLICT (name) DO UPDATE SET execute_target = EXCLUDED.execute_target;
+  SELECT (execute_target ->> 'inject_session')::boolean INTO v_flag
+    FROM stewards.tool_defs WHERE name='generate_image';
+  ASSERT v_flag, '52: trigger must stamp inject_session=true on a session-scoped tool_def';
+  -- keep the virgin DB pristine (no runtime tool_defs)
+  DELETE FROM stewards.tool_defs WHERE name='generate_image';
+  RAISE NOTICE 'OK 42: tool_def_inject_session trigger stamps session-scoped tools (dispatcher owns session_id)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→52) is sound =='

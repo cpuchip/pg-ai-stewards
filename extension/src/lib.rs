@@ -546,6 +546,16 @@ extension_sql_file!(
     requires = ["create_doc_build"],
 );
 
+// 52: session-scoped tools — mark generate_image / coder_export_artifact
+// `inject_session` so tools.rs::exec_one_tool overrides any model-supplied
+// session_id with the authoritative dispatch session. The dispatcher is the
+// oracle for which conversation an artifact attaches to, not the model.
+extension_sql_file!(
+    "../52-session-scoped-tools.sql",
+    name = "create_session_scoped_tools",
+    requires = ["create_rich_chat_hardening"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@
 // per-message provenance chips (which facet each retrieval tool hit).
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import MarkdownIt from 'markdown-it'
-import { api, type ChatSessionRow } from '@/api'
+import { api, type ChatSessionRow, type ChatWorkItemCard } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
 import { makeLinkClick } from './useDocLinks'
 
@@ -17,16 +17,19 @@ const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
 // Arc A: links in assistant replies navigate (internal) or open (external).
 const onLink = makeLinkClick(store)
 
-// rich-docs P3d: the empty-chat lens. With no work item selected, the user can
-// ground the chat in a PROJECT/corpus instead; chatRef becomes "project:<name>"
-// and doc_search scopes the conversation to it. A selected work item wins.
+// The grounding lens (b1). '' = follow the currently-selected doc/work item (the
+// default); '__all__' = the whole pool; a project name = that corpus. An explicit
+// lens WINS over the selected item, so a new chat can be grounded in a project even
+// while a doc is open on the left — the selector is always available in the header.
 const lens = ref('')
 const projects = ref<{ name: string; doc_count: number }[]>([])
 onMounted(async () => { try { projects.value = (await api.chatProjects()).projects } catch { /* none */ } })
-// the effective conversation ref: a selected work item, else the chosen lens
-// (a project corpus, or "all" = the whole pool — Arc D).
-const chatRef = computed(() =>
-  store.selectedRef || (lens.value === '__all__' ? 'all' : lens.value ? `project:${lens.value}` : ''))
+// the effective conversation ref: an explicit lens wins; else the selected item.
+const chatRef = computed(() => {
+  if (lens.value === '__all__') return 'all'
+  if (lens.value) return `project:${lens.value}`
+  return store.selectedRef || ''
+})
 
 type Msg = { id: number; role: string; content: string; finish_reason?: string; tool_calls: number; tools?: string[]; images?: string[] }
 const messages = ref<Msg[]>([])
@@ -113,9 +116,11 @@ async function fetchArtifactMeta(ids: number[]) {
 function resolvedArtifacts(content: string): ArtMeta[] {
   return artifactIds(content).map(id => artifactMeta.value[id]).filter((a): a is ArtMeta => !!a)
 }
-function isImageArt(a: ArtMeta) { return a.kind === 'image' || a.mime_type.startsWith('image/') }
-function artIcon(a: ArtMeta): string {
-  const m = a.mime_type, f = a.filename
+// structural — works for both reply artifacts (ArtMeta) and work-item card
+// artifacts (WiCardArtifact); both carry mime_type / filename / kind.
+function isImageArt(a: { kind?: string; mime_type?: string }) { return a.kind === 'image' || (a.mime_type || '').startsWith('image/') }
+function artIcon(a: { mime_type?: string; filename: string }): string {
+  const m = a.mime_type || '', f = a.filename
   if (m.includes('pdf')) return '📕'
   if (m.includes('spreadsheet') || /\.(xlsx|csv)$/.test(f)) return '📊'
   if (m.includes('presentation') || f.endsWith('.pptx')) return '📑'
@@ -127,11 +132,53 @@ function fmtSize(n: number): string {
   return n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`
 }
 
-function closeStream() { if (es) { es.close(); es = null } }
+// b2: live work-item cards — the tasks this chat spawned (start_task / doc-build /
+// brainstorm), each walking its pipeline stage path. Polled while the panel is
+// open; the cadence speeds up while anything is in flight.
+const workItems = ref<ChatWorkItemCard[]>([])
+let wiTimer: ReturnType<typeof setTimeout> | null = null
+const wiInFlight = (w: ChatWorkItemCard) => w.status === 'pending' || w.status === 'running' || w.status === 'in_progress'
+function wiIcon(w: ChatWorkItemCard) { return w.status === 'completed' ? '✅' : w.status === 'failed' ? '⚠️' : '⏳' }
+function wiStatusCls(w: ChatWorkItemCard) {
+  return w.status === 'completed' ? 'text-emerald-400' : w.status === 'failed' ? 'text-rose-400' : 'text-amber-400'
+}
+function wiCurIdx(w: ChatWorkItemCard) { return w.stages.indexOf(w.current_stage || '') }
+function stageMark(w: ChatWorkItemCard, i: number): string {
+  const cur = wiCurIdx(w)
+  if (w.status === 'completed' || (cur >= 0 && i < cur)) return '✓'
+  if (i === cur) return w.status === 'failed' ? '✕' : '•'
+  return '○'
+}
+function stagePillCls(w: ChatWorkItemCard, i: number): string {
+  const cur = wiCurIdx(w)
+  if (w.status === 'completed' || (cur >= 0 && i < cur)) return 'bg-emerald-900/30 text-emerald-300 border-emerald-800/50'
+  if (i === cur) return w.status === 'failed'
+    ? 'bg-rose-900/40 text-rose-300 border-rose-800/50'
+    : 'bg-amber-900/40 text-amber-200 border-amber-700/50 animate-pulse'
+  return 'bg-zinc-800/50 text-zinc-500 border-zinc-700/50'
+}
+async function pollWorkItems() {
+  const sid = activeSession.value
+  if (!sid) { workItems.value = []; return }
+  try { workItems.value = (await api.chatWorkItems(sid)).work_items || [] } catch { /* keep last */ }
+}
+function scheduleWorkItems() {
+  if (wiTimer) { clearTimeout(wiTimer); wiTimer = null }
+  const active = pending.value || workItems.value.some(wiInFlight)
+  wiTimer = setTimeout(async () => { await pollWorkItems(); scheduleWorkItems() }, active ? 4000 : 20000)
+}
+function refreshWork() { pollWorkItems().then(scheduleWorkItems) }
+
+function closeStream() {
+  if (es) { es.close(); es = null }
+  if (wiTimer) { clearTimeout(wiTimer); wiTimer = null }
+}
 
 function openStream(sid: string) {
   closeStream()
   messages.value = []
+  workItems.value = []
+  refreshWork() // b2: load + start polling this session's spawned work items
   es = new EventSource(`/api/chat/stream?session_id=${encodeURIComponent(sid)}&after=0`)
   es.onmessage = (ev) => {
     let m: Msg
@@ -165,6 +212,10 @@ watch(() => store.requestedLens, (v) => {
   lens.value = v // '' | '__all__' | a project name
   store.requestedLens = null
 })
+// b1: navigating to a doc/work item on the left re-grounds the chat to it (clears
+// any pinned project lens) so the default is always "chat about what I'm looking
+// at". honoringRequest stands down so the Sessions-panel open flow isn't clobbered.
+watch(() => store.selectedRef, (v) => { if (v && !honoringRequest) lens.value = '' })
 watch(() => store.requestedSession, async (sid) => {
   if (!sid) return
   honoringRequest = true
@@ -256,6 +307,9 @@ async function send() {
     }
     // refresh the sidebar so a brand-new conversation shows up
     loadSessions(ref_)
+    // b2: a turn may spawn a task (start_task / doc-build / brainstorm) — poll
+    // soon so its card appears, then the scheduler keeps it live.
+    setTimeout(refreshWork, 2000)
   } catch (e) {
     err.value = String(e); pending.value = false
     messages.value = messages.value.filter(m => m.id !== tempId)
@@ -331,15 +385,14 @@ function onKey(e: KeyboardEvent) {
               @click="showSessions = !showSessions">💬<span class="text-zinc-600 ml-0.5">{{ sessions.length || '' }}</span></button>
       <a v-if="activeSession && messages.length" :href="`/api/chat/export?session_id=${encodeURIComponent(activeSession)}&format=md`"
          class="text-zinc-500 hover:text-sky-300" title="export this conversation as markdown" download>⬇</a>
-      <span v-if="store.selectedRef" class="text-zinc-600 truncate flex-1" :title="store.selectedRef">
-        {{ store.selectedTitle || store.selectedRef }}
-      </span>
-      <!-- rich-docs P3d: empty-chat lens — ground in a project/corpus instead -->
-      <div v-else class="flex-1 flex items-center gap-1.5 min-w-0">
-        <span class="text-zinc-600">lens</span>
-        <select v-model="lens" class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] text-zinc-300 max-w-[60%] truncate"
-                title="ground this chat in a project/corpus (doc_search scopes to it)">
-          <option value="">— pick a project —</option>
+      <!-- b1: grounding selector, always available. The default ('') follows the
+           doc/work item selected on the left; pick a project or Everything to
+           override (so a new chat can be grounded in a project even with a doc open). -->
+      <div class="flex-1 flex items-center gap-1.5 min-w-0">
+        <span class="text-zinc-600">in</span>
+        <select v-model="lens" class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] text-zinc-300 max-w-[70%] truncate"
+                :title="store.selectedRef ? 'grounded in the selected item — pick a project to override' : 'ground this chat in a project/corpus (doc_search scopes to it)'">
+          <option value="">{{ store.selectedRef ? `📄 ${store.selectedTitle || store.selectedRef}` : '— pick a project —' }}</option>
           <option value="__all__">✸ Everything (whole pool)</option>
           <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}<span v-if="p.doc_count"> ({{ p.doc_count }})</span></option>
         </select>
@@ -405,6 +458,39 @@ function onKey(e: KeyboardEvent) {
                 class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-400">{{ c }}</span>
         </div>
       </template>
+
+      <!-- b2: live work-item cards — the tasks this chat spawned (start_task /
+           doc-build / brainstorm), each walking its pipeline stage path. They
+           update in place as the work advances; a completed build's artifact
+           surfaces here even when the export landed without a reply link. -->
+      <div v-for="w in workItems" :key="w.id"
+           class="rounded-lg border border-zinc-800 bg-zinc-900/70 px-3 py-2 text-xs">
+        <div class="flex items-center gap-2 mb-1.5">
+          <span>{{ wiIcon(w) }}</span>
+          <span class="text-zinc-300 truncate flex-1" :title="w.id">{{ w.slug || w.pipeline_family || 'task' }}</span>
+          <span class="text-[10px] uppercase tracking-wide" :class="wiStatusCls(w)">{{ w.status }}</span>
+        </div>
+        <div v-if="w.stages.length" class="flex items-center gap-1 flex-wrap">
+          <template v-for="(s, i) in w.stages" :key="s">
+            <span class="px-1.5 py-0.5 rounded border text-[10px]" :class="stagePillCls(w, i)">{{ stageMark(w, i) }} {{ s }}</span>
+            <span v-if="i < w.stages.length - 1" class="text-zinc-700">›</span>
+          </template>
+        </div>
+        <div v-if="w.error" class="text-rose-400/80 mt-1 text-[10px] line-clamp-2" :title="w.error">{{ w.error }}</div>
+        <template v-for="a in (w.artifacts || [])" :key="a.id">
+          <img v-if="isImageArt(a)" :src="a.url" :alt="a.filename" class="mt-1.5 max-h-44 rounded-lg border border-zinc-800" />
+          <a v-else :href="`${a.url}?download=1`" download
+             class="mt-1.5 flex items-center gap-2.5 bg-zinc-900 border border-zinc-800 rounded-lg px-2.5 py-1.5 hover:border-sky-700/60 transition no-underline">
+            <span class="text-xl leading-none">{{ artIcon(a) }}</span>
+            <span class="min-w-0 flex-1">
+              <span class="block text-zinc-200 truncate">{{ a.filename || 'artifact' }}</span>
+              <span class="block text-zinc-600 text-[10px]">{{ fmtSize(a.byte_size) }} · download</span>
+            </span>
+            <span class="text-zinc-500 text-base">⬇</span>
+          </a>
+        </template>
+      </div>
+
       <div v-if="pending" class="flex items-center gap-2 text-xs">
         <span class="text-zinc-500 italic">thinking…</span>
         <button class="text-rose-400 hover:text-rose-300 border border-zinc-800 rounded px-1.5 py-0.5" title="stop" @click="stop">■ stop</button>

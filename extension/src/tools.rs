@@ -314,6 +314,42 @@ fn exec_one_tool(
     let kind = target.get("kind")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "tool execute_target.kind missing".to_string())?;
+
+    // Session injection: when the tool_def's execute_target marks
+    // `inject_session`, the dispatcher — which authoritatively knows
+    // which session this tool call is running in — overrides any
+    // session_id the model supplied. Session-scoped tools
+    // (generate_image, coder_export_artifact) attach their output to
+    // the conversation they're dispatched from, not to whatever the
+    // model guessed. The dispatcher is the oracle, not the model: a
+    // grounding nudge ("your session is X, pass it") is best-effort and
+    // weaker models drop it; this makes correctness deterministic. The
+    // flag lives in SQL (52-session-scoped-tools.sql) so the policy is
+    // data-driven and this code stays generic.
+    let inject = target.get("inject_session")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let injected_args;
+    let args = if inject && !session_id.is_empty() {
+        let mut a = args.clone();
+        match a.as_object_mut() {
+            Some(obj) => {
+                obj.insert("session_id".to_string(),
+                    serde_json::Value::String(session_id.to_string()));
+            }
+            // args weren't a JSON object (e.g. a decode-error sentinel
+            // or a bare value); wrap so the tool still receives the
+            // session rather than dropping it silently.
+            None => {
+                a = serde_json::json!({ "session_id": session_id });
+            }
+        }
+        injected_args = a;
+        &injected_args
+    } else {
+        args
+    };
+
     match kind {
         "sql_fn"    => exec_sql_fn_tool(target, args, session_id).map(ToolReply::Sync),
         "http"      => exec_http_tool(target, args).map(ToolReply::Sync),

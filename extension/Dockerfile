@@ -67,7 +67,8 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      44-graph-organize.sql 45-work-item-chat.sql \
      46-chat-tasks.sql 47-multimodal.sql \
      48-chat-attachments.sql 49-doc-extract.sql \
-     50-doc-build.sql 51-rich-chat-hardening.sql ./
+     50-doc-build.sql 51-rich-chat-hardening.sql \
+     52-session-scoped-tools.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,

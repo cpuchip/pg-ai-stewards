@@ -29,6 +29,7 @@ func (d *Deps) registerChat(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/chat/stream", d.chatStreamHandler)
 	mux.HandleFunc("GET /api/chat/sessions", d.chatSessionsHandler)        // Stewdio P4: multi-session history
 	mux.HandleFunc("GET /api/chat/sessions/all", d.chatSessionsAllHandler) // Sessions panel: EVERY chat session + its target
+	mux.HandleFunc("GET /api/chat/work-items", d.chatWorkItemsHandler)     // b2: work items spawned from a chat — live status cards
 	mux.HandleFunc("POST /api/chat/attach", d.chatAttachHandler)           // rich-docs P2: upload media to a chat
 	mux.HandleFunc("GET /api/chat/attachment/{id}", d.chatAttachmentHandler) // rich-docs P2: serve the bytes (inline render)
 	mux.HandleFunc("GET /api/chat/projects", d.chatProjectsHandler)        // rich-docs P3d: the empty-chat lens picker
@@ -406,6 +407,126 @@ func (d *Deps) chatSessionsAllHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
+}
+
+// wiCardArtifact — a downloadable artifact produced by a chat-spawned work item.
+type wiCardArtifact struct {
+	ID       int64  `json:"id"`
+	Filename string `json:"filename"`
+	MimeType string `json:"mime_type,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+	ByteSize int64  `json:"byte_size"`
+	URL      string `json:"url"`
+}
+
+// chatWorkItemCard — a work item spawned from a chat session, with its
+// pipeline stage path + live position, for the in-chat progress card.
+type chatWorkItemCard struct {
+	ID           string           `json:"id"`
+	Slug         string           `json:"slug,omitempty"`
+	Pipeline     string           `json:"pipeline_family,omitempty"`
+	Status       string           `json:"status"`
+	CurrentStage string           `json:"current_stage,omitempty"`
+	Stages       []string         `json:"stages"`
+	Error        string           `json:"error,omitempty"`
+	CreatedAt    string           `json:"created_at,omitempty"`
+	CompletedAt  string           `json:"completed_at,omitempty"`
+	Artifacts    []wiCardArtifact `json:"artifacts,omitempty"`
+}
+
+// GET /api/chat/work-items?session=stewdio-… — the work items this chat kicked
+// off (start_task / doc-build / brainstorm). Each carries its pipeline stage
+// path + the stage it's on right now, so the chat can render a card that walks
+// pending→running→completed live. Also resolves the artifact a completed build
+// produced (chat_attachments landing in the session during the run), which is
+// how an export that lands "silently" still surfaces in the conversation.
+func (d *Deps) chatWorkItemsHandler(w http.ResponseWriter, r *http.Request) {
+	sid := strings.TrimSpace(r.URL.Query().Get("session"))
+	if sid == "" {
+		writeErr(w, http.StatusBadRequest, "session is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	rows, err := d.Pool.Query(ctx,
+		`SELECT wi.id::text, coalesce(wi.slug,''), coalesce(wi.pipeline_family,''),
+		        wi.status, coalesce(wi.current_stage,''),
+		        coalesce(wi.error, wi.last_failure_reason, ''),
+		        coalesce(to_char(wi.created_at,'YYYY-MM-DD HH24:MI'),''),
+		        coalesce(to_char(wi.completed_at,'YYYY-MM-DD HH24:MI'),''),
+		        wi.created_at,
+		        coalesce((SELECT jsonb_agg(t.s ->> 'name' ORDER BY t.ord)
+		                    FROM stewards.pipelines p,
+		                         jsonb_array_elements(p.stages) WITH ORDINALITY AS t(s, ord)
+		                   WHERE p.family = wi.pipeline_family), '[]'::jsonb)
+		   FROM stewards.work_items wi
+		  WHERE wi.input->>'spawned_from_chat' = $1 OR $1 = ANY(wi.session_ids)
+		  ORDER BY wi.created_at DESC
+		  LIMIT 50`, sid)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "work-items: "+err.Error())
+		return
+	}
+	defer rows.Close()
+
+	type wiRow struct {
+		card    chatWorkItemCard
+		created time.Time
+	}
+	var items []*wiRow
+	for rows.Next() {
+		var rec wiRow
+		var stagesJSON []byte
+		if err := rows.Scan(&rec.card.ID, &rec.card.Slug, &rec.card.Pipeline,
+			&rec.card.Status, &rec.card.CurrentStage, &rec.card.Error,
+			&rec.card.CreatedAt, &rec.card.CompletedAt, &rec.created, &stagesJSON); err != nil {
+			continue
+		}
+		rec.card.Stages = []string{}
+		_ = json.Unmarshal(stagesJSON, &rec.card.Stages)
+		items = append(items, &rec)
+	}
+
+	// Resolve artifacts: every document/image attachment that landed in this
+	// session, bucketed into the work item that was running when it arrived
+	// (the WI with the latest created_at <= the attachment's created_at). For a
+	// single in-flight build this is exact; for overlapping builds, best-effort.
+	if len(items) > 0 {
+		ar, e := d.Pool.Query(ctx,
+			`SELECT id, filename, coalesce(mime_type,''), coalesce(kind,''),
+			        coalesce(byte_size,0), created_at
+			   FROM stewards.chat_attachments
+			  WHERE session_id = $1 AND kind IN ('document','image')
+			  ORDER BY created_at`, sid)
+		if e == nil {
+			for ar.Next() {
+				var a wiCardArtifact
+				var at time.Time
+				if ar.Scan(&a.ID, &a.Filename, &a.MimeType, &a.Kind, &a.ByteSize, &at) != nil {
+					continue
+				}
+				a.URL = fmt.Sprintf("/api/chat/attachment/%d", a.ID)
+				// find the WI whose run window contains this attachment.
+				var owner *wiRow
+				for _, it := range items {
+					if !at.Before(it.created) && (owner == nil || it.created.After(owner.created)) {
+						owner = it
+					}
+				}
+				if owner != nil {
+					owner.card.Artifacts = append(owner.card.Artifacts, a)
+				}
+			}
+			ar.Close()
+		}
+	}
+
+	out := make([]chatWorkItemCard, 0, len(items))
+	for _, it := range items {
+		out = append(out, it.card)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"work_items": out})
 }
 
 // ── chat attachments — upload media as injectable subject material (P2). ──

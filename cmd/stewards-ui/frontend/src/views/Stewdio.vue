@@ -24,6 +24,40 @@ let dockApi: DockviewApi | null = null
 const showLauncher = ref(false)
 const openPanelIds = ref<string[]>([]) // reactive — which panes are currently open (launcher dots)
 
+// b3: VS-Code-style collapse of the leftmost (Work items) and rightmost (Chat)
+// columns. The toggle is anchored to those panels' groups (robust to rearrange +
+// reload), collapsing to zero width and restoring the prior width. State is
+// re-measured from the DOM on every layout change, so it survives a reload where
+// the layout persisted collapsed.
+const COLLAPSE_ANCHOR = { left: 'browser', right: 'chat' } as const
+const savedEdgeW = { left: 300, right: 380 }
+const edgeCollapsed = ref<{ left: boolean; right: boolean }>({ left: false, right: false })
+function edgeGroup(side: 'left' | 'right') {
+  return dockApi?.getPanel(COLLAPSE_ANCHOR[side])?.group ?? null
+}
+function edgeWidth(side: 'left' | 'right'): number {
+  const g = edgeGroup(side)
+  return g ? Math.round(g.element.getBoundingClientRect().width) : 0
+}
+function measureEdges() {
+  edgeCollapsed.value = {
+    left: !!edgeGroup('left') && edgeWidth('left') < 24,
+    right: !!edgeGroup('right') && edgeWidth('right') < 24,
+  }
+}
+function toggleEdge(side: 'left' | 'right') {
+  const g = edgeGroup(side)
+  if (!g) return
+  if (edgeWidth(side) < 24) {
+    g.api.setSize({ width: savedEdgeW[side] })
+  } else {
+    savedEdgeW[side] = edgeWidth(side) || savedEdgeW[side]
+    g.api.setConstraints({ minimumWidth: 0 })
+    g.api.setSize({ width: 0 })
+  }
+  // onDidLayoutChange → measureEdges keeps the glyph in sync.
+}
+
 // dockview maps these names → the Vue components it mounts in each panel.
 // (The `as unknown as VueComponent` casts bridge an SFC's inferred type to
 // dockview-vue's stricter VueComponent type — a known vue-tsc friction.)
@@ -83,9 +117,11 @@ function onReady(event: DockviewReadyEvent) {
   // persist on any layout change (lightly debounced) + keep the open-pane set fresh.
   const refreshOpen = () => { openPanelIds.value = api.panels.map(p => p.id) }
   refreshOpen()
+  measureEdges()
   let t: number | null = null
   api.onDidLayoutChange(() => {
     refreshOpen()
+    measureEdges()
     if (t !== null) clearTimeout(t)
     t = window.setTimeout(() => {
       try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(api.toJSON())) } catch { /* quota — ignore */ }
@@ -101,8 +137,18 @@ function resetLayout() {
 
 <template>
   <div class="h-full w-full relative">
+    <!-- b3: collapse/expand the leftmost (Work items) column, VS-Code style -->
+    <button
+      class="absolute top-1 left-2 z-20 text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
+      :title="edgeCollapsed.left ? 'show the work-items panel' : 'collapse the work-items panel'"
+      @click="toggleEdge('left')">{{ edgeCollapsed.left ? '❯' : '❮' }}</button>
     <!-- windowing manager: open / reopen any pane -->
     <div class="absolute top-1 right-2 z-20 flex items-center gap-1">
+      <!-- b3: collapse/expand the rightmost (Chat) column -->
+      <button
+        class="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
+        :title="edgeCollapsed.right ? 'show the chat panel' : 'collapse the chat panel'"
+        @click="toggleEdge('right')">{{ edgeCollapsed.right ? '❮' : '❯' }}</button>
       <div class="relative">
         <button
           class="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"

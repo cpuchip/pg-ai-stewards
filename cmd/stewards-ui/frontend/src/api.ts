@@ -545,6 +545,9 @@ export const api = {
   // Sessions panel: EVERY chat session + the work-item/doc/project it's grounded in.
   chatSessionsAll: () =>
     getJSON<{ sessions: ChatAllSessionRow[] }>('/api/chat/sessions/all'),
+  // b2: work items this chat spawned — live status cards that walk the pipeline.
+  chatWorkItems: (session: string) =>
+    getJSON<{ work_items: ChatWorkItemCard[] }>(`/api/chat/work-items?session=${encodeURIComponent(session)}`),
   // Rich artifact cards: metadata (no bytes) for an attachment id linked in a reply.
   chatAttachmentMeta: (id: number) =>
     getJSON<{ id: number; filename: string; mime_type: string; kind: string; byte_size: number }>(`/api/chat/attachment/${id}?meta=1`),
@@ -1189,6 +1192,29 @@ export type ChatAllSessionRow = {
   target_ref?: string
   target_kind?: string // work_item | doc | project | all | unknown
   title?: string
+}
+
+// b2: a work item spawned from a chat, with its pipeline stage path + live
+// position, for the in-chat progress card.
+export type WiCardArtifact = {
+  id: number
+  filename: string
+  mime_type?: string
+  kind?: string
+  byte_size: number
+  url: string
+}
+export type ChatWorkItemCard = {
+  id: string
+  slug?: string
+  pipeline_family?: string
+  status: string
+  current_stage?: string
+  stages: string[]
+  error?: string
+  created_at?: string
+  completed_at?: string
+  artifacts?: WiCardArtifact[]
 }
 
 // rich-docs P2: a stored chat attachment (image/document as subject material).
