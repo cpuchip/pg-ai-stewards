@@ -159,7 +159,11 @@ DECLARE
     v_docs    text;
     v_att_ids bigint[];
     v_q       text := btrim(coalesce(p_question, ''));
-    v_input   jsonb := jsonb_build_object('spawned_from_chat', coalesce(p_session, ''));
+    v_input   jsonb := jsonb_build_object(
+                  'spawned_from_chat', coalesce(p_session, ''),
+                  -- a stable sandbox id for coder/doc-build pipelines spawned from
+                  -- this chat (the build stage runs in coder_sandbox_start <sandbox>).
+                  'sandbox', 'task-' || substr(md5(coalesce(p_session, 'x') || '|' || coalesce(p_question, '')), 1, 12));
 BEGIN
     -- The session's extracted document attachments become subject material.
     SELECT string_agg('### ' || coalesce(filename, 'document') || E'\n' || left(extracted_text, 8000),

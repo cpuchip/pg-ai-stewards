@@ -1813,8 +1813,29 @@ BEGIN
   v_input := stewards.chat_task_input('stewdio-empty', 'just a question');
   ASSERT (v_input->>'binding_question') = 'just a question' AND NOT (v_input ? 'attachment_ids'),
      '49/P4: a session with no document attachments carries only the question';
+  ASSERT (v_input ? 'sandbox') AND (v_input->>'sandbox') LIKE 'task-%',
+     '49/P4: chat_task_input must seed a stable sandbox id for coder/doc-build spawns';
   DELETE FROM stewards.chat_attachments WHERE session_id = 'stewdio-p4';
-  RAISE NOTICE 'OK 39: P4 — spawned work carries the chat''s extracted document attachments';
+  RAISE NOTICE 'OK 39: P4 — spawned work carries the chat''s extracted document attachments + a sandbox id';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→49) is sound =='
+-- ---------------------------------------------------------------------
+-- 50 — Arc B doc-build: the doc-build pipeline (generate documents in the
+-- coder sandbox) + the coder_export_artifact grant.
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+  ASSERT EXISTS (SELECT 1 FROM stewards.pipelines WHERE family='doc-build'),
+     '50: the doc-build pipeline must be seeded';
+  ASSERT (SELECT jsonb_array_length(stages) FROM stewards.pipelines WHERE family='doc-build') = 3,
+     '50: doc-build must have plan/build/deliver stages';
+  ASSERT EXISTS (SELECT 1 FROM stewards.pipelines WHERE family='doc-build'
+                  AND stages::text LIKE '%coder_export_artifact%'),
+     '50: the doc-build build stage must export the artifact';
+  ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                  WHERE agent_family='dev' AND tool_pattern='coder_export_artifact' AND action='allow'),
+     '50: coder_export_artifact must be granted to the dev agent';
+  RAISE NOTICE 'OK 40: doc-build — pipeline (plan/build/deliver) + coder_export_artifact grant';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→50) is sound =='

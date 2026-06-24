@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/cpuchip/pg-ai-stewards/cmd/coder-mcp/sandbox"
@@ -22,7 +23,17 @@ import (
 
 const workRoot = "/work"
 
-func registerCoderTools(srv *mcp.Server, mgr *sandbox.Manager) {
+func registerCoderTools(srv *mcp.Server, mgr *sandbox.Manager, pool *pgxpool.Pool) {
+	// Arc B (doc-build): pull a generated file (pdf/xlsx/pptx/docx/zip/image) out
+	// of the sandbox into a downloadable artifact. Needs a DB pool (STEWARDS_DSN).
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "coder_export_artifact",
+		Description: "Export a generated FILE out of the sandbox as a downloadable artifact (Arc B doc-build): " +
+			"reads the binary file at `path` (relative to /work) and stores it so the user can download it and it " +
+			"shows as an artifact card in the chat. Use this after a build step writes a pdf/xlsx/pptx/docx/zip/image. " +
+			"Pass session_id = the chat/work session so it appears there. Returns the download URL.",
+	}, makeExportArtifact(mgr, pool))
+
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "coder_sandbox_start",
 		Description: "Start an isolated, hardened sandbox container for a work_item " +
@@ -616,6 +627,115 @@ func makeOpenPR(mgr *sandbox.Manager) func(context.Context, *mcp.CallToolRequest
 		}
 		return nil, prOutput{URL: url}, nil
 	}
+}
+
+// --- Arc B: export a generated artifact out of the sandbox ---
+
+type exportArtifactInput struct {
+	Sandbox  string `json:"sandbox"  jsonschema:"Sandbox id (the work_item id)"`
+	Path     string `json:"path"     jsonschema:"File to export, relative to /work (e.g. report.pdf, deck.pptx, export.zip)"`
+	Session  string `json:"session_id,omitempty" jsonschema:"Chat/work session id to attach it to so it shows + is downloadable there"`
+	Filename string `json:"filename,omitempty"   jsonschema:"Download filename (default: the path basename)"`
+}
+type exportArtifactOutput struct {
+	AttachmentID int64  `json:"attachment_id"`
+	Filename     string `json:"filename"`
+	MimeType     string `json:"mime_type"`
+	Bytes        int    `json:"bytes"`
+	URL          string `json:"url"`
+}
+
+const maxArtifactBytes = 50 << 20 // 50 MB
+
+func makeExportArtifact(mgr *sandbox.Manager, pool *pgxpool.Pool) func(context.Context, *mcp.CallToolRequest, exportArtifactInput) (*mcp.CallToolResult, exportArtifactOutput, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in exportArtifactInput) (*mcp.CallToolResult, exportArtifactOutput, error) {
+		if pool == nil {
+			return errResult("artifact export needs a DB pool — STEWARDS_DSN is not set on coder-mcp"), exportArtifactOutput{}, nil
+		}
+		full, err := resolvePath(in.Path)
+		if err != nil {
+			return errResult("%v", err), exportArtifactOutput{}, nil
+		}
+		data, err := mgr.ReadFileBytes(ctx, in.Sandbox, full)
+		if err != nil {
+			return errResult("%v", err), exportArtifactOutput{}, nil
+		}
+		if len(data) == 0 {
+			return errResult("file %q is empty or unreadable", in.Path), exportArtifactOutput{}, nil
+		}
+		if len(data) > maxArtifactBytes {
+			return errResult("artifact %q is %d bytes — exceeds the %d MB limit", in.Path, len(data), maxArtifactBytes>>20), exportArtifactOutput{}, nil
+		}
+		filename := strings.TrimSpace(in.Filename)
+		if filename == "" {
+			filename = path.Base(full)
+		}
+		mime := artifactMime(filename)
+		kind := "document"
+		if strings.HasPrefix(mime, "image/") {
+			kind = "image"
+		}
+		session := strings.TrimSpace(in.Session)
+		if session == "" {
+			session = "artifact-" + sandboxSafe(in.Sandbox)
+		}
+		var id int64
+		if err := pool.QueryRow(ctx,
+			`INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size)
+			 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+			session, filename, mime, kind, data, len(data),
+		).Scan(&id); err != nil {
+			return errResult("store artifact: %v", err), exportArtifactOutput{}, nil
+		}
+		return nil, exportArtifactOutput{
+			AttachmentID: id, Filename: filename, MimeType: mime,
+			Bytes: len(data), URL: fmt.Sprintf("/api/chat/attachment/%d", id),
+		}, nil
+	}
+}
+
+// artifactMime maps a filename extension to a content type for the download.
+func artifactMime(name string) string {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".pdf":
+		return "application/pdf"
+	case ".xlsx":
+		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".pptx":
+		return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+	case ".csv":
+		return "text/csv"
+	case ".md", ".markdown":
+		return "text/markdown"
+	case ".html", ".htm":
+		return "text/html"
+	case ".json":
+		return "application/json"
+	case ".zip":
+		return "application/zip"
+	case ".png":
+		return "image/png"
+	case ".jpg", ".jpeg":
+		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".svg":
+		return "image/svg+xml"
+	case ".txt":
+		return "text/plain"
+	}
+	return "application/octet-stream"
+}
+
+// sandboxSafe keeps a sandbox id usable in a session-id default.
+func sandboxSafe(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "sb"
+	}
+	return s
 }
 
 // shQuote single-quotes a string for safe inclusion in a shell command.

@@ -20,11 +20,18 @@ FROM node:24-bookworm AS node
 
 FROM debian:bookworm-slim
 
-# Base OS tooling + Python.
+# Base OS tooling + Python + document-generation toolchain (Arc B / doc-build:
+# the sandbox can SCRIPT any document — pandoc + wkhtmltopdf give md/html → pdf/
+# docx, and the Python libs below give programmatic xlsx/docx/pptx/pdf/images;
+# zip is stdlib. "Programming + these libs = infinite document output." No
+# libreoffice/texlive (too heavy) — those are a later faithful-layout tier.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates git curl openssh-client \
         python3 python3-pip python3-venv \
         build-essential pkg-config \
+        pandoc wkhtmltopdf \
+    && pip3 install --no-cache-dir --break-system-packages \
+        python-docx python-pptx openpyxl reportlab markdown Pillow pyyaml \
     && rm -rf /var/lib/apt/lists/*
 
 # Go (from the official image).

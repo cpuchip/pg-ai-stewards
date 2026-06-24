@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/cpuchip/pg-ai-stewards/cmd/coder-mcp/sandbox"
@@ -43,8 +44,19 @@ func main() {
 	defer stop()
 
 	mgr := sandbox.New()
+	// Optional DB pool — only the artifact-export tool (Arc B doc-build) needs it.
+	// The bridge sets STEWARDS_DSN; without it, coder_export_artifact errors clearly.
+	var pool *pgxpool.Pool
+	if dsn := os.Getenv("STEWARDS_DSN"); dsn != "" {
+		if p, perr := pgxpool.New(ctx, dsn); perr == nil {
+			pool = p
+			defer p.Close()
+		} else {
+			log.Printf("no DB pool (coder_export_artifact disabled): %v", perr)
+		}
+	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "coder-mcp", Version: version}, nil)
-	registerCoderTools(srv, mgr)
+	registerCoderTools(srv, mgr, pool)
 
 	// CC.6: best-effort reap of stale sandboxes (>2h) on startup. The bridge
 	// spawns coder-mcp periodically, so this sweeps leaked/abandoned sandboxes

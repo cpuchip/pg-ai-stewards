@@ -528,6 +528,16 @@ extension_sql_file!(
     requires = ["create_chat_attachments"],
 );
 
+// rich chat + artifacts, Arc B: doc-build — generate documents (pdf/xlsx/pptx/
+// docx/zip) in the coder sandbox (now doc-toolchain-equipped) and export them as
+// downloadable artifacts. The doc-build pipeline + the coder_export_artifact
+// grant. (.spec/proposals/rich-chat-and-artifacts.md)
+extension_sql_file!(
+    "../50-doc-build.sql",
+    name = "create_doc_build",
+    requires = ["create_doc_extract"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

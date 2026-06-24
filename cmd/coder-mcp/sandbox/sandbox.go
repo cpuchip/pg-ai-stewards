@@ -394,6 +394,24 @@ func (m *Manager) ReadFile(ctx context.Context, wi, path string) (string, error)
 	return out.String(), nil
 }
 
+// ReadFileBytes reads an absolute path from wi's sandbox as RAW bytes (binary-
+// safe — for generated artifacts like pdf/xlsx/zip that ReadFile's string path
+// would mangle). Arc B doc-build: the export-artifact tool pulls the generated
+// file out this way.
+func (m *Manager) ReadFileBytes(ctx context.Context, wi, path string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, "docker", "exec", containerName(wi), "cat", "--", path)
+	var out, errBuf bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &errBuf
+	if err := cmd.Run(); err != nil {
+		if _, ok := err.(*exec.ExitError); ok {
+			return nil, fmt.Errorf("read %s: %s", path, strings.TrimSpace(errBuf.String()))
+		}
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	return out.Bytes(), nil
+}
+
 // Exists reports whether wi's sandbox container is present.
 func (m *Manager) Exists(ctx context.Context, wi string) (bool, error) {
 	out, err := docker(ctx, "ps", "-aq", "--filter", "name=^"+containerName(wi)+"$")
