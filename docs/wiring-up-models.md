@@ -68,6 +68,26 @@ STEWARDS_PROVIDER_GOOGLE_GEMINI_DEFAULT_MODEL=gemini-2.5-flash
 Get a key from Google AI Studio. (Free-quota terms vary and are often tied to
 specific surfaces/models — check current limits before relying on "free.")
 
+**Vertex variant — NO-TRAIN (work-confidential).** An AI-Studio key trains on your
+data. A paid **Vertex** service account does not — and the substrate mints its
+rotating OAuth token itself (no proxy) via the `google_sa` auth mode, so Gemini
+drives the agentic tool loop directly. Drop the SA json on the host (mounted
+read-only into pg by `docker-compose.gemini-vertex.yaml`) and register:
+
+```
+STEWARDS_PROVIDER_GOOGLE_VERTEX_KIND=openai
+STEWARDS_PROVIDER_GOOGLE_VERTEX_BASE_URL=https://aiplatform.googleapis.com/v1/projects/<PROJECT>/locations/global/endpoints/openapi
+STEWARDS_PROVIDER_GOOGLE_VERTEX_AUTH=google_sa
+STEWARDS_PROVIDER_GOOGLE_VERTEX_CREDENTIALS_FILE=/secrets/gemini-sa.json
+STEWARDS_PROVIDER_GOOGLE_VERTEX_DEFAULT_MODEL=google/gemini-3.1-pro-preview
+GEMINI_SA_FILE=/host/path/to/gemini-sa.json
+```
+Model ids carry the `google/` publisher prefix; the provider name is
+`google_vertex`. The private key, JWT, and access token are never logged
+(`providers_loaded` reports `has_api_key=false`; the startup log shows
+`auth=google_sa`). Bring the stack up with `-f docker-compose.gemini-vertex.yaml`.
+Full bring-up + role-alias seeding: [`docs/rich-chat-and-artifacts.md`](rich-chat-and-artifacts.md).
+
 ### D. LM Studio — fully local, no key, no spend
 Run a model locally in [LM Studio](https://lmstudio.ai) (its server listens on
 `:1234`). From inside the compose network, the host is `host.docker.internal`:

@@ -1,129 +1,169 @@
-# Rich chat + artifacts — and bringing it up on a fresh rig
+# Bringing the substrate up on a fresh rig (+ what rich chat / artifacts added)
 
-This is the operational companion to
-[`.spec/proposals/rich-chat-and-artifacts.md`](../.spec/proposals/rich-chat-and-artifacts.md).
-It covers **what the rich-chat work added** and **exactly how to bring it up on
-a new machine** — so you can pull, build, and soak in everything in one pass.
+The operational companion to the rich-chat/artifacts work — **what it added** and
+**exactly how to bring the whole stack up on a new machine** so you can pull,
+build, and soak it in one pass. This is the canonical fresh-rig / work-box guide.
 
 If you only read one thing: the stack comes up with `docker compose up`, but the
-two showpiece capabilities (generate documents, reason over uploads) each need an
-**overlay** + a **runtime image** + a **model that can drive multi-step tools**.
-That last requirement is the current catch on a Gemini-only box — see
-[Known rough edges](#known-rough-edges).
+showpiece capabilities (generate documents, reason over uploads) need their
+**overlays**, and the two sandbox capabilities need a host **docker socket** that
+the overlays mount into the bridge. **Bring it up — and recreate it — with the
+overlay `-f` flags, every time** (see the callout in step 4). On a work box that
+can't run a local model, register **Vertex Gemini (no-train)** as the provider.
 
 ---
 
-## What's new
+## What's new (since the doc-extract / rich-docs P3·P4 base)
 
-Four arcs, all on top of the rich-docs (P3/P4) doc-extract work:
+- **doc-build (the showpiece).** Ask for a document and the substrate *builds* it:
+  a dev agent writes a generator script in the coder sandbox (stocked with
+  python-docx/pptx, openpyxl, reportlab, Pillow + pandoc + wkhtmltopdf), runs it,
+  self-corrects, and exports a real **downloadable** pdf/xlsx/pptx/docx/zip via
+  `coder_export_artifact`. Pipeline `doc-build` (`extension/50-doc-build.sql`),
+  spawnable from chat (`/generate`).
+- **Artifact-exists gate** (`51`) — a doc-build that completes without exporting a
+  file is flipped to `failed`, never a false "success."
+- **Dispatcher-owned session_id** (`52`) — `generate_image` attaches to the chat
+  it runs in even when the model fumbles the session id (the dispatcher overrides
+  it). `coder_export_artifact` is deliberately *excluded* — it routes its export
+  to the spawning chat via the pipeline template, on purpose.
+- **The Stewdio cockpit** (`/stewdio`): chat-with-a-work-item, a **Sessions** panel
+  that groups chats hierarchically under their project/work-item/doc (collapsible),
+  **live work-item cards** that walk a spawned pipeline plan→build→deliver in chat,
+  a **Models & usage** panel, **rich artifact cards** (downloads render as cards),
+  a grounding picker that defaults to the open doc, VS-Code-style **edge collapse
+  rails**, and `generate_image` (Gemini Nano Banana).
+- **Brainstorm + delegation from chat** — "brainstorm ways to…" runs a real
+  brainstorm; "generate a PDF of…" delegates to `doc-build`.
+- **Chat across everything** — the empty-chat lens picker has "✸ Everything (whole
+  pool)" and per-project corpora.
+- **Native Vertex Gemini (no-train)** — a `google_sa` provider auth mode mints a
+  service-account OAuth token in the bridge, so Gemini drives the agentic tool
+  loop directly (no proxy) on the work-confidential, no-train path.
+- **In-loop retry/backoff** — a transient `429/503` mid-tool-loop is retried with
+  backoff instead of failing the stage (tunable `STEWARDS_HTTP_RETRY_MAX` /
+  `STEWARDS_HTTP_RETRY_BASE_MS`).
 
-- **Arc A — chat polish.** Drag-drop a file onto the chat; links in replies + the
-  doc viewer navigate (internal `doc:slug` / `wi:id`) or open (external); ⬇ exports
-  a conversation (`/api/chat/export`) or a doc (`/api/studies/export`); ■ stops a
-  running turn; hover a message for copy / retry / ⊕-task; type **`/`** for a
-  command palette (`/task /generate /extract /import /export`).
-- **Arc B — doc-build (the showpiece).** Ask for a document and the substrate
-  *builds* it: a dev agent writes a generator script in the coder sandbox (now
-  stocked with python-docx/pptx, openpyxl, reportlab, Pillow + pandoc +
-  wkhtmltopdf), runs it, self-corrects, and exports a real **downloadable**
-  pdf/xlsx/pptx/docx/zip via `coder_export_artifact`. Pipeline `doc-build`
-  (`extension/50-doc-build.sql`), spawnable from chat.
-- **Arc C — remote MCP.** `stewards-mcp -http-addr 127.0.0.1:8092` serves a
-  **read-only** tool surface (`doc_*` + inspection) over HTTP at `/mcp` with
-  bearer-token auth — point Claude Code / Codex at the substrate's knowledge.
-  Local-bound first; non-loopback bind without a token is refused.
-- **Arc D — chat across everything.** The empty-chat lens picker gains
-  "✸ Everything (whole pool)" → search across every work item + doc.
-
-Plus two hardening fixes from running it end-to-end (`extension/51-rich-chat-hardening.sql`):
-
-- **Artifact-exists gate** — a doc-build that completes without exporting a file
-  is flipped to `failed` (not a false "success").
-- **chat → brainstorm** and **chat → /generate delegation** — the chat can now
-  kick a real brainstorm (`start_brainstorm`, 12 techniques) and, asked to
-  "generate a PDF," delegates to `doc-build` instead of apologizing it can't emit
-  files.
-
-Authored chain is now **00→51**; `tests/virgin-smoke.sql` asserts through OK 41.
+Authored chain is now **00→52**; `tests/virgin-smoke.sql` asserts through **OK 42**.
 
 ---
 
 ## Bringing it up on a fresh rig
 
-### 0. Prereqs
-Docker + Docker Compose, and a clone of this repo. Everything below runs from the
-repo root.
+Everything runs from the repo root. `STEWARDS_PG_CONTAINER`/container names assume
+the compose project `pg-ai-stewards-oss` (containers `stewards-oss-pg` etc.).
 
 ### 1. Build the images
-The Postgres image bakes the **whole authored chain (00→51)** — a fresh clone +
+The Postgres image bakes the **whole authored chain (00→52)** — a fresh clone +
 build gets the gate, doc-build, everything. The two sandbox runtimes are separate
 images you build once.
 
 ```bash
-docker compose build                 # pg (chain 00→51) + bridge + ui + persona-host
+docker compose build                 # pg (chain 00→52) + bridge + ui + persona-host
 docker build -f extension/coder-runtime.Dockerfile -t coder-runtime:latest extension   # doc-build sandbox (doc toolchain)
 docker build -f extension/doc-extract.Dockerfile   -t doc-extract:latest   .           # doc-extract sandbox (upload handling)
 ```
 
-### 2. Configure `.env`
-Copy `.env.example` → `.env`. The key choice for a work box that **can't run a
-local model**: register **Gemini** as the provider.
+### 2. Configure `.env` — the provider
+Copy `.env.example` → `.env`. For a work box that **can't run a local model**,
+choose ONE Gemini path:
 
+**A. Vertex service account — NO-TRAIN, work-confidential (recommended for work).**
+A paid Vertex SA does not train on your data and authenticates with a rotating
+OAuth token (minted in the bridge by `gcp_sa.rs` — the SA key never enters env).
+Set the provider + drop the SA json on the host:
+
+```bash
+STEWARDS_PROVIDER_GOOGLE_VERTEX_KIND=openai
+STEWARDS_PROVIDER_GOOGLE_VERTEX_BASE_URL=https://aiplatform.googleapis.com/v1/projects/<PROJECT>/locations/global/endpoints/openapi
+STEWARDS_PROVIDER_GOOGLE_VERTEX_AUTH=google_sa
+STEWARDS_PROVIDER_GOOGLE_VERTEX_CREDENTIALS_FILE=/secrets/gemini-sa.json
+STEWARDS_PROVIDER_GOOGLE_VERTEX_DEFAULT_MODEL=google/gemini-3.1-pro-preview
+GEMINI_SA_FILE=/host/path/to/gemini-sa.json     # mounted read-only into pg by the gemini-vertex overlay
+```
+Model ids carry the **`google/`** publisher prefix. The provider name is
+`google_vertex`.
+
+**B. AI-Studio key — TRAINS on your data (public material only).**
 ```bash
 STEWARDS_PROVIDER_GOOGLE_GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
 STEWARDS_PROVIDER_GOOGLE_GEMINI_API_KEY=<your key>
 ```
+> ⚠ An AI-Studio free key **trains on your data** — fine for public content, *not*
+> for anything confidential. Use path A for work-confidential material.
 
-> **Privacy:** an AI-Studio free key **trains on your data** — fine for public
-> material, *not* for anything confidential. For work-confidential content use a
-> **paid / Vertex** Gemini key (no-train), or don't route that content to Gemini.
+(Full provider guide: [`docs/wiring-up-models.md`](wiring-up-models.md).)
 
-### 3. Point the role aliases at Gemini
-Pipelines and the chat dispatch by **role** (`reason`, `ingest`, `critic`,
-`vision`), not a concrete model. The public defaults point at opencode; on a
-Gemini-only rig, seed Gemini members at **priority 0** so they win (lower =
-preferred). See [`examples/models.sql`](../examples/models.sql) for the model
-catalog seed, then:
+### 3. Point the role aliases at your provider
+Pipelines and chat dispatch by **role** (`reason`, `ingest`, `critic`, `vision`),
+not a concrete model. The public defaults point at opencode; seed your provider's
+members at **priority 0** so they win (lower = preferred). For Vertex (path A):
 
 ```sql
 INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority, notes) VALUES
-  ('reason', 'google_gemini', 'gemini-3-pro-preview',  0, 'work rig: strong doer'),
-  ('ingest', 'google_gemini', 'gemini-3.5-flash',      0, 'work rig: big-context doer'),
-  ('critic', 'google_gemini', 'gemini-3-pro-preview',  0, 'work rig: reviewer'),
-  ('vision', 'google_gemini', 'gemini-3-pro-preview',  0, 'work rig: vision (image turns)')
+  ('reason', 'google_vertex', 'google/gemini-3.1-pro-preview', 0, 'work rig: strong doer'),
+  ('ingest', 'google_vertex', 'google/gemini-3.5-flash',       0, 'work rig: big-context doer'),
+  ('critic', 'google_vertex', 'google/gemini-3.1-pro-preview', 0, 'work rig: reviewer'),
+  ('vision', 'google_vertex', 'google/gemini-3.1-pro-preview', 0, 'work rig: vision (image turns)')
 ON CONFLICT (alias, provider, provider_model) DO NOTHING;
 ```
-(Full guide: [`docs/wiring-up-models.md`](wiring-up-models.md).)
+(For path B use provider `google_gemini` and bare model ids, e.g. `gemini-3.5-flash`.)
 
-### 4. Bring the stack up — with the overlay that enables docs
-A plain `docker compose up -d` gives you the core + chat. To get **doc-build**
-*and* **doc-extract** (uploads) *and* the **ClamAV auto-refresh**, bring it up with
-the doc-extract overlay — it provides the docker socket (once) and the freshclam
-sidecar, and the coder runtime rides the same socket:
+### 4. Bring the stack up — WITH the overlays
+A plain `docker compose up -d` gives the core + chat. For **doc-build**,
+**doc-extract** (uploads + ClamAV), and the **Vertex SA** key mount, bring it up
+with their overlays:
 
 ```bash
-docker compose -f docker-compose.yaml -f docker-compose.doc-extract.yaml up -d
+docker compose \
+  -f docker-compose.yaml \
+  -f docker-compose.coder.yaml \
+  -f docker-compose.doc-extract.yaml \
+  -f docker-compose.gemini-vertex.yaml \
+  up -d
 ```
 
-> The docker socket is **host-root-equivalent** — read `SECURITY.md` and prefer a
-> box you trust with that. If you also want repo-mode coder (`code-pr`, which
-> clones), add `-f docker-compose.coder.yaml` for the `coder-worktrees` volume,
-> but then delete the duplicate `bridge.volumes` socket line from one overlay
-> (compose errors on a duplicate mount target). doc-build itself does **not** need
-> coder-worktrees.
+> **⚠ The overlay flags are load-bearing — and they matter on RECREATE too.** The
+> coder + doc-extract overlays mount the host `/var/run/docker.sock` into the
+> bridge so the sandbox tools can spawn sibling containers. If you later recreate
+> a service with fewer `-f` flags (e.g. `docker compose up -d --force-recreate
+> bridge` after a rebuild), the bridge **silently loses the socket** and
+> doc-build/doc-extract fail with `Cannot connect to the Docker daemon`. Always
+> repeat the SAME `-f` overlay flags on any `up`/recreate. Make a shell alias:
+> ```bash
+> alias stew='docker compose -f docker-compose.yaml -f docker-compose.coder.yaml -f docker-compose.doc-extract.yaml -f docker-compose.gemini-vertex.yaml'
+> stew up -d                 # bring up / recreate, overlays intact
+> ```
+> The docker socket is **host-root-equivalent** — prefer a box you trust (read
+> `SECURITY.md`). If compose complains about a duplicate `/var/run/docker.sock`
+> mount, comment out the socket line in ONE of the coder / doc-extract overlays
+> (either provides it). doc-build does not need `coder-worktrees`; only `code-pr`
+> (repo cloning) does.
 
-### 5. Register the sandbox tools
-The MCP tool catalog is a grant table; after the bridge is up with new servers,
-refresh it so `coder_export_artifact`, `doc_extract`, etc. are callable:
+### 5. Register the sandbox + image tools
+The MCP tool catalog is a grant table; after the bridge is up, refresh it so
+`coder_export_artifact`, `doc_extract`, `generate_image`, etc. are callable:
 
 ```bash
 docker exec stewards-oss-bridge stewards-mcp bridge refresh-tools
 ```
 
-### 6. Verify
+### 6. Backfill the book corpus (so chats can quote the library)
+The book studies ship as docs, but their SOURCE text (for `book_search` verbatim
+quoting) is gitignored DB data — empty on a fresh deploy. Repopulate it:
+
 ```bash
-# the authored chain is sound on a virgin boot (00→51, OK 41):
+STEWARDS_PG_CONTAINER=stewards-oss-pg python examples/backfill-book-corpus.py
+```
+Idempotent; fetches each public-domain source and persists `book_text`/`book_chunks`.
+
+### 7. Verify
+```bash
+# the authored chain is sound on a virgin boot (00→52, through OK 42):
 docker exec -i stewards-oss-pg psql -U stewards -d stewards -v ON_ERROR_STOP=1 < tests/virgin-smoke.sql
+
+# providers loaded (the startup log shows auth=google_sa for Vertex, no key material):
+docker logs stewards-oss-pg 2>&1 | grep "stewards:   provider"
 
 # the UI cockpit:
 open http://127.0.0.1:8081/stewdio        # (or your PG_PORT-adjacent UI port)
@@ -136,33 +176,33 @@ STEWARDS_MCP_HTTP_TOKEN=<token> docker exec -e STEWARDS_MCP_HTTP_TOKEN stewards-
 ---
 
 ## Using it
-- **Generate a document:** in chat, type `/generate` (or just "generate a one-page
-  PDF brief of …"). The chat spawns `doc-build`; watch the plan→build→deliver
-  stages in the cockpit; the finished file comes back as a download link in the
-  conversation.
-- **Brainstorm:** "brainstorm ways to …" → the chat runs a brainstorm (six-hats /
-  SCAMPER / TRIZ / …).
-- **Reason over an upload:** drag a PDF/Office doc/zip onto the chat; it's
-  extracted in the no-network sandbox and becomes subject material.
-- **Chat across everything:** open a chat with no work item selected → pick
-  "✸ Everything" or a project lens.
-- **Export:** ⬇ on a conversation or a doc.
+- **Generate a document:** `/generate` (or "generate a one-page PDF brief of …").
+  The chat spawns `doc-build`; the cockpit shows a live card walking
+  plan→build→deliver; the file comes back as a download card in the conversation.
+- **Brainstorm:** "brainstorm ways to …" → six-hats / SCAMPER / TRIZ / …
+- **Reason over an upload:** drag a PDF/Office doc/zip onto the chat → extracted in
+  the no-network sandbox → subject material.
+- **Quote a book:** ask about a digested book; `book_search` returns verbatim
+  passages from the backfilled corpus (and refuses paraphrases).
+- **Sessions:** the Sessions panel groups every chat under its project; reopen any.
+- **Collapse a column:** the `❮` / `❯` edge rails collapse the leftmost / rightmost
+  panel (dock Sessions on the left and the left rail collapses it).
 
 ---
 
 ## Known rough edges
-
-- **✅ Gemini's multi-step tool loop works** (was broken; fixed in the bgworker —
-  three layered Gemini OpenAI-compat divergences: `finish_reason="stop"` with
-  tool_calls, streaming tool_calls with no `index`, and the Gemini-3.x
-  `thought_signature` that must round-trip). **gemini-3.1-pro drives doc-build
-  end-to-end** (plan→build→deliver, real PDF). qwen's path is unchanged. Make sure
-  the work rig has this commit. Note: `gemini-3-flash-preview` currently 503s
-  ("high demand") — prefer **`gemini-3.1-pro-preview`** (strong, drives the loop)
-  or `gemini-3.5-flash`.
-- **A raw `model_override` skips alias-failover** — a 503 on a pinned model hard-
-  fails the run. Prefer a role alias (with fallback members) over a concrete id.
-- **Speed (local model):** doc-build is 4–10 min/doc on a local model and slower
-  when runs are concurrent (one rig serializes them) — run one at a time.
-- **Rich artifact cards** are deferred — generated docs come back as a download
-  link, not yet an inline card.
+- **Vertex preview-model 429s.** `gemini-3.1-pro-preview` is a low-RPM preview and
+  can `429 Resource exhausted` mid-run; the in-loop retry/backoff absorbs transient
+  blips, and a higher-RPM model (`gemini-3.5-flash`) completes more reliably. The
+  `reason` *alias* (with fallback members) is more robust than a pinned
+  `model_override` (which skips alias-failover; a hard 503 fails the run).
+- **coder_read of a generated binary can wedge the loop** (known, fix pending): a
+  tool result containing a null byte fails the bridge's jsonb result-write
+  (SQLSTATE 22P05) and the tool_dispatch hangs until the reaper. Avoid asking the
+  agent to `coder_read` a generated binary; export it directly. (Tracked.)
+- **Speed (local model):** doc-build is several minutes/doc and slower when runs
+  are concurrent (one rig serializes them) — run one at a time.
+- **Gemini multi-step tool loop** is fixed (the bgworker handles
+  `finish_reason="stop"`-with-tool_calls, missing streaming `index`, and the
+  Gemini-3.x `thought_signature` round-trip) — make sure the work rig has that
+  commit (it's in the chain you're cloning).
