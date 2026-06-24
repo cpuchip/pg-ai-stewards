@@ -1869,7 +1869,10 @@ BEGIN
   ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
                   WHERE agent_family='work-item-chat' AND tool_pattern='start_brainstorm' AND action='allow'),
      '51: work-item-chat must be granted start_brainstorm (chat→brainstorm)';
-  RAISE NOTICE 'OK 41: artifact gate (empty doc-build → failed) + chat→brainstorm grant';
+  ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                  WHERE agent_family='work-item-chat' AND tool_pattern='generate_image' AND action='allow'),
+     '51: work-item-chat must be granted generate_image';
+  RAISE NOTICE 'OK 41: artifact gate (empty doc-build → failed) + chat→brainstorm + generate_image grants';
 END $$;
 
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→51) is sound =='

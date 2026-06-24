@@ -124,6 +124,7 @@ func main() {
 	registerBrainstormTools(srv, pool)
 	registerModelTools(srv, pool)
 	registerRedlineTools(srv, pool)
+	registerImageTools(srv, pool) // generate_image (Gemini Nano Banana → chat attachment); NOT on the read-only HTTP profile
 
 	log.Printf("server starting on stdio (mcp protocol)")
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {

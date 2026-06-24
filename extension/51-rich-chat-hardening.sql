@@ -73,6 +73,21 @@ UPDATE stewards.agents
  WHERE family = 'work-item-chat' AND model_match = '*'
    AND prompt NOT LIKE '%pipeline="doc-build"%';
 
+-- ── §4 — generate_image (Gemini Nano Banana) ───────────────────────
+-- A core stewards-mcp tool: text→image, stored as a chat attachment (kind=image)
+-- so it renders inline + rides the artifact cards. Grant to the chat (generate on
+-- request) and dev (embed images in doc-build outputs). Needs the google_gemini
+-- provider key; absent it the tool returns a clear error (no breakage).
+INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
+  ('work-item-chat', 'generate_image', 'allow', 'manual'),
+  ('dev',            'generate_image', 'allow', 'manual')
+ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET action = EXCLUDED.action;
+
+UPDATE stewards.agents
+   SET prompt = prompt || E'\n\nYou can also GENERATE IMAGES: call generate_image with a vivid prompt + the session id when the user wants a picture, diagram, icon, or illustration. It returns an image that renders inline in the chat.'
+ WHERE family = 'work-item-chat' AND model_match = '*'
+   AND prompt NOT LIKE '%generate_image%';
+
 -- =====================================================================
 -- End of 51-rich-chat-hardening.sql
 -- =====================================================================

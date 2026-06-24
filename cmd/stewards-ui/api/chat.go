@@ -116,6 +116,11 @@ func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
 			g = fmt.Sprintf("(Context: you are discussing the work item / study doc identified by %q. "+
 				"Use your retrieval tools — doc_get, doc_search, investigate_session — to ground every answer in it.)", ref)
 		}
+		// tell the agent its own session id so session-scoped tools (generate_image,
+		// doc-build's coder_export_artifact) attach their output to THIS conversation
+		// rather than guessing a placeholder session.
+		g += fmt.Sprintf(" (Your chat session id is %q — pass it as session_id to any tool that accepts one, "+
+			"e.g. generate_image, so its output appears in this conversation.)", sid)
 		grounding = &g
 	}
 
