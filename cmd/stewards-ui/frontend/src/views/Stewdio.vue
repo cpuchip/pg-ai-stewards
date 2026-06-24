@@ -5,7 +5,7 @@
 // P4: the panel layout is serialized to localStorage (toJSON/fromJSON) so a
 // user's arrangement survives reloads; "⟲ layout" resets to the default.
 // Spec: .spec/proposals/stewards-studio.md.
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { DockviewVue, type VueComponent } from 'dockview-vue'
 import type { DockviewApi, DockviewReadyEvent } from 'dockview'
 import 'dockview-core/dist/styles/dockview.css'
@@ -16,10 +16,11 @@ import ChatPanel from './stewdio/ChatPanel.vue'
 import SessionsPanel from './stewdio/SessionsPanel.vue'
 import ModelsPanel from './stewdio/ModelsPanel.vue'
 
-// touch the store so it's instantiated for the session (panels coordinate through it)
-useStewdioStore()
+// the shared cockpit store — panels coordinate through it; we read store.dev here
+// to drive the Developer toggle + gate the developer-only panes.
+const store = useStewdioStore()
 
-const LAYOUT_KEY = 'stewdio.layout.v2'
+const LAYOUT_KEY = 'stewdio.layout.v3' // v3: 'Library' rename + dev-pane pruning propagate to existing installs
 let dockApi: DockviewApi | null = null
 const showLauncher = ref(false)
 const openPanelIds = ref<string[]>([]) // reactive — which panes are currently open (launcher dots)
@@ -91,13 +92,15 @@ const components: Record<string, VueComponent> = {
 }
 
 // the windowing manager's catalog — every pane the user can open/reopen.
-const PANELS: { id: string; component: string; title: string }[] = [
-  { id: 'browser', component: 'browser', title: 'Work items' },
+const PANELS: { id: string; component: string; title: string; dev?: boolean }[] = [
+  { id: 'browser', component: 'browser', title: 'Library' },
   { id: 'artifact', component: 'artifact', title: 'Artifact' },
   { id: 'chat', component: 'chat', title: 'Chat' },
   { id: 'sessions', component: 'sessions', title: 'Sessions' },
-  { id: 'models', component: 'models', title: 'Models' },
+  { id: 'models', component: 'models', title: 'Models', dev: true }, // ops introspection → Developer only
 ]
+// the Models pane is a developer surface; hide it from the launcher unless Developer is on.
+const visiblePanels = computed(() => PANELS.filter(p => store.dev || !p.dev))
 
 // open a panel by id — focus it if already open, else add it (reopens a closed pane).
 function openPanel(p: { id: string; component: string; title: string }) {
@@ -111,7 +114,7 @@ function openPanel(p: { id: string; component: string; title: string }) {
 // the default 3-zone layout: left → center → right, each docked to the right.
 function buildDefault(api: DockviewApi) {
   api.clear()
-  api.addPanel({ id: 'browser', component: 'browser', title: 'Work items' })
+  api.addPanel({ id: 'browser', component: 'browser', title: 'Library' })
   api.addPanel({
     id: 'artifact', component: 'artifact', title: 'Artifact',
     position: { referencePanel: 'browser', direction: 'right' },
@@ -134,6 +137,7 @@ function onReady(event: DockviewReadyEvent) {
     catch { try { api.clear() } catch { /* ignore */ } restored = false }
   }
   if (!restored) buildDefault(api)
+  closeDevPanes() // Dev OFF is authoritative: drop any dev-only pane a stale layout restored
 
   // persist on any layout change (lightly debounced) + keep the open-pane set fresh.
   const refreshOpen = () => { openPanelIds.value = api.panels.map(p => p.id) }
@@ -154,6 +158,18 @@ function resetLayout() {
   localStorage.removeItem(LAYOUT_KEY)
   if (dockApi) buildDefault(dockApi)
 }
+
+// Dev OFF is authoritative over the SCREEN, not just the launcher menu: close any
+// developer-only pane (PANELS dev:true) that a saved layout restored or that was
+// open when Developer was switched off. Without this the Models pane — the biggest
+// ops surface — could linger on the everyday view (visiblePanels only governs the
+// launcher list). Closing it also avoids the "closed → can't reopen" dead-end,
+// since the launcher re-lists it the moment Developer is back on.
+function closeDevPanes() {
+  if (!dockApi || store.dev) return
+  for (const p of PANELS.filter(x => x.dev)) dockApi.getPanel(p.id)?.api.close()
+}
+watch(() => store.dev, () => closeDevPanes())
 </script>
 
 <template>
@@ -175,7 +191,7 @@ function resetLayout() {
           class="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
           title="open or reopen a panel" @click="showLauncher = !showLauncher">▦ panels</button>
         <div v-if="showLauncher" class="absolute right-0 mt-1 w-40 rounded border border-zinc-800 bg-zinc-900 shadow-lg overflow-hidden">
-          <button v-for="p in PANELS" :key="p.id"
+          <button v-for="p in visiblePanels" :key="p.id"
                   class="w-full text-left px-2 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800 flex items-center justify-between"
                   @click="openPanel(p)">
             <span>{{ p.title }}</span>
@@ -186,6 +202,16 @@ function resetLayout() {
       <button
         class="text-[11px] text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
         title="reset the panel layout to the default" @click="resetLayout">⟲ layout</button>
+      <!-- the one surface, two depths switch — OFF keeps the everyday surface clean -->
+      <button
+        class="text-[11px] rounded px-1.5 py-0.5 border"
+        :class="store.dev
+          ? 'text-emerald-300 border-emerald-700/60 bg-emerald-900/30'
+          : 'text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border-zinc-800'"
+        :title="store.dev
+          ? 'Developer mode ON — power & ops surfaces shown. Click to return to the everyday surface.'
+          : 'Developer mode OFF — clean everyday surface. Click to reveal power & ops surfaces.'"
+        @click="store.dev = !store.dev">⚙ Dev</button>
     </div>
     <DockviewVue
       class="dockview-theme-abyss"

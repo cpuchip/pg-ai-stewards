@@ -1,5 +1,18 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
+
+// a ref backed by localStorage so a preference survives reload.
+function persisted<T>(key: string, initial: T) {
+  let start = initial
+  const raw = localStorage.getItem(key)
+  if (raw !== null) {
+    try { const p = JSON.parse(raw); if (typeof p === typeof initial) start = p as T } // ignore wrong-typed stale values
+    catch { /* malformed — use initial */ }
+  }
+  const r = ref<T>(start)
+  watch(r, (v) => { try { localStorage.setItem(key, JSON.stringify(v)) } catch { /* quota */ } })
+  return r
+}
 
 // Stewdio — the work-item cockpit's shared cross-panel state. The dockview
 // browser, artifact, chat, sessions, and models panels are mounted
@@ -14,8 +27,17 @@ export const useStewdioStore = defineStore('stewdio', () => {
   const selectedRef = ref<string | null>(null)
   const selectedKind = ref<SelectedKind | null>(null)
   const selectedTitle = ref<string>('')
-  // the chat model — a role alias resolves to the local rig in a work instance
+  // the chat model role — a power-user knob, session-only (NOT persisted): the
+  // select that changes it is Developer-gated, so persisting a non-default role
+  // would silently strand an everyday user on a role they can't see or reset.
   const chatModel = ref<string>('reason')
+
+  // Developer mode (streamline S4). OFF by default → the everyday surface hides
+  // power/ops introspection: the model-role select, provenance chips + the
+  // "🔧 retrieving" tool-call rows (ChatPanel), the raw input-JSON dump + the
+  // per-stage model column (ArtifactPanel), and the Models pane. ON brings the
+  // full power surface back. One flag, zero capability loss, persisted.
+  const dev = persisted<boolean>('stewdio.dev', false)
 
   // Sessions panel → chat coordination. requestedLens drives the empty-chat
   // lens (''/'__all__'/project name); requestedSession opens an exact chat. The
@@ -47,7 +69,7 @@ export const useStewdioStore = defineStore('stewdio', () => {
   }
 
   return {
-    projectFilter, selectedRef, selectedKind, selectedTitle, chatModel,
+    projectFilter, selectedRef, selectedKind, selectedTitle, chatModel, dev,
     requestedLens, requestedSession, select, openChat,
   }
 })

@@ -76,9 +76,10 @@ onUnmounted(stopPoll)
     <div v-else-if="wi">
       <div class="text-zinc-100 text-base font-medium mb-1">{{ wi.slug || wi.id }}</div>
       <div class="text-zinc-500 text-xs mb-4">
-        {{ wi.pipeline }} ·
+        <!-- pipeline family + maturity are ops jargon → Developer only; status (done/failed/running) stays -->
+        <span v-if="store.dev">{{ wi.pipeline }} · </span>
         <span :class="wi.status === 'completed' ? 'text-emerald-400' : wi.status === 'failed' || wi.status === 'cancelled' ? 'text-rose-400' : 'text-amber-400'">{{ wi.status }}</span>
-        <span v-if="wi.maturity"> · {{ wi.maturity }}</span>
+        <span v-if="store.dev && wi.maturity"> · {{ wi.maturity }}</span>
         <span v-if="poll !== null" class="text-amber-400 animate-pulse"> · live</span>
       </div>
 
@@ -89,19 +90,19 @@ onUnmounted(stopPoll)
           <span v-else-if="stageState(s.name) === 'active'" class="text-amber-400 animate-pulse">▸</span>
           <span v-else class="text-zinc-600">○</span>
           <span :class="stageState(s.name) === 'done' ? 'text-zinc-300' : stageState(s.name) === 'active' ? 'text-amber-300' : 'text-zinc-500'">{{ s.name }}</span>
-          <span class="text-zinc-700 text-[11px]">{{ s.model }}</span>
+          <span v-if="store.dev" class="text-zinc-700 text-[11px]">{{ s.model }}</span>
         </li>
-        <li v-if="!stages.length" class="text-zinc-600 text-xs">no stage plan for {{ wi.pipeline }}</li>
+        <li v-if="!stages.length" class="text-zinc-600 text-xs">no stage plan<span v-if="store.dev"> for {{ wi.pipeline }}</span></li>
       </ol>
 
-      <details v-if="wi.input" class="text-xs">
+      <details v-if="store.dev && wi.input" class="text-xs">
         <summary class="text-zinc-500 cursor-pointer">input</summary>
         <pre class="text-zinc-400 whitespace-pre-wrap mt-1">{{ JSON.stringify(wi.input, null, 2) }}</pre>
       </details>
     </div>
 
     <div v-else class="text-zinc-600">
-      Select a work item or doc on the left to view it here, or ＋ New to kick one off.
+      Select a work item or doc on the left to view it here, or ＋ New task to kick one off.
     </div>
   </div>
 </template>

@@ -413,11 +413,14 @@ function onKey(e: KeyboardEvent) {
           <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}<span v-if="p.doc_count"> ({{ p.doc_count }})</span></option>
         </select>
       </div>
-      <button v-if="chatRef" class="text-sky-400 hover:text-sky-300" title="new conversation" @click="newSession">＋ New</button>
-      <select v-model="store.chatModel" class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] text-zinc-300">
+      <button v-if="chatRef" class="text-sky-400 hover:text-sky-300" title="new conversation" @click="newSession">＋ New chat</button>
+      <!-- model-role select is a developer surface (raw aliases) — ducked unless Developer is on -->
+      <select v-if="store.dev" v-model="store.chatModel" title="model role (developer)"
+              class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] text-zinc-300">
         <option value="reason">reason</option>
         <option value="ingest">ingest</option>
         <option value="critic">critic</option>
+        <option value="vision">vision</option>
       </select>
     </div>
 
@@ -468,7 +471,8 @@ function onKey(e: KeyboardEvent) {
             <button class="hover:text-zinc-300" title="start a task from this" @click="startTaskFrom(m)">⊕ task</button>
           </div>
         </div>
-        <div v-else-if="m.role === 'assistant' && m.tool_calls > 0" class="flex items-center gap-1 text-[11px] text-zinc-600">
+        <!-- provenance / tool-call introspection — a developer surface (ducked unless Developer is on) -->
+        <div v-else-if="store.dev && m.role === 'assistant' && m.tool_calls > 0" class="flex items-center gap-1 text-[11px] text-zinc-600">
           <span class="italic">🔧 retrieving</span>
           <span v-for="c in facetChips(m.tools)" :key="c"
                 class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-400">{{ c }}</span>

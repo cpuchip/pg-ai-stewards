@@ -80,7 +80,7 @@ watch(() => store.projectFilter, loadItems)
         <option v-for="p in projects" :key="p.slug" :value="p.slug">{{ p.name || p.slug }}</option>
       </select>
       <button class="text-xs px-2 py-1 rounded bg-sky-600/30 border border-sky-700/50 text-sky-300 hover:bg-sky-600/50"
-              @click="showLaunch = !showLaunch" title="kick off a pipeline">＋ New</button>
+              @click="showLaunch = !showLaunch" title="kick off a pipeline">＋ New task</button>
     </div>
 
     <div v-if="showLaunch" class="px-3 py-2 border-b border-zinc-800 bg-zinc-900/50 space-y-2">
