@@ -1,6 +1,6 @@
 # Doc-extract sandbox — safely turning untrusted documents into model-readable subject material
 
-**Status:** 🟡 DESIGN — for council ratification (NOT yet ratified). New standing capability (untrusted-file processing) → `dominion_in_council`: ratify before building.
+**Status:** ✅ RATIFIED in council with Michael, 2026-06-24 (`dominion_in_council` satisfied — new standing capability, untrusted-file processing, approved to build). Execution-ready; P3a is the trust floor.
 **Author:** agent + Michael, 2026-06-24.
 **One line:** Process untrusted uploaded documents (PDF / office / HTML) inside a hardened, no-network sandbox and let **only pixels or plain text** cross the trust boundary — a four-layer defense (scan → contain → disarm-by-non-execution → content-gate) where text is always extracted (tabula, Go, full office) and pixels are an additive overlay for visual docs. Structurally safer than the unsandboxed-parser industry default.
 **Builds on:** the coder-pr sandbox (`cmd/coder-mcp/sandbox`), the rich-docs P1/P2 vision path (`content_parts` + `chat_attachments`), the book corpus (`examples/book-corpus.sql`), `fetch-md-mcp`'s extractors, the existing prompt-injection defense in `compose_messages`.
@@ -50,9 +50,9 @@ The router records what it did (so a 200-page PDF is text + maybe first/key page
 
 ## 3.5. Archives & folders — drop a zip, get a corpus (per Michael)
 
-Upload a **zip** (or tar) holding one-to-many files in a folder structure → the sandbox unpacks it → **each member runs the per-file pipeline** (scan → text + pixels) → the result is a **folder tree** the chat can *work with* (reference files by path, ask across them) or *import* as a corpus/project.
+Upload an **archive — zip, 7z, tar, or the compressed family (gz/bz2/xz)** *(Michael, 2026-06-24: "we should support 7zip")* — holding one-to-many files in a folder structure → the sandbox unpacks it → **each member runs the per-file pipeline** (scan → text + pixels) → the result is a **folder tree** the chat can *work with* (reference files by path, ask across them) or *import* as a corpus/project. Engine: **`mholt/archives`** (pure-Go, one library for zip/tar/7z/rar/gz/bz2/xz with format auto-detection by magic bytes; 7z/rar are read-only — all we need). Fits the Go-only preference.
 
-**This is the highest-risk input** — and the reason the scan + sandbox layers matter most. The unpack is the dangerous step, so it happens **inside the no-network sandbox** under strict, enforced caps (Go's `archive/zip` is pure-Go — fits the preference):
+**This is the highest-risk input** — and the reason the scan + sandbox layers matter most. 7z's very high compression ratio makes decompression bombs nastier, so the ratio/size caps below are load-bearing. The unpack is the dangerous step, so it happens **inside the no-network sandbox** under strict, enforced caps:
 
 | Threat | Guard |
 |---|---|
@@ -136,11 +136,20 @@ Defense in depth, cheapest-and-broadest first. No single layer is trusted alone.
 1. **Isolation tier v1 = container + no-net** (reuse the coder spine + read-only/tmpfs/nofile delta). **gVisor `runsc` is SKIPPED for now** — revisit once Michael confirms `runsc` installs on KC NOCIX + the work VM (he has root on both). *(Michael, 2026-06-24: "skip visor until I can confirm.")*
 2. **Text always + pixels overlay** — text is extracted for every readable doc (cheap, models excel at it), pixels added for visual/short docs (page-count threshold, user can force-render). NOT pixels-XOR-text. *(Michael, 2026-06-24: "even for short PDFs I'd still want text too… I want images too.")*
 2b. **Scan layer = (c) BOTH — RATIFIED** *(Michael, 2026-06-24: "lets go c combo!")*: **ClamAV** (sealed: engine in-image + DB-via-volume + networked freshclam sidecar) **+ a structural maldoc check** (oletools/pdfid). Scans **every file** (incl. each member extracted from an archive — §3.5). Early-reject known-bad + flag macros/JS to the user; sits on top of the sandbox, runs sealed itself. The Python (oletools/pdfid) runs only inside the sealed sandbox — never touches our Go code or the host — so the Go-purity preference holds at our surface. A Go-only minimal check (option d in §5) remains the fallback if image weight bites.
-2c. **Archive / folder upload — RATIFIED in scope** (§3.5) *(Michael, 2026-06-24: "drop a zip with 1 or many files/folder structure to work with or import")*: a zip (or tar) unpacks in the sandbox under strict caps, each member runs the per-file pipeline (scan → text + pixels), and the result is a folder tree the chat can work with OR import as a corpus/project.
+2c. **Archive / folder upload — RATIFIED in scope** (§3.5) *(Michael, 2026-06-24: "drop a zip… to work with or import" + "we should support 7zip")*: **zip / 7z / tar / gz-bz2-xz** (engine `mholt/archives`, pure-Go) unpacks in the sandbox under strict bomb/slip caps, each member runs the per-file pipeline (scan → text + pixels), and the result is a folder tree the chat can work with OR import as a corpus/project.
 3. **Engines = Go-first, full office, already in-tree:** **`tabula`** (pure-Go) for PDF/DOCX/XLSX/PPTX/ODT/EPUB → markdown (Path B), in-tree readability+html-to-markdown for HTML, **poppler `pdftoppm`** for PDF→pixels (Path A). **No markitdown, no Python.** libreoffice only for the optional *faithful office→pixels* upgrade tier. Docling deferred as a table-heavy upgrade. *(Michael, 2026-06-24: "Go only to keep it light" + "full office support" — tabula satisfies both; he'd used it before via fetch-md.)*
 4. **`is_safe` gate on extracted text, not bytes** — layered on the existing injection regex; pixels ungated.
 5. **A separate lean `doc-extract` image** (Go binary + poppler), not the coder image.
 6. **One lane serves both** rich-docs P3 and the digester-reads-repos item.
+
+## 8.5. Council moment (Abraham 4:26 — what to watch before building)
+
+Scanned before ratifying. Blind spots to carry into P3a:
+- **ClamAV DB freshness is the silent-degrade risk.** The air-gapped scanner uses a DB that *rots* without the `freshclam` sidecar actually running on NOCIX — it keeps catching old malware but misses new. Make the sidecar a real, scheduled part of the compose, and surface DB age. (The structural check — oletools/pdfid — does NOT rot, since it's technique-based: a second reason (c)-combo earns its keep.)
+- **Image weight + pull/build time:** ClamAV DB (~300 MB) + poppler + Python (oletools/pdfid) + Go ≈ 700 MB–1 GB. Acceptable, but plan the first-pull cost on NOCIX; keep libreoffice out until the faithful-office-pixels tier is actually wanted.
+- **Trust boundary = the bridge (unchanged):** doc-extract reuses the coder spawn model — the bridge holds the docker socket (host-root-equiv); the extract container has none. No new exposure, but the bridge stays the thing to protect.
+- **CI weight:** virgin-smoke is fast SQL; the doc-extract smoke needs the image + adversarial samples (EICAR for AV, a macro docx for olevba, an `/OpenAction`-JS PDF for pdfid, a zip-slip zip, a small bounded zip-bomb). Put it in a SEPARATE CI lane — don't bloat virgin-smoke.
+- **Where the handler lives (decide in P3a):** deterministic, no LLM. Cleanest = a `doc-extract-mcp` mirroring `coder-mcp`'s sandbox-spawning pattern, called by the chat-attach path; alternative = a bridge handler. Lean to the former (it reuses the whole sandbox spine).
 
 ## 9. Open questions for council
 
