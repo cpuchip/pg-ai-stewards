@@ -193,9 +193,60 @@ async function send() {
   }
 }
 
+// Arc A: stop a running turn — cancel the queued chat row + stop the spinner.
+async function stop() {
+  pending.value = false
+  try { if (activeSession.value) await api.chatStop(activeSession.value) } catch { /* best effort */ }
+}
+
+// Arc A: message actions.
+async function copyMsg(m: Msg) { try { await navigator.clipboard.writeText(m.content) } catch { /* clipboard blocked */ } }
+function regenerateLast() {
+  // re-ask the most recent user turn
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const m = messages.value[i]
+    if (m && m.role === 'user' && visible(m)) { input.value = m.content; send(); return }
+  }
+}
+function startTaskFrom(m: Msg) {
+  // prefill the composer with a delegate framing; the agent's start_task does the rest
+  input.value = 'Start a task: ' + m.content
+}
+
+// Arc A: slash-command palette — type "/" to surface the substrate's capabilities.
+type Slash = { cmd: string; label: string; insert?: string; action?: () => void }
+const SLASH: Slash[] = [
+  { cmd: '/task',     label: 'Delegate — spawn a pipeline',           insert: 'Start a task: ' },
+  { cmd: '/generate', label: 'Generate a document (pdf/xlsx/pptx/zip)', insert: 'Generate a document: ' },
+  { cmd: '/extract',  label: 'Extract the attached document',          insert: 'Extract the attached document, then ' },
+  { cmd: '/import',   label: 'Import an attached archive as a corpus',  insert: 'Import the attached archive as a project corpus named ' },
+  { cmd: '/export',   label: 'Export this conversation (markdown)',     action: () => {
+      if (activeSession.value) window.open(`/api/chat/export?session_id=${encodeURIComponent(activeSession.value)}&format=md`, '_blank') } },
+]
+const slashIdx = ref(0)
+const slashMatches = computed(() => {
+  const t = input.value
+  if (!t.startsWith('/') || t.includes(' ')) return [] as Slash[]
+  return SLASH.filter(c => c.cmd.startsWith(t.toLowerCase()))
+})
+function applySlash(c: Slash) {
+  if (c.action) { c.action(); input.value = '' }
+  else { input.value = c.insert || '' }
+  slashIdx.value = 0
+}
+
 // hide the first-turn grounding context line; render the rest
 const visible = (m: Msg) => !(m.role === 'user' && m.content.startsWith('(Context:'))
-function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }
+function onKey(e: KeyboardEvent) {
+  const matches = slashMatches.value
+  if (matches.length) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); slashIdx.value = (slashIdx.value + 1) % matches.length; return }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); slashIdx.value = (slashIdx.value - 1 + matches.length) % matches.length; return }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); const c = matches[slashIdx.value] ?? matches[0]; if (c) applySlash(c); return }
+    if (e.key === 'Escape')    { input.value = ''; return }
+  }
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+}
 </script>
 
 <template>
@@ -245,7 +296,7 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
 
     <div ref="log" class="flex-1 overflow-auto px-3 py-3 space-y-3">
       <template v-for="m in messages" :key="m.id">
-        <div v-if="visible(m) && m.role === 'user'" class="flex justify-end">
+        <div v-if="visible(m) && m.role === 'user'" class="flex flex-col items-end group">
           <div class="max-w-[85%] bg-sky-600/20 border border-sky-700/40 text-zinc-100 rounded-lg px-3 py-2 text-sm">
             <div v-if="m.images && m.images.length" class="flex flex-wrap gap-1.5 mb-1.5">
               <img v-for="(src, i) in m.images" :key="i" :src="src"
@@ -253,9 +304,16 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
             </div>
             <div v-if="m.content" class="whitespace-pre-wrap">{{ m.content }}</div>
           </div>
+          <button class="mt-0.5 mr-1 text-[10px] text-zinc-600 hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition"
+                  title="copy" @click="copyMsg(m)">⧉ copy</button>
         </div>
-        <div v-else-if="m.role === 'assistant' && m.content.trim()" class="flex justify-start">
+        <div v-else-if="m.role === 'assistant' && m.content.trim()" class="flex flex-col items-start group">
           <div class="max-w-[90%] bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm prose prose-invert prose-sm max-w-none" v-html="md.render(m.content)" @click="onLink"></div>
+          <div class="flex gap-2 mt-0.5 ml-1 text-[10px] text-zinc-600 opacity-0 group-hover:opacity-100 transition">
+            <button class="hover:text-zinc-300" title="copy" @click="copyMsg(m)">⧉ copy</button>
+            <button class="hover:text-zinc-300" title="re-ask the last question" @click="regenerateLast()">↻ retry</button>
+            <button class="hover:text-zinc-300" title="start a task from this" @click="startTaskFrom(m)">⊕ task</button>
+          </div>
         </div>
         <div v-else-if="m.role === 'assistant' && m.tool_calls > 0" class="flex items-center gap-1 text-[11px] text-zinc-600">
           <span class="italic">🔧 retrieving</span>
@@ -263,7 +321,10 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
                 class="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 text-zinc-400">{{ c }}</span>
         </div>
       </template>
-      <div v-if="pending" class="text-zinc-500 text-xs italic">thinking…</div>
+      <div v-if="pending" class="flex items-center gap-2 text-xs">
+        <span class="text-zinc-500 italic">thinking…</span>
+        <button class="text-rose-400 hover:text-rose-300 border border-zinc-800 rounded px-1.5 py-0.5" title="stop" @click="stop">■ stop</button>
+      </div>
       <div v-if="!chatRef" class="text-zinc-600 text-sm">
         Select a work item or doc on the left to chat grounded in it — or pick a
         <span class="text-zinc-400">project lens</span> above to chat over a whole corpus.
@@ -283,6 +344,16 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
           <button class="absolute -top-1.5 -right-1.5 bg-zinc-800 border border-zinc-600 rounded-full w-4 h-4 text-[10px] leading-none text-zinc-300 hover:text-rose-400"
                   title="remove" @click="removeStaged(i)">×</button>
         </div>
+      </div>
+      <!-- Arc A: slash-command palette -->
+      <div v-if="slashMatches.length" class="mb-2 rounded border border-zinc-800 bg-zinc-900 overflow-hidden">
+        <button v-for="(c, i) in slashMatches" :key="c.cmd"
+                class="w-full text-left px-2 py-1 text-xs flex items-center gap-2"
+                :class="i === slashIdx ? 'bg-zinc-800' : 'hover:bg-zinc-800/60'"
+                @mouseenter="slashIdx = i" @click="applySlash(c)">
+          <span class="text-sky-300 font-mono">{{ c.cmd }}</span>
+          <span class="text-zinc-500">{{ c.label }}</span>
+        </button>
       </div>
       <div class="flex items-end gap-2">
         <button class="text-zinc-400 hover:text-sky-300 disabled:opacity-40 pb-2 text-lg leading-none"

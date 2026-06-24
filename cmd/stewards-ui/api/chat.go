@@ -32,6 +32,7 @@ func (d *Deps) registerChat(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/chat/attachment/{id}", d.chatAttachmentHandler) // rich-docs P2: serve the bytes (inline render)
 	mux.HandleFunc("GET /api/chat/projects", d.chatProjectsHandler)        // rich-docs P3d: the empty-chat lens picker
 	mux.HandleFunc("GET /api/chat/export", d.chatExportHandler)            // Arc A: export a session transcript (md/json)
+	mux.HandleFunc("POST /api/chat/stop", d.chatStopHandler)              // Arc A: cancel a session's not-yet-started chat turn(s)
 }
 
 // maxAttachmentBytes caps an uploaded file. Images fit comfortably; the :8090
@@ -443,6 +444,33 @@ func (d *Deps) chatProjectsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ── chat stop — cancel a session's pending chat turn(s) (Arc A). ──
+// POST /api/chat/stop {session_id}. Cancels work_queue rows that the bgworker
+// has not yet claimed (status='pending'); an already-in-progress turn completes
+// (the bgworker doesn't poll a cancel flag mid provider call), but the UI stops
+// waiting. Honest + easily-extended to a real mid-flight cancel later.
+func (d *Deps) chatStopHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.SessionID) == "" {
+		writeErr(w, http.StatusBadRequest, "session_id required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
+	tag, err := d.Pool.Exec(ctx,
+		`UPDATE stewards.work_queue
+		    SET status='error', error='cancelled by user', done_at=now()
+		  WHERE kind='chat' AND status='pending' AND payload->>'session_id' = $1`,
+		req.SessionID)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "stop: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"cancelled": tag.RowsAffected()})
 }
 
 // ── chat export — get a conversation OUT of the substrate (Arc A). ──

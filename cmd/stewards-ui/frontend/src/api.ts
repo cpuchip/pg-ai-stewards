@@ -543,6 +543,9 @@ export const api = {
   // rich-docs P3d: the empty-chat lens picker — projects/corpora to ground a chat in.
   chatProjects: () =>
     getJSON<{ projects: { name: string; doc_count: number }[] }>('/api/chat/projects'),
+  // Arc A: cancel a session's not-yet-started chat turn(s).
+  chatStop: (session_id: string) =>
+    postJSON<{ cancelled: number }>('/api/chat/stop', { session_id }),
   // rich-docs P2: upload media to a chat (multipart). Returns the attachment id +
   // a served URL for inline rendering; pass the id to chatSend.attachment_ids.
   chatAttach: async (file: File, opts: { session_id?: string; target_ref?: string }): Promise<ChatAttachResp> => {
