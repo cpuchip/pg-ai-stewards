@@ -169,9 +169,25 @@ function scheduleWorkItems() {
 }
 function refreshWork() { pollWorkItems().then(scheduleWorkItems) }
 
+// Stale-spinner guard: while "thinking", poll whether the session still has any
+// in-flight work_queue row. A loop that stops on steps_exhausted/truncation
+// leaves its last assistant message at finish_reason='tool_calls' — the SSE
+// stream never delivers a terminal message, so the spinner would stick forever.
+let pendingPoll: ReturnType<typeof setInterval> | null = null
+watch(pending, (now) => {
+  if (pendingPoll) { clearInterval(pendingPoll); pendingPoll = null }
+  if (!now) return
+  pendingPoll = setInterval(async () => {
+    const sid = activeSession.value
+    if (!sid) return
+    try { if (!(await api.chatSessionStatus(sid)).pending) pending.value = false } catch { /* ignore */ }
+  }, 5000)
+})
+
 function closeStream() {
   if (es) { es.close(); es = null }
   if (wiTimer) { clearTimeout(wiTimer); wiTimer = null }
+  if (pendingPoll) { clearInterval(pendingPoll); pendingPoll = null }
 }
 
 function openStream(sid: string) {

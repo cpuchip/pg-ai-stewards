@@ -30,6 +30,7 @@ func (d *Deps) registerChat(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/chat/sessions", d.chatSessionsHandler)        // Stewdio P4: multi-session history
 	mux.HandleFunc("GET /api/chat/sessions/all", d.chatSessionsAllHandler) // Sessions panel: EVERY chat session + its target
 	mux.HandleFunc("GET /api/chat/work-items", d.chatWorkItemsHandler)     // b2: work items spawned from a chat — live status cards
+	mux.HandleFunc("GET /api/chat/session-status", d.chatSessionStatusHandler) // is the loop still running? (clears a stale "thinking" spinner)
 	mux.HandleFunc("POST /api/chat/attach", d.chatAttachHandler)           // rich-docs P2: upload media to a chat
 	mux.HandleFunc("GET /api/chat/attachment/{id}", d.chatAttachmentHandler) // rich-docs P2: serve the bytes (inline render)
 	mux.HandleFunc("GET /api/chat/projects", d.chatProjectsHandler)        // rich-docs P3d: the empty-chat lens picker
@@ -527,6 +528,32 @@ func (d *Deps) chatWorkItemsHandler(w http.ResponseWriter, r *http.Request) {
 		out = append(out, it.card)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"work_items": out})
+}
+
+// GET /api/chat/session-status?session=… — is the chat loop still doing work?
+// True iff any work_queue row for this session (the chat turn, its tool_dispatch,
+// or a continuation) is pending/in_progress/waiting. The UI clears a stale
+// "thinking" spinner when this goes false — a loop that stops on steps_exhausted /
+// truncation leaves its last assistant message at finish_reason='tool_calls' (no
+// terminal message ever arrives), so the spinner can't rely on the stream alone.
+func (d *Deps) chatSessionStatusHandler(w http.ResponseWriter, r *http.Request) {
+	sid := strings.TrimSpace(r.URL.Query().Get("session"))
+	if sid == "" {
+		writeErr(w, http.StatusBadRequest, "session is required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	var pending bool
+	err := d.Pool.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM stewards.work_queue
+		   WHERE payload->>'session_id' = $1
+		     AND status IN ('pending','in_progress','waiting_for_tools'))`, sid).Scan(&pending)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "session-status: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"pending": pending})
 }
 
 // ── chat attachments — upload media as injectable subject material (P2). ──

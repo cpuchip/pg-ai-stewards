@@ -104,10 +104,15 @@ func makeWorkItemList(pool *pgxpool.Pool) func(
 		// Build query with optional filters. We use COALESCE-on-empty-string
 		// rather than dynamic SQL fragments to keep the call site one shape
 		// for pgx parameter binding.
+		// COALESCE every nullable column scanned into a non-pointer Go field —
+		// pipeline_family/current_stage/actor (text) and tokens/token_budget (int)
+		// are all nullable in work_items, and a single NULL aborts the whole row
+		// scan ("can't scan into dest[N]"). A launched item has a NULL token_budget;
+		// an early-stage item can have a NULL current_stage/actor.
 		query := `
-			SELECT id::text, COALESCE(slug,''), pipeline_family, current_stage,
-			       status, tokens_in, tokens_out, token_budget,
-			       actor, created_at, updated_at, completed_at
+			SELECT id::text, COALESCE(slug,''), COALESCE(pipeline_family,''), COALESCE(current_stage,''),
+			       status, COALESCE(tokens_in,0), COALESCE(tokens_out,0), COALESCE(token_budget,0),
+			       COALESCE(actor,''), created_at, updated_at, completed_at
 			  FROM stewards.work_items
 			 WHERE ($1 = '' OR pipeline_family = $1)
 			   AND ($2 = '' OR status = $2)
@@ -238,9 +243,9 @@ func makeWatchmanPassesList(pool *pgxpool.Pool) func(
 
 		rows, err := pool.Query(ctx, `
 			SELECT pass_id, status, trigger, started_at, finished_at,
-			       provider, model, agent_family,
-			       doc_count_planned, doc_count_done,
-			       tokens_in, tokens_out, token_budget, budget_stopped,
+			       COALESCE(provider,''), COALESCE(model,''), COALESCE(agent_family,''),
+			       COALESCE(doc_count_planned,0), COALESCE(doc_count_done,0),
+			       COALESCE(tokens_in,0), COALESCE(tokens_out,0), COALESCE(token_budget,0), COALESCE(budget_stopped,false),
 			       verdict_counts
 			  FROM stewards.watchman_passes
 			 ORDER BY started_at DESC
@@ -319,9 +324,9 @@ func makeWatchmanPassShow(pool *pgxpool.Pool) func(
 		var vc []byte
 		err := pool.QueryRow(ctx, `
 			SELECT pass_id, status, trigger, started_at, finished_at,
-			       provider, model, agent_family,
-			       doc_count_planned, doc_count_done,
-			       tokens_in, tokens_out, token_budget, budget_stopped,
+			       COALESCE(provider,''), COALESCE(model,''), COALESCE(agent_family,''),
+			       COALESCE(doc_count_planned,0), COALESCE(doc_count_done,0),
+			       COALESCE(tokens_in,0), COALESCE(tokens_out,0), COALESCE(token_budget,0), COALESCE(budget_stopped,false),
 			       verdict_counts
 			  FROM stewards.watchman_passes WHERE pass_id = $1`, in.PassID).Scan(
 			&p.PassID, &p.Status, &p.Trigger, &p.StartedAt, &p.FinishedAt,

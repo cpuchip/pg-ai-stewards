@@ -548,6 +548,10 @@ export const api = {
   // b2: work items this chat spawned — live status cards that walk the pipeline.
   chatWorkItems: (session: string) =>
     getJSON<{ work_items: ChatWorkItemCard[] }>(`/api/chat/work-items?session=${encodeURIComponent(session)}`),
+  // is the chat loop still doing work? clears a stale "thinking" spinner when a
+  // loop stops on steps_exhausted/truncation (no terminal message ever streams).
+  chatSessionStatus: (session: string) =>
+    getJSON<{ pending: boolean }>(`/api/chat/session-status?session=${encodeURIComponent(session)}`),
   // Rich artifact cards: metadata (no bytes) for an attachment id linked in a reply.
   chatAttachmentMeta: (id: number) =>
     getJSON<{ id: number; filename: string; mime_type: string; kind: string; byte_size: number }>(`/api/chat/attachment/${id}?meta=1`),
