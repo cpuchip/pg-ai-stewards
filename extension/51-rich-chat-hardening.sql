@@ -65,6 +65,14 @@ UPDATE stewards.agents
  WHERE family = 'work-item-chat' AND model_match = '*'
    AND prompt NOT LIKE '%start_brainstorm%';
 
+-- §3 — teach the chat to DELEGATE document generation (e2e finding: asked to
+-- "generate a PDF", the chat wrote it inline and said "I can't emit a file" —
+-- it did not realize it can spawn doc-build, which produces a real download).
+UPDATE stewards.agents
+   SET prompt = prompt || E'\n\nWhen the user asks you to GENERATE, CREATE, BUILD, or EXPORT a document — a PDF, spreadsheet (xlsx), slide deck (pptx), Word doc (docx), image, or zip bundle — do NOT write it inline and do NOT say you cannot emit files. You CAN: call start_task with pipeline="doc-build" and a binding_question describing the document and any source material to pull from the corpus. The doc-build pipeline writes a real, downloadable file the user receives in the cockpit. Only answer inline when the user wants the content IN the chat, not as a file.'
+ WHERE family = 'work-item-chat' AND model_match = '*'
+   AND prompt NOT LIKE '%pipeline="doc-build"%';
+
 -- =====================================================================
 -- End of 51-rich-chat-hardening.sql
 -- =====================================================================
