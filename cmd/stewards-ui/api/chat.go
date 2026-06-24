@@ -30,6 +30,7 @@ func (d *Deps) registerChat(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/chat/sessions", d.chatSessionsHandler)        // Stewdio P4: multi-session history
 	mux.HandleFunc("POST /api/chat/attach", d.chatAttachHandler)           // rich-docs P2: upload media to a chat
 	mux.HandleFunc("GET /api/chat/attachment/{id}", d.chatAttachmentHandler) // rich-docs P2: serve the bytes (inline render)
+	mux.HandleFunc("GET /api/chat/projects", d.chatProjectsHandler)        // rich-docs P3d: the empty-chat lens picker
 }
 
 // maxAttachmentBytes caps an uploaded file. Images fit comfortably; the :8090
@@ -95,10 +96,19 @@ func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
 
 	// grounding is seeded only on the first turn (dispatch_chat_turn checks for an
 	// empty session); harmless to pass every turn. NULL when there's no target.
+	// A "project:<name>" ref is the empty-chat lens (P3d): ground in a corpus
+	// rather than one work item — doc_search scopes the conversation to it.
 	var grounding *string
-	if strings.TrimSpace(req.TargetRef) != "" {
-		g := fmt.Sprintf("(Context: you are discussing the work item / study doc identified by %q. "+
-			"Use your retrieval tools — doc_get, doc_search, investigate_session — to ground every answer in it.)", req.TargetRef)
+	if ref := strings.TrimSpace(req.TargetRef); ref != "" {
+		var g string
+		if proj, ok := strings.CutPrefix(ref, "project:"); ok {
+			g = fmt.Sprintf("(Context: you are grounded in the project/corpus %q. Use doc_search to find and quote "+
+				"its documents. Attached documents are injected as subject material — call doc_extract on any "+
+				"not-yet-read attachment, and doc_import_corpus to fold an uploaded archive/folder into this project.)", proj)
+		} else {
+			g = fmt.Sprintf("(Context: you are discussing the work item / study doc identified by %q. "+
+				"Use your retrieval tools — doc_get, doc_search, investigate_session — to ground every answer in it.)", ref)
+		}
 		grounding = &g
 	}
 
@@ -382,4 +392,54 @@ func (d *Deps) chatAttachmentHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// ── chat projects — the empty-chat lens picker (rich-docs P3d). ──
+// A chat with no work-item target can instead be grounded in a PROJECT/corpus:
+// the user picks a lens here, the chat dispatches with target_ref="project:<n>",
+// and doc_search scopes the conversation to that project's pooled docs. The
+// lens options are the distinct project_associations across the docs pool +
+// work items + intent slugs.
+type chatProject struct {
+	Name     string `json:"name"`
+	DocCount int    `json:"doc_count"`
+}
+type chatProjectsResp struct {
+	Projects []chatProject `json:"projects"`
+}
+
+func (d *Deps) chatProjectsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
+
+	rows, err := d.Pool.Query(ctx, `
+		WITH proj AS (
+		    SELECT project_association AS name, count(*)::int AS docs
+		      FROM stewards.docs
+		     WHERE nullif(btrim(project_association), '') IS NOT NULL
+		     GROUP BY project_association
+		    UNION
+		    SELECT project_association, 0
+		      FROM stewards.work_items
+		     WHERE nullif(btrim(project_association), '') IS NOT NULL
+		    UNION
+		    SELECT slug, 0 FROM stewards.intents
+		)
+		SELECT name, max(docs) AS docs
+		  FROM proj
+		 GROUP BY name
+		 ORDER BY max(docs) DESC, name`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "projects: "+err.Error())
+		return
+	}
+	defer rows.Close()
+	out := chatProjectsResp{Projects: []chatProject{}}
+	for rows.Next() {
+		var p chatProject
+		if rows.Scan(&p.Name, &p.DocCount) == nil && strings.TrimSpace(p.Name) != "" {
+			out.Projects = append(out.Projects, p)
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
 }

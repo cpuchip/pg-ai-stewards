@@ -5,7 +5,7 @@
 // the /api/chat/stream SSE relay. (P1)
 // P4 adds: a conversation-history sidebar (multiple sessions per target) and
 // per-message provenance chips (which facet each retrieval tool hit).
-import { ref, watch, nextTick, onUnmounted } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { api, type ChatSessionRow } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
@@ -13,6 +13,15 @@ import { useStewdioStore } from '../../stores/stewdio'
 defineOptions({ inheritAttrs: false })
 const store = useStewdioStore()
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
+
+// rich-docs P3d: the empty-chat lens. With no work item selected, the user can
+// ground the chat in a PROJECT/corpus instead; chatRef becomes "project:<name>"
+// and doc_search scopes the conversation to it. A selected work item wins.
+const lens = ref('')
+const projects = ref<{ name: string; doc_count: number }[]>([])
+onMounted(async () => { try { projects.value = (await api.chatProjects()).projects } catch { /* none */ } })
+// the effective conversation ref: a selected work item, else the chosen lens.
+const chatRef = computed(() => store.selectedRef || (lens.value ? `project:${lens.value}` : ''))
 
 type Msg = { id: number; role: string; content: string; finish_reason?: string; tool_calls: number; tools?: string[]; images?: string[] }
 const messages = ref<Msg[]>([])
@@ -25,18 +34,22 @@ const showSessions = ref(false)
 const log = ref<HTMLElement | null>(null)
 let es: EventSource | null = null
 
-// rich-docs P2: media staged for the next turn (uploaded on send, injected as
-// subject material; a vision model sees the image).
-type Staged = { file: File; url: string } // url = a local object URL for the instant preview
+// rich-docs P2/P3: files staged for the next turn. Images get a vision preview
+// (object URL); documents (PDF/office/HTML/text/archive) get a 📄 chip and are
+// extracted server-side (doc_extract) into safe subject material.
+type Staged = { file: File; url: string; isImage: boolean }
 const staged = ref<Staged[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
 function pickFiles() { fileInput.value?.click() }
 function onFiles(e: Event) {
   const files = (e.target as HTMLInputElement).files
-  if (files) for (const f of Array.from(files)) staged.value.push({ file: f, url: URL.createObjectURL(f) })
+  if (files) for (const f of Array.from(files)) {
+    const isImage = f.type.startsWith('image/')
+    staged.value.push({ file: f, url: isImage ? URL.createObjectURL(f) : '', isImage })
+  }
   if (fileInput.value) fileInput.value.value = '' // allow re-picking the same file
 }
-function removeStaged(i: number) { const s = staged.value[i]; if (s) URL.revokeObjectURL(s.url); staged.value.splice(i, 1) }
+function removeStaged(i: number) { const s = staged.value[i]; if (s?.url) URL.revokeObjectURL(s.url); staged.value.splice(i, 1) }
 
 // mirror the server's deterministic base session id (chat.go chatSessionFor)
 function baseSessionFor(ref_: string): string {
@@ -86,7 +99,7 @@ async function loadSessions(ref_: string): Promise<string> {
   } catch { sessions.value = []; return baseSessionFor(ref_) }
 }
 
-watch(() => store.selectedRef, async (ref_) => {
+watch(chatRef, async (ref_) => {
   err.value = ''; pending.value = false; showSessions.value = false
   if (!ref_) { closeStream(); messages.value = []; sessions.value = []; activeSession.value = ''; return }
   const def = await loadSessions(ref_)
@@ -103,17 +116,18 @@ onUnmounted(closeStream)
 function switchSession(sid: string) {
   if (sid === activeSession.value) { showSessions.value = false; return }
   activeSession.value = sid
-  if (store.selectedRef) localStorage.setItem(lsKey(store.selectedRef), sid)
+  if (chatRef.value) localStorage.setItem(lsKey(chatRef.value), sid)
   showSessions.value = false
   pending.value = false
   openStream(sid)
 }
 
 function newSession() {
-  if (!store.selectedRef) return
-  const sid = `${baseSessionFor(store.selectedRef)}-${Date.now().toString(36)}`
+  const ref_ = chatRef.value
+  if (!ref_) return
+  const sid = `${baseSessionFor(ref_)}-${Date.now().toString(36)}`
   activeSession.value = sid
-  localStorage.setItem(lsKey(store.selectedRef), sid)
+  localStorage.setItem(lsKey(ref_), sid)
   showSessions.value = false
   pending.value = false
   openStream(sid) // empty until the first turn lands
@@ -122,12 +136,16 @@ function newSession() {
 async function send() {
   const text = input.value.trim()
   const toUpload = staged.value.slice()
-  // allow a media-only turn (a question is optional when an image is attached)
-  if ((!text && toUpload.length === 0) || !store.selectedRef) return
+  const ref_ = chatRef.value
+  // allow a media-only turn (a question is optional when a file is attached)
+  if ((!text && toUpload.length === 0) || !ref_) return
   input.value = ''; err.value = ''; pending.value = true
   const tempId = -Date.now()
-  // optimistic echo — show the staged images instantly via their object URLs
-  messages.value.push({ id: tempId, role: 'user', content: text, tool_calls: 0, images: toUpload.map(s => s.url) })
+  // optimistic echo — show staged IMAGES instantly via their object URLs; a
+  // document is extracted server-side (no inline preview) but note its name.
+  const docNames = toUpload.filter(s => !s.isImage).map(s => s.file.name)
+  const echo = docNames.length ? (text ? text + '\n' : '') + docNames.map(n => `📄 ${n}`).join('\n') : text
+  messages.value.push({ id: tempId, role: 'user', content: echo, tool_calls: 0, images: toUpload.filter(s => s.isImage).map(s => s.url) })
   staged.value = []
   nextTick(() => { if (log.value) log.value.scrollTop = log.value.scrollHeight })
   try {
@@ -136,23 +154,23 @@ async function send() {
     if (toUpload.length) {
       const sid = activeSession.value || undefined
       const ups = await Promise.all(toUpload.map(s =>
-        api.chatAttach(s.file, { session_id: sid, target_ref: store.selectedRef || undefined })))
+        api.chatAttach(s.file, { session_id: sid, target_ref: ref_ })))
       attachmentIds = ups.map(u => u.id)
     }
     const r = await api.chatSend({
       session_id: activeSession.value || undefined,
-      target_ref: store.selectedRef,
+      target_ref: ref_,
       message: text,
       model: store.chatModel,
       attachment_ids: attachmentIds,
     })
     if (r.session_id && r.session_id !== activeSession.value) {
       activeSession.value = r.session_id
-      if (store.selectedRef) localStorage.setItem(lsKey(store.selectedRef), r.session_id)
+      localStorage.setItem(lsKey(ref_), r.session_id)
       openStream(r.session_id)
     }
     // refresh the sidebar so a brand-new conversation shows up
-    if (store.selectedRef) loadSessions(store.selectedRef)
+    loadSessions(ref_)
   } catch (e) {
     err.value = String(e); pending.value = false
     messages.value = messages.value.filter(m => m.id !== tempId)
@@ -169,10 +187,19 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
     <div class="border-b border-zinc-800 px-3 py-2 flex items-center gap-2 text-xs">
       <button class="text-zinc-400 hover:text-zinc-200" :title="`${sessions.length} conversation(s)`"
               @click="showSessions = !showSessions">💬<span class="text-zinc-600 ml-0.5">{{ sessions.length || '' }}</span></button>
-      <span class="text-zinc-600 truncate flex-1" :title="store.selectedRef || ''">
-        {{ store.selectedTitle || '— select a work item' }}
+      <span v-if="store.selectedRef" class="text-zinc-600 truncate flex-1" :title="store.selectedRef">
+        {{ store.selectedTitle || store.selectedRef }}
       </span>
-      <button v-if="store.selectedRef" class="text-sky-400 hover:text-sky-300" title="new conversation" @click="newSession">＋ New</button>
+      <!-- rich-docs P3d: empty-chat lens — ground in a project/corpus instead -->
+      <div v-else class="flex-1 flex items-center gap-1.5 min-w-0">
+        <span class="text-zinc-600">lens</span>
+        <select v-model="lens" class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] text-zinc-300 max-w-[60%] truncate"
+                title="ground this chat in a project/corpus (doc_search scopes to it)">
+          <option value="">— pick a project —</option>
+          <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}<span v-if="p.doc_count"> ({{ p.doc_count }})</span></option>
+        </select>
+      </div>
+      <button v-if="chatRef" class="text-sky-400 hover:text-sky-300" title="new conversation" @click="newSession">＋ New</button>
       <select v-model="store.chatModel" class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] text-zinc-300">
         <option value="reason">reason</option>
         <option value="ingest">ingest</option>
@@ -213,31 +240,36 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
         </div>
       </template>
       <div v-if="pending" class="text-zinc-500 text-xs italic">thinking…</div>
-      <div v-if="!store.selectedRef" class="text-zinc-600 text-sm">
-        Select a work item or doc on the left, then ask about it — grounded in its
-        doc, source, and the sessions that built it.
+      <div v-if="!chatRef" class="text-zinc-600 text-sm">
+        Select a work item or doc on the left to chat grounded in it — or pick a
+        <span class="text-zinc-400">project lens</span> above to chat over a whole corpus.
+        Attach a PDF, Office doc, or a zipped folder with 📎 and it becomes safe,
+        searchable subject material.
       </div>
       <div v-if="err" class="text-rose-400 text-xs">{{ err }}</div>
     </div>
 
     <div class="border-t border-zinc-800 p-2">
-      <!-- rich-docs P2: staged attachments preview -->
+      <!-- rich-docs P2/P3: staged attachments preview (image thumb or 📄 chip) -->
       <div v-if="staged.length" class="flex flex-wrap gap-2 mb-2">
         <div v-for="(s, i) in staged" :key="i" class="relative group">
-          <img :src="s.url" class="h-14 w-14 object-cover rounded border border-zinc-700" :alt="s.file.name" />
+          <img v-if="s.isImage" :src="s.url" class="h-14 w-14 object-cover rounded border border-zinc-700" :alt="s.file.name" />
+          <div v-else class="h-14 max-w-[10rem] px-2 flex items-center gap-1 rounded border border-zinc-700 bg-zinc-900 text-[11px] text-zinc-300"
+               :title="s.file.name">📄<span class="truncate">{{ s.file.name }}</span></div>
           <button class="absolute -top-1.5 -right-1.5 bg-zinc-800 border border-zinc-600 rounded-full w-4 h-4 text-[10px] leading-none text-zinc-300 hover:text-rose-400"
                   title="remove" @click="removeStaged(i)">×</button>
         </div>
       </div>
       <div class="flex items-end gap-2">
         <button class="text-zinc-400 hover:text-sky-300 disabled:opacity-40 pb-2 text-lg leading-none"
-                :disabled="!store.selectedRef" title="attach an image" @click="pickFiles">📎</button>
-        <input ref="fileInput" type="file" accept="image/*" multiple class="hidden" @change="onFiles" />
+                :disabled="!chatRef" title="attach a document, image, or zipped folder" @click="pickFiles">📎</button>
+        <input ref="fileInput" type="file" multiple class="hidden" @change="onFiles"
+               accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.epub,.html,.htm,.txt,.md,.csv,.json,.rtf,.zip,.7z,.tar,.gz,.tgz,.bz2,.xz,.rar" />
         <textarea
           v-model="input"
-          :disabled="!store.selectedRef"
+          :disabled="!chatRef"
           rows="2"
-          placeholder="ask about this work item… (attach an image with 📎; Enter to send)"
+          placeholder="ask about this — attach a doc/image/zip with 📎; Enter to send"
           class="flex-1 bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 resize-none disabled:opacity-50"
           @keydown="onKey"></textarea>
       </div>

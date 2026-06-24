@@ -540,6 +540,9 @@ export const api = {
   // Stewdio P4: the conversation-history sidebar — all chat sessions for a target.
   chatSessions: (targetRef: string) =>
     getJSON<ChatSessionsResp>(`/api/chat/sessions?target_ref=${encodeURIComponent(targetRef)}`),
+  // rich-docs P3d: the empty-chat lens picker — projects/corpora to ground a chat in.
+  chatProjects: () =>
+    getJSON<{ projects: { name: string; doc_count: number }[] }>('/api/chat/projects'),
   // rich-docs P2: upload media to a chat (multipart). Returns the attachment id +
   // a served URL for inline rendering; pass the id to chatSend.attachment_ids.
   chatAttach: async (file: File, opts: { session_id?: string; target_ref?: string }): Promise<ChatAttachResp> => {
