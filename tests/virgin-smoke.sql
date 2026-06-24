@@ -1838,4 +1838,38 @@ BEGIN
   RAISE NOTICE 'OK 40: doc-build — pipeline (plan/build/deliver) + coder_export_artifact grant';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→50) is sound =='
+-- ---------------------------------------------------------------------
+-- 51 — rich-chat hardening: the doc-build artifact-exists gate (an empty
+-- build must FAIL, not pose as success) + the chat→brainstorm grant.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_wi uuid; v_status text;
+BEGIN
+  ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='doc_build_verify_artifact_trg'),
+     '51: the doc-build artifact-exists gate trigger must exist';
+  -- A doc-build that completes with NO exported artifact must be flipped to failed.
+  v_wi := stewards.work_item_create('doc-build',
+            jsonb_build_object('spawned_from_chat','vs-gate-test','binding_question','x'),
+            'vs-gate-test', 'dev', NULL::int, NULL::uuid);
+  UPDATE stewards.work_items SET status='completed' WHERE id=v_wi;
+  SELECT status INTO v_status FROM stewards.work_items WHERE id=v_wi;
+  ASSERT v_status='failed',
+     '51: doc-build completing with no artifact must flip to failed (got '||v_status||')';
+  -- With an artifact present for the session, completion stands.
+  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size)
+    VALUES ('vs-gate-test','d.pdf','application/pdf','document','\x25504446'::bytea, 4);
+  UPDATE stewards.work_items SET status='in_progress' WHERE id=v_wi;
+  UPDATE stewards.work_items SET status='completed' WHERE id=v_wi;
+  SELECT status INTO v_status FROM stewards.work_items WHERE id=v_wi;
+  ASSERT v_status='completed',
+     '51: doc-build completing WITH an artifact must stay completed (got '||v_status||')';
+  DELETE FROM stewards.work_items WHERE id=v_wi;
+  DELETE FROM stewards.chat_attachments WHERE session_id='vs-gate-test';
+  -- chat → brainstorm grant.
+  ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                  WHERE agent_family='work-item-chat' AND tool_pattern='start_brainstorm' AND action='allow'),
+     '51: work-item-chat must be granted start_brainstorm (chat→brainstorm)';
+  RAISE NOTICE 'OK 41: artifact gate (empty doc-build → failed) + chat→brainstorm grant';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→51) is sound =='

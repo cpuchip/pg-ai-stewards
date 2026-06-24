@@ -538,6 +538,14 @@ extension_sql_file!(
     requires = ["create_doc_extract"],
 );
 
+// 51: doc-build artifact-exists gate (an empty build must fail, not pose as
+// success) + chat→brainstorm grant. From the doc-build e2e findings.
+extension_sql_file!(
+    "../51-rich-chat-hardening.sql",
+    name = "create_rich_chat_hardening",
+    requires = ["create_doc_build"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
