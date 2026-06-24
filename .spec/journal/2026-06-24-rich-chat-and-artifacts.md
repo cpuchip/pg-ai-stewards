@@ -146,6 +146,69 @@ evals / text locators).
 - **Rich artifact cards** also-surface artifacts that land silently in a chat
   session (chat→/generate spawns doc-build; the export lands without a reply link).
 
+## Round 4 — dispatcher-owned session_id + cards + grounding picker + collapse rails
+
+Michael's "a few thoughts" after Round 3: (a) "can the harness populate session_id
+for image gen — it knows what's requesting?"; (b1) new-chat should default to the
+current document but expose a project selector at top; (b2) work items kicked off
+from chat should show a live status card walking the path (he'd just started a pptx
+build on the AI project); (b3) leftmost/rightmost columns need VS-Code quick
+open/close. Built all four, proven live, pushed (`385058f`).
+
+- **(a) session_id is the dispatcher's, not the model's.** The grounding nudge
+  ("your session is X, pass it") was best-effort — weak models drop it. The
+  bgworker threads the real session through `tool_dispatch`, so `exec_one_tool`
+  (tools.rs) now OVERRIDES the model-supplied session_id for tools marked
+  `inject_session` on their execute_target. Build-the-oracle: the model stops being
+  load-bearing for correctness. **The marker lives in a BEFORE INSERT/UPDATE trigger
+  on tool_defs (52)**, not a one-shot UPDATE — because mcp_proxy tool_defs are
+  populated at runtime by refresh-tools (05 upserts execute_target ON CONFLICT DO
+  UPDATE), which would (1) not exist on a virgin boot and (2) WIPE a one-shot flag
+  on the next refresh. The trigger re-stamps on every write.
+- **(b1)** chat header grounding picker is always present: default '' follows the
+  selected doc/work item (label "📄 <title>"); pick a project or Everything to
+  override (lens wins); navigating to a doc re-grounds (clears the lens).
+- **(b2)** `GET /api/chat/work-items?session=` → the tasks a chat spawned
+  (`input->>'spawned_from_chat'` / `session_ids`) with the pipeline's stage path +
+  current stage + the produced artifact (bucketed by created_at window). ChatPanel
+  polls (4s in-flight / 20s idle) and renders a card walking pending→running→
+  completed, surfacing the artifact even when the export landed silently.
+- **(b3)** collapse rails on the Work-items (left) and Chat (right) columns,
+  anchored to those panels' dockview groups (`setConstraints minimumWidth:0` +
+  `setSize width:0`, restore prior width); state re-measured from the DOM on every
+  layout change so it survives a reload.
+
+**Proof (inverse hypothesis earned its keep twice):**
+- **(a)** virgin-smoke OK 42 (trigger stamps a session-scoped tool_def, 00→52
+  green). e2e: a generate_image tool_call carrying `session_id="WRONG-PLACEHOLDER"`
+  was overridden to the real dispatch session — image landed there, **0 in the
+  placeholder**. The SAME test on the pre-fix `.so` put it in the placeholder
+  (fix-absent fails / fix-present passes). Durability: wiped execute_target
+  (simulating refresh-tools) → trigger restored `inject_session=true`.
+- **(b1/b2/b3)** live in the browser: grounding select lists all corpora incl. ai
+  (50); the AI-project session card shows `ai-workflow-patterns.pptx` with ✓ plan /
+  ✓ build / ✓ deliver; both collapse rails toggle group widths 426↔0 and restore.
+- Go build (`GOWORK=off`) + vue-tsc/vite + virgin-smoke 00→52 all green.
+
+**Gotchas (the build-cache trap — worth keeping):**
+- A Rust/SQL change won't take effect unless the `.so` actually recompiles. The
+  first `docker compose build pg` reported exit 0 in seconds but was a **full cache
+  hit** — the running `.so` kept its old timestamp (16:06) and the override didn't
+  fire. **Verify the `.so` mtime in the container, don't trust "build exit 0."** The
+  thing that forced the real recompile was the next gotcha:
+- **extension/Dockerfile has an explicit COPY list of the NN-*.sql files** and it
+  omitted the new `52-…sql`. That's a latent clean-build break (the
+  `extension_sql_file!("../52-…")` macro reads the file at COMPILE time → a clean
+  build would fail). Rule: a new chain file must be added to BOTH `src/lib.rs` AND
+  `extension/Dockerfile`'s COPY list.
+- `docker compose` runs from CWD — after a `cd` for playwright it failed
+  "no configuration file"; use `-f <abs>/docker-compose.yaml`. And `docker exec`
+  needs `-i` to read a heredoc/stdin (a silent no-op without it).
+
+**Carried (still deferred):** #243 alias-failover auto-shed (503) — bgworker hot
+path, own pass. #244 remainder: @-mentions + clickable source pills (needs
+tool-result surfacing in the SSE stream) + Arc D subset-select (new grounding mode).
+
 ## Carry-forward (non-blocking, dave-rule deferrals)
 
 - Arc A extras: @-mentions, clickable source pills, rich artifact cards.
