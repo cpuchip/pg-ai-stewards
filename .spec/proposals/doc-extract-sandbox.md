@@ -2,7 +2,7 @@
 
 **Status:** 🟡 DESIGN — for council ratification (NOT yet ratified). New standing capability (untrusted-file processing) → `dominion_in_council`: ratify before building.
 **Author:** agent + Michael, 2026-06-24.
-**One line:** Process untrusted uploaded documents (PDF / office / HTML) inside a hardened, no-network sandbox and let **only pixels or plain text** cross the trust boundary — a hybrid router (render-to-pixels for visual/short docs, sandboxed text-extract for long ones) that is structurally safer than the industry default.
+**One line:** Process untrusted uploaded documents (PDF / office / HTML) inside a hardened, no-network sandbox and let **only pixels or plain text** cross the trust boundary — a four-layer defense (scan → contain → disarm-by-non-execution → content-gate) where text is always extracted (tabula, Go, full office) and pixels are an additive overlay for visual docs. Structurally safer than the unsandboxed-parser industry default.
 **Builds on:** the coder-pr sandbox (`cmd/coder-mcp/sandbox`), the rich-docs P1/P2 vision path (`content_parts` + `chat_attachments`), the book corpus (`examples/book-corpus.sql`), `fetch-md-mcp`'s extractors, the existing prompt-injection defense in `compose_messages`.
 **Unblocks:** rich-docs **P3** (documents + corpus-as-lens) AND the deferred *"let the digesters read our repos"* inbox item (same hardened extraction lane).
 
@@ -34,19 +34,19 @@ So the only things that ever touch our DB or our model are bitmaps and text — 
 - **docling** (IBM, MIT): AI layout model + 600 MB HF weights + PyTorch → far better tables/multi-column, but heavy and wants the weights pre-baked. **Defer as a table-heavy quality upgrade.**
 - **CDR** (Glasswall / Check Point): zero-trust *rebuild-to-spec* — validate every structure against the format spec, drop anything non-conformant, regenerate a clean file. The enterprise approach. **We consciously don't need full CDR** because render-to-pixel is a poor-man's CDR for a *model* audience (the pixel round-trip strips everything executable).
 
-## 3. The design — a hybrid router (both outputs, per Michael)
+## 3. The design — text always, pixels as an additive overlay (per Michael)
 
-One `doc-extract` lane, two paths, chosen by a cheap sniff (type + page count + size). **Both pixels and text are first-class outputs** — the router picks, but neither is dropped.
+**Not A-XOR-B.** Text is *always* extracted (cheap, and models excel at text — Michael, 2026-06-24: "even for short PDFs I'd still want text too"). Pixels are an **additive overlay**, rendered when the doc is visual or short enough to be worth the per-page vision cost. So a short PDF yields **both** text and page-images to the same turn; a long report yields text (+ optionally a few key pages). A readable doc is never text-less.
 
-| | Path A — render to pixels | Path B — extract text |
+| | Text (always) | Pixels (additive overlay) |
 |---|---|---|
-| **For** | flyers, a chapter, a few pages, scans, anything visual | whole books / long reports (per-page vision is costly) |
-| **Engine (in sandbox)** | PDF/image → poppler `pdftoppm` or Chrome (chromedp, in-tree); office→pixels needs office→PDF first (libreoffice — optional later tier) | **`tabula`** (PDF/DOCX/XLSX/PPTX/ODT/EPUB → md, pure-Go, in-tree); **readability+html-to-markdown** (HTML, in-tree) |
-| **Crosses the boundary** | only bitmaps | only plain markdown |
-| **Lands as** | `chat_attachments` images → vision model (P2 path, already live) | markdown → chunk + index (book-corpus reuse) → searchable subject |
-| **Residual risk** | lowest (a bitmap carries nothing) | prompt-injection in text → §5 |
+| **When** | every readable doc | visual docs + short docs (page-count under the budget threshold); user can force "render all" |
+| **Engine (in sandbox)** | **`tabula`** (PDF/DOCX/XLSX/PPTX/ODT/EPUB → md, pure-Go, in-tree); **readability+html-to-markdown** (HTML, in-tree) | PDF/image → poppler `pdftoppm` or Chrome (chromedp, in-tree); office→pixels needs office→PDF first (libreoffice — optional later tier) |
+| **Crosses the boundary** | only plain markdown | only bitmaps |
+| **Lands as** | markdown → chunk + index (book-corpus reuse) → searchable subject + a text content_part | `chat_attachments` images → vision model (P2 path, already live) |
+| **Residual risk** | prompt-injection in text → §5 | lowest (a bitmap carries nothing) |
 
-The router is honest about its choice and records it (so a 200-page PDF doesn't silently become 200 vision calls; it goes to Path B). A user can force a path ("read this as images").
+The router records what it did (so a 200-page PDF is text + maybe first/key pages, not 200 silent vision calls), and the page-count threshold for the pixel overlay has a default a user can override ("render all pages").
 
 ## 4. The sandbox (ratified tier: container + no-net; gVisor later)
 
@@ -66,13 +66,23 @@ The handler is **deterministic** (write blob → exec converter → read result 
 
 **gVisor (`--runtime=runsc`) is a config toggle, added later** as a defense-in-depth tier once `runsc` is installed on the deploy host. Render-to-pixel already removes carry-forward, so v1 doesn't require it; the toggle makes us Dangerzone-equivalent when we want it.
 
-## 5. The `is_safe` gate + content defense (text only)
+## 5. The defense stack — four layers (Michael's "scan the file" = the new first layer)
 
-Structural sandboxing is the **primary** defense — a model cannot reliably spot a malformed-PDF exploit in raw bytes, so the gate goes on the **extracted text, not the file**:
-1. The existing `compose_messages` prompt-injection regex + "untrusted data" framing runs on the injected content (already built).
-2. An optional **tools-off `is_safe` triage** (our judges are already this shape: structured output, no tools) on the extracted markdown — flags overt injection / instruction-to-the-model before it becomes subject material. Cheap, local, one call.
+Defense in depth, cheapest-and-broadest first. No single layer is trusted alone.
 
-Pixels need no content gate (a bitmap carries no instructions to follow).
+**1. Scan (NEW — Michael, 2026-06-24: "run Windows Defender on the file").** Before extraction, scan the bytes:
+- **Signature AV — ClamAV** (official `clamav/clamav` Docker image; the Linux Windows-Defender-equivalent). **Air-gapped:** the scan engine runs `--network=none` against a signature DB on a **read-only shared volume** that a separate networked `freshclam` sidecar keeps fresh (the documented pattern). Catches *known* malware/maldocs/macros.
+- **Structural maldoc analysis** (sharper than generic AV for *this* threat, and catches zero-days AV misses): `pdfid`/`pdf-parser` (Didier Stevens — `/OpenAction`, `/Launch`, `/JS`, `/EmbeddedFile`, `/ObjStm`…) + `oletools` (`olevba`/`mraptor` — VBA macros, DDE, embedded OLE). Combined off-the-shelf tools (`office-scan`, `MADFA`) emit one risk-score verdict per file.
+- **Policy:** known-malware → reject + report. Suspicious (macros/JS/launch) → flag to the user + still extract (safe — see layer 3). The scanner itself parses untrusted bytes (ClamAV has had CVEs), so it **runs inside the same no-network sandbox** — its own parsing is contained too.
+- **Honest scope:** AV is signature-based (misses zero-days); structural analysis can false-positive on legit macros. So this layer is *early-reject + transparency*, NOT the safety guarantee — that's layer 2.
+
+**2. Contain (the actual guarantee).** Parsing happens only inside the no-network, cap-dropped, read-only sandbox (§4). A zero-day the scanner misses still can't escape.
+
+**3. Disarm by non-execution.** Extraction **does not run the payload** — `tabula` reads document structure (it does not execute VBA); poppler rasterizes (it does not run PDF JS). Only pixels or plain markdown cross out. A macro-laden docx is safe to *text-extract* because the macro never runs.
+
+**4. Content-gate (text only).** A model can't spot a malformed-file exploit in raw bytes, so the model gate goes on the **extracted text**: the existing `compose_messages` prompt-injection regex + "untrusted data" framing (built), plus an optional **tools-off `is_safe` triage** (our judges' shape — structured output, no tools) flagging overt instruction-to-the-model before the text becomes subject material. Pixels need no content gate (a bitmap carries no instructions).
+
+**The Go-purity tension (for council):** ClamAV is C, oletools/pdfid are Python — the one place "Go-only, keep it light" and best-of-breed detection diverge. Options: (a) ClamAV only (signature AV, sidecar + shared DB); (b) structural only (oletools/pdfid/YARA, Python in the sandbox); (c) both (defense-in-depth); (d) a minimal **Go** structural check we write (magic-bytes + a keyword/zip-entry scan for `/JS`,`/OpenAction`,`vbaProject.bin`) — lighter, Go-pure, less complete. Recommendation: **(c) for the air-gapped sandbox** (ClamAV engine in-image + DB-via-volume; oletools/pdfid for the maldoc verdict) — it's the "1000× better than industry" layer and runs sealed; revisit (d) if image weight bites.
 
 ## 6. Reuse ledger
 
@@ -85,24 +95,26 @@ Pixels need no content gate (a bitmap carries no instructions to follow).
 | `chat_attachments` (image lands as subject) + vision path | **built** (P1/P2) |
 | book corpus (chunk + index + search extracted text) | **built** (`examples/book-corpus.sql`) |
 | prompt-injection defense | **built** (`compose_messages`) |
-| `doc-extract` lean image (Go binary w/ tabula + poppler `pdftoppm`; NO Python/libreoffice in v1) | **new** |
+| `doc-extract` image (Go binary w/ tabula + poppler `pdftoppm` + ClamAV engine; NO libreoffice in v1) | **new** |
 | read-only rootfs + tmpfs + nofile cap in `Provision` | **new** (localized in `sandbox.go`) |
-| the router (sniff → Path A / Path B) + a thin deterministic extract handler | **new** |
+| the router (text always + pixels overlay) + a thin deterministic extract handler | **new** |
+| **scan layer** — ClamAV (engine in-image + DB-via-shared-volume + networked `freshclam` sidecar) + structural maldoc check (oletools/pdfid) | **new** |
 | `is_safe` tools-off triage on extracted text | **new** (reuses judge shape) |
-| gVisor `--runtime=runsc` toggle | **later** (defense-in-depth) |
+| gVisor `--runtime=runsc` toggle | **later** (deferred until NOCIX confirms `runsc`) |
 
 ## 7. Phasing (proposed, post-ratification)
 
-- **P3a — the sandbox + the lean image + the hardening delta.** A deterministic `doc-extract` handler proven on a benign PDF + a malicious-PDF smoke (the parser dies *inside* the sandbox; nothing escapes; no-network confirmed).
-- **P3b — Path A (pixels).** doc → page PNGs → `chat_attachments` → vision. Reuses P2 end-to-end.
-- **P3c — Path B (text).** PDF/office → **tabula** → markdown; HTML → in-tree readability path; chunk + index like the book corpus; the `is_safe` gate. (Smoke tabula on a messy pptx + a multi-column report first — confirm the quality floor.)
-- **P3d — the router** (sniff → A/B, force-path override) + the empty-chat corpus/project lens picker (the rich-docs P3 UI).
+- **P3a — the sandbox + the image + the hardening delta + the scan layer.** A deterministic `doc-extract` handler proven on a benign doc + a **malicious-doc smoke** (an EICAR-style / macro-laden sample: ClamAV flags it, the parser dies *inside* the sandbox, nothing escapes, no-network confirmed). The scan layer (ClamAV + structural check) lands here — it's the trust floor everything else sits on.
+- **P3b — text always (the workhorse).** PDF/office → **tabula** → markdown; HTML → in-tree readability path; chunk + index like the book corpus; the `is_safe` gate. (Smoke tabula on a messy pptx + a multi-column report first — confirm the quality floor.)
+- **P3c — pixels overlay.** doc → page PNGs (poppler) → `chat_attachments` → vision, added alongside the text. Reuses P2 end-to-end.
+- **P3d — the router** (text always + pixels overlay by page-count threshold, force-render override) + the empty-chat corpus/project lens picker (the rich-docs P3 UI).
 - **P3e — fold in the digester-reads-repos lane** (the same no-network extract sandbox reads a read-only repo checkout for the "cross-reference our corpus" stage).
 
 ## 8. Decisions to ratify
 
 1. **Isolation tier v1 = container + no-net** (reuse the coder spine + read-only/tmpfs/nofile delta). **gVisor `runsc` is SKIPPED for now** — revisit once Michael confirms `runsc` installs on KC NOCIX + the work VM (he has root on both). *(Michael, 2026-06-24: "skip visor until I can confirm.")*
-2. **Hybrid router, both outputs** — render-to-pixels AND text-extract, router picks by sniff, user can force. *(Michael, 2026-06-24: "I want both pixels and text out.")*
+2. **Text always + pixels overlay** — text is extracted for every readable doc (cheap, models excel at it), pixels added for visual/short docs (page-count threshold, user can force-render). NOT pixels-XOR-text. *(Michael, 2026-06-24: "even for short PDFs I'd still want text too… I want images too.")*
+2b. **Scan layer (NEW, ratify the combo):** scan the file before extraction — recommended **ClamAV (sealed: engine in-image + DB-via-volume + networked freshclam sidecar) + a structural maldoc check (oletools/pdfid)**. Early-reject known-bad + flag macros/JS to the user; sits on top of the sandbox (the real containment), runs sealed itself. The Go-purity tension is real (ClamAV=C, oletools/pdfid=Python) — a Go-only minimal check (option d in §5) is the fallback. *(Michael, 2026-06-24: "run Windows Defender on the file" — yes, ClamAV.)*
 3. **Engines = Go-first, full office, already in-tree:** **`tabula`** (pure-Go) for PDF/DOCX/XLSX/PPTX/ODT/EPUB → markdown (Path B), in-tree readability+html-to-markdown for HTML, **poppler `pdftoppm`** for PDF→pixels (Path A). **No markitdown, no Python.** libreoffice only for the optional *faithful office→pixels* upgrade tier. Docling deferred as a table-heavy upgrade. *(Michael, 2026-06-24: "Go only to keep it light" + "full office support" — tabula satisfies both; he'd used it before via fetch-md.)*
 4. **`is_safe` gate on extracted text, not bytes** — layered on the existing injection regex; pixels ungated.
 5. **A separate lean `doc-extract` image** (Go binary + poppler), not the coder image.
