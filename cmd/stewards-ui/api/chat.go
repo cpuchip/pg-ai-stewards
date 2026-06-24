@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"regexp"
@@ -26,17 +27,25 @@ import (
 func (d *Deps) registerChat(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/chat/send", d.chatSendHandler)
 	mux.HandleFunc("GET /api/chat/stream", d.chatStreamHandler)
-	mux.HandleFunc("GET /api/chat/sessions", d.chatSessionsHandler) // Stewdio P4: multi-session history
+	mux.HandleFunc("GET /api/chat/sessions", d.chatSessionsHandler)        // Stewdio P4: multi-session history
+	mux.HandleFunc("POST /api/chat/attach", d.chatAttachHandler)           // rich-docs P2: upload media to a chat
+	mux.HandleFunc("GET /api/chat/attachment/{id}", d.chatAttachmentHandler) // rich-docs P2: serve the bytes (inline render)
 }
+
+// maxAttachmentBytes caps an uploaded file. Images fit comfortably; the :8090
+// router caps at 256MB, but the chat compose carries the base64 inline so we
+// keep attachments modest.
+const maxAttachmentBytes = 25 << 20 // 25 MB
 
 // session ids are derived from a target ref; keep them to a safe charset.
 var sessionSafe = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
 
 type chatSendReq struct {
-	SessionID string `json:"session_id,omitempty"` // explicit session (a "new chat" picks a fresh one)
-	TargetRef string `json:"target_ref,omitempty"` // the doc slug / work_item id the chat is grounded in
-	Message   string `json:"message"`
-	Model     string `json:"model,omitempty"` // role alias / model id; default 'reason' (→ local rig via overlay)
+	SessionID     string  `json:"session_id,omitempty"` // explicit session (a "new chat" picks a fresh one)
+	TargetRef     string  `json:"target_ref,omitempty"` // the doc slug / work_item id the chat is grounded in
+	Message       string  `json:"message"`
+	Model         string  `json:"model,omitempty"`         // role alias / model id; default 'reason' (→ local rig via overlay)
+	AttachmentIDs []int64 `json:"attachment_ids,omitempty"` // rich-docs P2: chat_attachments to inject as subject material
 }
 
 type chatSendResp struct {
@@ -93,12 +102,18 @@ func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
 		grounding = &g
 	}
 
+	// rich-docs P2: when the turn carries attachments, the substrate assembles
+	// them into the multimodal content array (chat_attachment_parts, session-
+	// scoped, base64 built server-side) and dispatch_chat_turn auto-selects the
+	// `vision` alias. No attachments → NULL → the text-only path (unchanged).
 	var wqID int64
 	if err := d.Pool.QueryRow(ctx,
-		`SELECT stewards.dispatch_chat_turn($1, $2, 'work-item-chat', $3, $4)`,
-		sid, req.Message, model, grounding,
+		`SELECT stewards.dispatch_chat_turn($1, $2, 'work-item-chat', $3, $4,
+		          CASE WHEN $5::bigint[] IS NULL OR cardinality($5::bigint[]) = 0 THEN NULL
+		               ELSE stewards.chat_attachment_parts($5::bigint[], $1) END)`,
+		sid, req.Message, model, grounding, req.AttachmentIDs,
 	).Scan(&wqID); err != nil {
-		log.Printf("api: chat dispatch (session=%s, model=%s): %v", sid, model, err)
+		log.Printf("api: chat dispatch (session=%s, model=%s, attachments=%d): %v", sid, model, len(req.AttachmentIDs), err)
 		writeErr(w, http.StatusInternalServerError, "dispatch: "+err.Error())
 		return
 	}
@@ -111,7 +126,8 @@ type chatStreamMsg struct {
 	Content      string   `json:"content"`
 	FinishReason string   `json:"finish_reason,omitempty"`
 	ToolCalls    int      `json:"tool_calls"`
-	Tools        []string `json:"tools,omitempty"` // tool names called this turn → provenance chips (P4)
+	Tools        []string `json:"tools,omitempty"`  // tool names called this turn → provenance chips (P4)
+	Images       []string `json:"images,omitempty"` // rich-docs P2: image_url data URLs on a multimodal turn → render inline
 	CreatedAt    string   `json:"created_at,omitempty"`
 }
 
@@ -152,6 +168,11 @@ func (d *Deps) chatStreamHandler(w http.ResponseWriter, r *http.Request) {
 			                          FROM jsonb_array_elements(tool_calls) e
 			                         WHERE e->'function'->>'name' IS NOT NULL)
 			             ELSE ARRAY[]::text[] END,
+			        CASE WHEN jsonb_typeof(content_parts)='array'
+			             THEN ARRAY(SELECT p->'image_url'->>'url'
+			                          FROM jsonb_array_elements(content_parts) p
+			                         WHERE p->>'type'='image_url' AND p->'image_url'->>'url' IS NOT NULL)
+			             ELSE ARRAY[]::text[] END,
 			        to_char(created_at,'HH24:MI:SS')
 			   FROM stewards.messages
 			  WHERE session_id=$1 AND id > $2
@@ -162,7 +183,7 @@ func (d *Deps) chatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var m chatStreamMsg
-			if rows.Scan(&m.ID, &m.Role, &m.Content, &m.FinishReason, &m.ToolCalls, &m.Tools, &m.CreatedAt) == nil {
+			if rows.Scan(&m.ID, &m.Role, &m.Content, &m.FinishReason, &m.ToolCalls, &m.Tools, &m.Images, &m.CreatedAt) == nil {
 				last = m.ID
 				if b, e := json.Marshal(m); e == nil {
 					fmt.Fprintf(w, "data: %s\n\n", b)
@@ -251,4 +272,114 @@ func (d *Deps) chatSessionsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ── chat attachments — upload media as injectable subject material (P2). ──
+// A multipart upload (field "file") + a session (session_id or target_ref,
+// resolved the same way as /chat/send so the attachment's session matches the
+// dispatch). Stored in stewards.chat_attachments (bytea); the next /chat/send
+// references the returned id(s) and the substrate assembles the content_parts.
+
+type chatAttachResp struct {
+	ID        int64  `json:"id"`
+	SessionID string `json:"session_id"`
+	Filename  string `json:"filename"`
+	MimeType  string `json:"mime_type"`
+	Kind      string `json:"kind"`
+	ByteSize  int    `json:"byte_size"`
+	URL       string `json:"url"` // GET this to render the bytes inline
+}
+
+func (d *Deps) chatAttachHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	if err := r.ParseMultipartForm(maxAttachmentBytes); err != nil {
+		writeErr(w, http.StatusBadRequest, "parse multipart: "+err.Error())
+		return
+	}
+	file, hdr, err := r.FormFile("file")
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "missing file field: "+err.Error())
+		return
+	}
+	defer file.Close()
+
+	// resolve the session id the same way /chat/send does, so the attachment
+	// lands under the session the turn will dispatch with.
+	sid := strings.TrimSpace(r.FormValue("session_id"))
+	if sid == "" {
+		sid = chatSessionFor(r.FormValue("target_ref"))
+	}
+
+	data, err := io.ReadAll(io.LimitReader(file, maxAttachmentBytes+1))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "read file: "+err.Error())
+		return
+	}
+	if len(data) > maxAttachmentBytes {
+		writeErr(w, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("file exceeds the %d MB limit", maxAttachmentBytes>>20))
+		return
+	}
+
+	// mime: trust the multipart header, else sniff. kind: image -> vision; else
+	// document (inert until P3 extraction populates extracted_text).
+	mimeType := hdr.Header.Get("Content-Type")
+	if mimeType == "" || mimeType == "application/octet-stream" {
+		mimeType = http.DetectContentType(data)
+	}
+	kind := "document"
+	if strings.HasPrefix(mimeType, "image/") {
+		kind = "image"
+	}
+	filename := hdr.Filename
+	if filename == "" {
+		filename = "attachment"
+	}
+
+	var resp chatAttachResp
+	if err := d.Pool.QueryRow(ctx,
+		`INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size)
+		 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+		sid, filename, mimeType, kind, data, len(data),
+	).Scan(&resp.ID); err != nil {
+		log.Printf("api: chat attach (session=%s): %v", sid, err)
+		writeErr(w, http.StatusInternalServerError, "store attachment: "+err.Error())
+		return
+	}
+	resp.SessionID = sid
+	resp.Filename = filename
+	resp.MimeType = mimeType
+	resp.Kind = kind
+	resp.ByteSize = len(data)
+	resp.URL = fmt.Sprintf("/api/chat/attachment/%d", resp.ID)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// chatAttachmentHandler serves an attachment's bytes (so the UI renders an
+// uploaded image inline). Read-only; the bytes are the durable original.
+func (d *Deps) chatAttachmentHandler(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "bad attachment id")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	var mimeType string
+	var data []byte
+	if err := d.Pool.QueryRow(ctx,
+		`SELECT coalesce(mime_type,'application/octet-stream'), bytes
+		   FROM stewards.chat_attachments WHERE id = $1`, id,
+	).Scan(&mimeType, &data); err != nil {
+		writeErr(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }

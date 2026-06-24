@@ -1692,4 +1692,42 @@ BEGIN
   RAISE NOTICE 'OK 36: multimodal — content_parts column + compose_messages array passthrough + page_in_cap array guard';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→47) is sound =='
+-- ---------------------------------------------------------------------
+-- 48 — rich documents in chat, P2: chat_attachments + chat_attachment_parts.
+-- A session-scoped attachment assembles into a 47 content_parts array (image ->
+-- image_url with a server-built data URL); the helper is session-scoped (no
+-- cross-session injection) and returns NULL when nothing resolves.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_a1 bigint;
+  v_a2 bigint;
+  v_parts jsonb;
+BEGIN
+  ASSERT EXISTS (SELECT 1 FROM information_schema.tables
+                  WHERE table_schema='stewards' AND table_name='chat_attachments'),
+     'chat_attachments table must exist';
+  -- a 1x1 png (bytes), session 'att-smoke'
+  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size)
+    VALUES ('att-smoke','dot.png','image/png','image', decode('89504e470d0a1a0a','hex'), 8)
+    RETURNING id INTO v_a1;
+  -- a DIFFERENT session's attachment must NOT be injectable into att-smoke
+  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size)
+    VALUES ('other-sess','x.png','image/png','image', decode('89504e470d0a1a0a','hex'), 8)
+    RETURNING id INTO v_a2;
+  v_parts := stewards.chat_attachment_parts(ARRAY[v_a1, v_a2], 'att-smoke');
+  ASSERT v_parts IS NOT NULL AND jsonb_typeof(v_parts)='array' AND jsonb_array_length(v_parts)=1,
+     'chat_attachment_parts must return exactly the session-owned attachment (1, not the other session''s)';
+  ASSERT v_parts->0->>'type'='image_url'
+         AND (v_parts->0->'image_url'->>'url') LIKE 'data:image/png;base64,%',
+     'an image attachment must become an image_url part with a server-built data URL';
+  ASSERT (SELECT consumed_at IS NOT NULL FROM stewards.chat_attachments WHERE id=v_a1),
+     'chat_attachment_parts must mark the injected attachment consumed';
+  ASSERT stewards.chat_attachment_parts(ARRAY[]::bigint[], 'att-smoke') IS NULL
+         AND stewards.chat_attachment_parts(NULL, 'att-smoke') IS NULL,
+     'chat_attachment_parts must return NULL for no ids (text-only fallback)';
+  DELETE FROM stewards.chat_attachments WHERE session_id IN ('att-smoke','other-sess');
+  RAISE NOTICE 'OK 37: chat attachments — session-scoped media -> content_parts (image_url data URL), consumed-marking, NULL-when-empty';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→48) is sound =='

@@ -14,7 +14,7 @@ defineOptions({ inheritAttrs: false })
 const store = useStewdioStore()
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
 
-type Msg = { id: number; role: string; content: string; finish_reason?: string; tool_calls: number; tools?: string[] }
+type Msg = { id: number; role: string; content: string; finish_reason?: string; tool_calls: number; tools?: string[]; images?: string[] }
 const messages = ref<Msg[]>([])
 const input = ref('')
 const pending = ref(false)
@@ -24,6 +24,19 @@ const sessions = ref<ChatSessionRow[]>([])
 const showSessions = ref(false)
 const log = ref<HTMLElement | null>(null)
 let es: EventSource | null = null
+
+// rich-docs P2: media staged for the next turn (uploaded on send, injected as
+// subject material; a vision model sees the image).
+type Staged = { file: File; url: string } // url = a local object URL for the instant preview
+const staged = ref<Staged[]>([])
+const fileInput = ref<HTMLInputElement | null>(null)
+function pickFiles() { fileInput.value?.click() }
+function onFiles(e: Event) {
+  const files = (e.target as HTMLInputElement).files
+  if (files) for (const f of Array.from(files)) staged.value.push({ file: f, url: URL.createObjectURL(f) })
+  if (fileInput.value) fileInput.value.value = '' // allow re-picking the same file
+}
+function removeStaged(i: number) { const s = staged.value[i]; if (s) URL.revokeObjectURL(s.url); staged.value.splice(i, 1) }
 
 // mirror the server's deterministic base session id (chat.go chatSessionFor)
 function baseSessionFor(ref_: string): string {
@@ -108,17 +121,30 @@ function newSession() {
 
 async function send() {
   const text = input.value.trim()
-  if (!text || !store.selectedRef) return
+  const toUpload = staged.value.slice()
+  // allow a media-only turn (a question is optional when an image is attached)
+  if ((!text && toUpload.length === 0) || !store.selectedRef) return
   input.value = ''; err.value = ''; pending.value = true
   const tempId = -Date.now()
-  messages.value.push({ id: tempId, role: 'user', content: text, tool_calls: 0 }) // optimistic echo
+  // optimistic echo — show the staged images instantly via their object URLs
+  messages.value.push({ id: tempId, role: 'user', content: text, tool_calls: 0, images: toUpload.map(s => s.url) })
+  staged.value = []
   nextTick(() => { if (log.value) log.value.scrollTop = log.value.scrollHeight })
   try {
+    // upload any attachments first (under this session), collect their ids
+    let attachmentIds: number[] | undefined
+    if (toUpload.length) {
+      const sid = activeSession.value || undefined
+      const ups = await Promise.all(toUpload.map(s =>
+        api.chatAttach(s.file, { session_id: sid, target_ref: store.selectedRef || undefined })))
+      attachmentIds = ups.map(u => u.id)
+    }
     const r = await api.chatSend({
       session_id: activeSession.value || undefined,
       target_ref: store.selectedRef,
       message: text,
       model: store.chatModel,
+      attachment_ids: attachmentIds,
     })
     if (r.session_id && r.session_id !== activeSession.value) {
       activeSession.value = r.session_id
@@ -169,7 +195,13 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
     <div ref="log" class="flex-1 overflow-auto px-3 py-3 space-y-3">
       <template v-for="m in messages" :key="m.id">
         <div v-if="visible(m) && m.role === 'user'" class="flex justify-end">
-          <div class="max-w-[85%] bg-sky-600/20 border border-sky-700/40 text-zinc-100 rounded-lg px-3 py-2 text-sm whitespace-pre-wrap">{{ m.content }}</div>
+          <div class="max-w-[85%] bg-sky-600/20 border border-sky-700/40 text-zinc-100 rounded-lg px-3 py-2 text-sm">
+            <div v-if="m.images && m.images.length" class="flex flex-wrap gap-1.5 mb-1.5">
+              <img v-for="(src, i) in m.images" :key="i" :src="src"
+                   class="max-h-40 max-w-full rounded border border-sky-700/40 object-contain" alt="attachment" />
+            </div>
+            <div v-if="m.content" class="whitespace-pre-wrap">{{ m.content }}</div>
+          </div>
         </div>
         <div v-else-if="m.role === 'assistant' && m.content.trim()" class="flex justify-start">
           <div class="max-w-[90%] bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm prose prose-invert prose-sm max-w-none" v-html="md.render(m.content)"></div>
@@ -189,13 +221,26 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
     </div>
 
     <div class="border-t border-zinc-800 p-2">
-      <textarea
-        v-model="input"
-        :disabled="!store.selectedRef"
-        rows="2"
-        placeholder="ask about this work item… (Enter to send)"
-        class="w-full bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 resize-none disabled:opacity-50"
-        @keydown="onKey"></textarea>
+      <!-- rich-docs P2: staged attachments preview -->
+      <div v-if="staged.length" class="flex flex-wrap gap-2 mb-2">
+        <div v-for="(s, i) in staged" :key="i" class="relative group">
+          <img :src="s.url" class="h-14 w-14 object-cover rounded border border-zinc-700" :alt="s.file.name" />
+          <button class="absolute -top-1.5 -right-1.5 bg-zinc-800 border border-zinc-600 rounded-full w-4 h-4 text-[10px] leading-none text-zinc-300 hover:text-rose-400"
+                  title="remove" @click="removeStaged(i)">×</button>
+        </div>
+      </div>
+      <div class="flex items-end gap-2">
+        <button class="text-zinc-400 hover:text-sky-300 disabled:opacity-40 pb-2 text-lg leading-none"
+                :disabled="!store.selectedRef" title="attach an image" @click="pickFiles">📎</button>
+        <input ref="fileInput" type="file" accept="image/*" multiple class="hidden" @change="onFiles" />
+        <textarea
+          v-model="input"
+          :disabled="!store.selectedRef"
+          rows="2"
+          placeholder="ask about this work item… (attach an image with 📎; Enter to send)"
+          class="flex-1 bg-zinc-900 border border-zinc-800 rounded px-3 py-2 text-sm text-zinc-200 resize-none disabled:opacity-50"
+          @keydown="onKey"></textarea>
+      </div>
     </div>
   </div>
 </template>

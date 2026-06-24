@@ -534,11 +534,27 @@ export const api = {
 
   // Stewdio chat-with-a-work-item (P1). chatSend appends a turn + dispatches it;
   // the reply is streamed separately via EventSource('/api/chat/stream?session_id=').
-  chatSend: (req: { session_id?: string; target_ref?: string; message: string; model?: string }) =>
+  // rich-docs P2: attachment_ids inject uploaded media as subject material.
+  chatSend: (req: { session_id?: string; target_ref?: string; message: string; model?: string; attachment_ids?: number[] }) =>
     postJSON<{ session_id: string; work_queue_id: number }>('/api/chat/send', req),
   // Stewdio P4: the conversation-history sidebar — all chat sessions for a target.
   chatSessions: (targetRef: string) =>
     getJSON<ChatSessionsResp>(`/api/chat/sessions?target_ref=${encodeURIComponent(targetRef)}`),
+  // rich-docs P2: upload media to a chat (multipart). Returns the attachment id +
+  // a served URL for inline rendering; pass the id to chatSend.attachment_ids.
+  chatAttach: async (file: File, opts: { session_id?: string; target_ref?: string }): Promise<ChatAttachResp> => {
+    const fd = new FormData()
+    fd.append('file', file)
+    if (opts.session_id) fd.append('session_id', opts.session_id)
+    if (opts.target_ref) fd.append('target_ref', opts.target_ref)
+    const r = await fetch('/api/chat/attach', { method: 'POST', body: fd })
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`
+      try { const b = await r.json(); if (b.error) msg = b.error } catch {}
+      throw new Error(msg)
+    }
+    return r.json()
+  },
 
   // Brainstorm (J.8 + J.9, MCP wrapper 0c1926c, UI batch 2026-05-29).
   brainstormLenses: () => getJSON<BrainstormLensesResp>('/api/brainstorm/lenses'),
@@ -1139,6 +1155,17 @@ export type ChatSessionRow = {
 export type ChatSessionsResp = {
   default_session: string
   sessions: ChatSessionRow[]
+}
+
+// rich-docs P2: a stored chat attachment (image/document as subject material).
+export type ChatAttachResp = {
+  id: number
+  session_id: string
+  filename: string
+  mime_type: string
+  kind: string
+  byte_size: number
+  url: string
 }
 
 export type ChatDispatch = {

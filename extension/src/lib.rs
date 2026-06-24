@@ -498,6 +498,15 @@ extension_sql_file!(
     requires = ["create_chat_tasks"],
 );
 
+// rich documents in chat, P2: durable session-scoped attachments — bytea +
+// chat_attachment_parts() assembles the 47 content_parts a vision model sees
+// (.spec/proposals/rich-docs-in-chat.md).
+extension_sql_file!(
+    "../48-chat-attachments.sql",
+    name = "create_chat_attachments",
+    requires = ["create_multimodal"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
