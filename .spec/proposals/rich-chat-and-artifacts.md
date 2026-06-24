@@ -1,8 +1,16 @@
 # Rich chat + artifacts — UX polish, document generation, remote MCP, multi-item chat
 
-**Status:** ✅ **RATIFIED in council 2026-06-24** (`dominion_in_council` satisfied for B + C).
-All four arcs approved; order **A → B → D → C**.
+**Status:** ✅ **BUILT + SHIPPED 2026-06-24** (autonomous /goal run, Opus 4.8). All four arcs landed, proven live, pushed (chain 00→50). RATIFIED in council 2026-06-24.
 **Author:** agent + Michael.
+
+## What shipped + how to use it (demo / port crib)
+
+- **Arc A — chat polish** (live, 0 console errors): drag-drop a file onto the chat; links in replies + the doc viewer navigate (internal `doc:slug` / `wi:id`) or open (external); ⬇ exports a conversation (`/api/chat/export`) and a doc (`/api/studies/export`); ■ stop a running turn; hover a message for copy / retry / ⊕ task; type **`/`** for the command palette (`/task /generate /extract /import /export`).
+- **Arc B — doc-build** (the showpiece): in chat, **`/generate` → "Generate a document: …"** spawns the `doc-build` pipeline (Delegate); the dev agent writes a generator script in the coder sandbox (now stocked with python-docx/pptx, openpyxl, reportlab, Pillow, markdown + pandoc + wkhtmltopdf), runs it, and `coder_export_artifact` hands back a **downloadable** pdf/xlsx/pptx/docx/zip. Proven live: the sandbox generated a real xlsx + pdf + docx; the generate→store→serve→download chain returns a valid xlsx. *(Needs the coder overlay running + a capable dev model; `refresh-tools` after deploy so `coder_export_artifact` is in the catalog.)*
+- **Arc C — remote MCP** (live): `stewards-mcp -http-addr 127.0.0.1:8092` (or `STEWARDS_MCP_HTTP_ADDR`) serves a **read-only** tool surface (`doc_*` + inspection) at `/mcp`, **bearer-token** auth (`STEWARDS_MCP_HTTP_TOKEN`). Point Claude Code / Codex at it: `claude mcp add stewards --transport http http://127.0.0.1:8092/mcp` (+ the bearer header). Proven: 401 without/with a wrong token; handshake + `tools/list` returns only the read-only profile (no write/coder/spawn tools); non-loopback bind without a token is refused. Local-bound first; flip to the mesh when ready.
+- **Arc D — chat across everything** (live): the empty-chat lens picker gains **"✸ Everything (whole pool)"** → `doc_search` across every work item + doc.
+
+**Ratified decisions** (2026-06-24): A = everything; B = coder-sandbox generation, model-in-the-loop, doc libs in the sandbox, zip exports; C = read-only profile, local-bound first; D = "all" + per-project lenses (subset multi-select = fast-follow). Order A→B→D→C.
 
 **Ratified decisions:**
 1. **Arc A = EVERYTHING** — drag-drop + internal hyperlinks + session export + doc
