@@ -31,6 +31,7 @@ func (d *Deps) registerChat(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/chat/attach", d.chatAttachHandler)           // rich-docs P2: upload media to a chat
 	mux.HandleFunc("GET /api/chat/attachment/{id}", d.chatAttachmentHandler) // rich-docs P2: serve the bytes (inline render)
 	mux.HandleFunc("GET /api/chat/projects", d.chatProjectsHandler)        // rich-docs P3d: the empty-chat lens picker
+	mux.HandleFunc("GET /api/chat/export", d.chatExportHandler)            // Arc A: export a session transcript (md/json)
 }
 
 // maxAttachmentBytes caps an uploaded file. Images fit comfortably; the :8090
@@ -442,4 +443,72 @@ func (d *Deps) chatProjectsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// ── chat export — get a conversation OUT of the substrate (Arc A). ──
+// GET /api/chat/export?session_id=&format=md|json → a downloadable transcript.
+// md = a readable conversation; json = the raw rows (id/role/content/tools/created).
+func (d *Deps) chatExportHandler(w http.ResponseWriter, r *http.Request) {
+	sid := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	if sid == "" {
+		writeErr(w, http.StatusBadRequest, "session_id required")
+		return
+	}
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "md"
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	rows, err := d.Pool.Query(ctx,
+		`SELECT id, role, coalesce(content,''), coalesce(to_char(created_at,'YYYY-MM-DD HH24:MI:SS'),'')
+		   FROM stewards.messages
+		  WHERE session_id=$1 AND coalesce(content,'') <> '' AND content NOT LIKE '(Context:%'
+		  ORDER BY id`, sid)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "export: "+err.Error())
+		return
+	}
+	defer rows.Close()
+	type turn struct {
+		ID      int64  `json:"id"`
+		Role    string `json:"role"`
+		Content string `json:"content"`
+		At      string `json:"at,omitempty"`
+	}
+	var turns []turn
+	for rows.Next() {
+		var t turn
+		if rows.Scan(&t.ID, &t.Role, &t.Content, &t.At) == nil {
+			turns = append(turns, t)
+		}
+	}
+	safe := sessionSafe.ReplaceAllString(sid, "-")
+	if format == "json" {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.json\"", safe))
+		_ = json.NewEncoder(w).Encode(map[string]any{"session_id": sid, "turns": turns})
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "# Conversation: %s\n\n", sid)
+	for _, t := range turns {
+		who := t.Role
+		switch t.Role {
+		case "user":
+			who = "You"
+		case "assistant":
+			who = "Stewards"
+		}
+		fmt.Fprintf(&b, "## %s%s\n\n%s\n\n", who, func() string {
+			if t.At != "" {
+				return " · " + t.At
+			}
+			return ""
+		}(), t.Content)
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.md\"", safe))
+	_, _ = w.Write([]byte(b.String()))
 }

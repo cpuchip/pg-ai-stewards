@@ -7,10 +7,13 @@ import { ref, watch, onUnmounted } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { api, type StudyDetail, type WorkItemDetail } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
+import { makeLinkClick } from './useDocLinks'
 
 defineOptions({ inheritAttrs: false })
 const store = useStewdioStore()
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
+// Arc A: clicking a link in the doc body navigates (internal) or opens (external).
+const onLink = makeLinkClick(store)
 
 const loading = ref(false)
 const err = ref('')
@@ -60,9 +63,14 @@ onUnmounted(stopPoll)
     <div v-else-if="err" class="text-rose-400">{{ err }}</div>
 
     <div v-else-if="doc">
-      <div class="text-zinc-100 text-base font-medium mb-1">{{ doc.title || doc.slug }}</div>
+      <div class="flex items-start justify-between gap-2 mb-1">
+        <div class="text-zinc-100 text-base font-medium">{{ doc.title || doc.slug }}</div>
+        <a :href="`/api/studies/export?slug=${encodeURIComponent(doc.slug)}&format=md`"
+           class="shrink-0 text-[11px] text-sky-400 hover:text-sky-300 border border-zinc-800 rounded px-1.5 py-0.5"
+           title="download this document as markdown" download>⬇ .md</a>
+      </div>
       <div class="text-zinc-600 text-xs mb-4">{{ doc.kind }} · {{ doc.slug }}</div>
-      <div class="prose prose-invert prose-sm max-w-none" v-html="md.render(doc.body || '')"></div>
+      <div class="prose prose-invert prose-sm max-w-none" v-html="md.render(doc.body || '')" @click="onLink"></div>
     </div>
 
     <div v-else-if="wi">

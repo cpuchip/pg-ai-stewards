@@ -9,8 +9,10 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,6 +24,7 @@ func (d *Deps) registerStudies(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/studies/list",   d.studiesListHandler)
 	mux.HandleFunc("GET /api/studies/get",    d.studiesGetHandler)
 	mux.HandleFunc("GET /api/studies/search", d.studiesSearchHandler)
+	mux.HandleFunc("GET /api/studies/export", d.studiesExportHandler) // Arc A: download a doc's markdown
 }
 
 type studyBrief struct {
@@ -205,6 +208,35 @@ func (d *Deps) studiesGetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, s)
+}
+
+// /api/studies/export?slug=X&format=md — download a doc's markdown body (Arc A:
+// get a generated document OUT of the substrate). pdf/docx/etc. ride Arc B.
+func (d *Deps) studiesExportHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	slug := strings.TrimSpace(r.URL.Query().Get("slug"))
+	if slug == "" {
+		writeErr(w, http.StatusBadRequest, "slug query param required")
+		return
+	}
+	var title, body string
+	if err := d.Pool.QueryRow(ctx,
+		`SELECT coalesce(frontmatter->>'title', slug), coalesce(body,'')
+		   FROM stewards.docs WHERE slug = $1`, slug,
+	).Scan(&title, &body); err != nil {
+		writeErr(w, http.StatusNotFound, "doc not found: "+err.Error())
+		return
+	}
+	// Prepend an H1 title if the body doesn't already lead with one.
+	out := body
+	if !strings.HasPrefix(strings.TrimSpace(body), "#") && strings.TrimSpace(title) != "" {
+		out = "# " + title + "\n\n" + body
+	}
+	safe := sessionSafe.ReplaceAllString(slug, "-")
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.md\"", safe))
+	_, _ = w.Write([]byte(out))
 }
 
 // /api/studies/search?q=...&mode=fts|semantic|combined&limit=N

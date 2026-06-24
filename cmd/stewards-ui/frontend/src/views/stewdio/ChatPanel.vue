@@ -9,10 +9,13 @@ import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { api, type ChatSessionRow } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
+import { makeLinkClick } from './useDocLinks'
 
 defineOptions({ inheritAttrs: false })
 const store = useStewdioStore()
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
+// Arc A: links in assistant replies navigate (internal) or open (external).
+const onLink = makeLinkClick(store)
 
 // rich-docs P3d: the empty-chat lens. With no work item selected, the user can
 // ground the chat in a PROJECT/corpus instead; chatRef becomes "project:<name>"
@@ -40,14 +43,27 @@ let es: EventSource | null = null
 type Staged = { file: File; url: string; isImage: boolean }
 const staged = ref<Staged[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
+const dragActive = ref(false)
 function pickFiles() { fileInput.value?.click() }
-function onFiles(e: Event) {
-  const files = (e.target as HTMLInputElement).files
-  if (files) for (const f of Array.from(files)) {
+function addFiles(files: FileList | File[] | null) {
+  if (!files) return
+  for (const f of Array.from(files)) {
     const isImage = f.type.startsWith('image/')
     staged.value.push({ file: f, url: isImage ? URL.createObjectURL(f) : '', isImage })
   }
+}
+function onFiles(e: Event) {
+  addFiles((e.target as HTMLInputElement).files)
   if (fileInput.value) fileInput.value.value = '' // allow re-picking the same file
+}
+// Arc A: drag-and-drop files onto the chat → the same staged pipeline as 📎.
+function onDragOver(e: DragEvent) { if (chatRef.value) { e.preventDefault(); dragActive.value = true } }
+function onDragLeave() { dragActive.value = false }
+function onDrop(e: DragEvent) {
+  dragActive.value = false
+  if (!chatRef.value) return
+  e.preventDefault()
+  addFiles(e.dataTransfer?.files ?? null)
 }
 function removeStaged(i: number) { const s = staged.value[i]; if (s?.url) URL.revokeObjectURL(s.url); staged.value.splice(i, 1) }
 
@@ -183,10 +199,18 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
 </script>
 
 <template>
-  <div class="h-full flex flex-col bg-zinc-950">
+  <div class="h-full flex flex-col bg-zinc-950 relative"
+       :class="dragActive ? 'ring-2 ring-sky-500/60 ring-inset' : ''"
+       @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
+    <!-- Arc A: drag-and-drop overlay -->
+    <div v-if="dragActive" class="absolute inset-0 z-20 bg-sky-950/40 border-2 border-dashed border-sky-500/60 rounded flex items-center justify-center pointer-events-none">
+      <span class="text-sky-200 text-sm">drop a document, image, or zip to attach</span>
+    </div>
     <div class="border-b border-zinc-800 px-3 py-2 flex items-center gap-2 text-xs">
       <button class="text-zinc-400 hover:text-zinc-200" :title="`${sessions.length} conversation(s)`"
               @click="showSessions = !showSessions">💬<span class="text-zinc-600 ml-0.5">{{ sessions.length || '' }}</span></button>
+      <a v-if="activeSession && messages.length" :href="`/api/chat/export?session_id=${encodeURIComponent(activeSession)}&format=md`"
+         class="text-zinc-500 hover:text-sky-300" title="export this conversation as markdown" download>⬇</a>
       <span v-if="store.selectedRef" class="text-zinc-600 truncate flex-1" :title="store.selectedRef">
         {{ store.selectedTitle || store.selectedRef }}
       </span>
@@ -231,7 +255,7 @@ function onKey(e: KeyboardEvent) { if (e.key === 'Enter' && !e.shiftKey) { e.pre
           </div>
         </div>
         <div v-else-if="m.role === 'assistant' && m.content.trim()" class="flex justify-start">
-          <div class="max-w-[90%] bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm prose prose-invert prose-sm max-w-none" v-html="md.render(m.content)"></div>
+          <div class="max-w-[90%] bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm prose prose-invert prose-sm max-w-none" v-html="md.render(m.content)" @click="onLink"></div>
         </div>
         <div v-else-if="m.role === 'assistant' && m.tool_calls > 0" class="flex items-center gap-1 text-[11px] text-zinc-600">
           <span class="italic">🔧 retrieving</span>
