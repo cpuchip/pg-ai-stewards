@@ -31,8 +31,9 @@ import (
 func main() {
 	var (
 		filename    = flag.String("filename", "attachment", "original filename (drives type detection for ambiguous magic)")
-		render      = flag.Bool("render", false, "also render page pixels (poppler) alongside the always-on text")
-		maxPages    = flag.Int("max-pages", 0, "cap rendered pages (0 = built-in default)")
+		render      = flag.Bool("render", false, "FORCE the pixel overlay (poppler) for every page up to max-pages")
+		autoRender  = flag.Bool("auto-render", true, "router default: render pixels for a SHORT doc (<= max-pages) but not a long one")
+		maxPages    = flag.Int("max-pages", 0, "cap rendered pages / the short-doc threshold (0 = built-in default 10)")
 		dpi         = flag.Int("dpi", 0, "render DPI (0 = default 150)")
 		clamavDB    = flag.String("clamav-db", os.Getenv("DOC_EXTRACT_CLAMAV_DB"), "ClamAV signature DB dir (empty = skip the signature scan)")
 		maxTotal    = flag.Int64("max-total", 0, "archive: max total uncompressed bytes (0 = default 200MB)")
@@ -84,6 +85,7 @@ func main() {
 	res, err := docextract.Run(ctx, data, docextract.Options{
 		Filename:    *filename,
 		RenderPages: *render,
+		AutoRender:  *autoRender,
 		MaxPages:    *maxPages,
 		RenderDPI:   *dpi,
 		ClamAVDB:    *clamavDB,

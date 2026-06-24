@@ -97,8 +97,10 @@ func ExtractFile(ctx context.Context, data []byte, name string, opts Options) Fi
 		fr.WordCount = len(strings.Fields(text))
 	}
 
-	// Pixels — the additive overlay, only when requested.
-	if opts.RenderPages {
+	// Pixels — the additive overlay. The router (proposal §3): render when
+	// FORCED, or AUTO for a short doc (page count <= MaxPages) so a short PDF
+	// yields both text + pixels while a long report stays text-only.
+	if shouldRenderPixels(ctx, data, docType, opts) {
 		if pages, err := renderPages(ctx, data, docType, opts); err != nil {
 			// A render failure is non-fatal — the text already crossed the
 			// boundary. Record it as a note, don't clobber a text error.
@@ -253,6 +255,60 @@ func renderPages(ctx context.Context, data []byte, docType string, opts Options)
 		pages = append(pages, PageImage{Page: i + 1, PNGBase64: base64.StdEncoding.EncodeToString(b)})
 	}
 	return pages, nil
+}
+
+// shouldRenderPixels is the router decision for the pixel overlay. PDF only in
+// v1. RenderPages forces it; otherwise AutoRender renders only a SHORT doc
+// (page count <= MaxPages) so a long report stays text-only (proposal §3). If
+// the page count can't be probed (no pdfinfo on a dev host), auto-render is
+// skipped — text already crossed the boundary.
+func shouldRenderPixels(ctx context.Context, data []byte, docType string, opts Options) bool {
+	if docType != "pdf" {
+		return false
+	}
+	if opts.RenderPages {
+		return true // forced ("render all")
+	}
+	if !opts.AutoRender {
+		return false
+	}
+	max := opts.MaxPages
+	if max <= 0 {
+		max = defaultMaxPages
+	}
+	n := pdfPageCount(ctx, data)
+	return n > 0 && n <= max
+}
+
+// pdfPageCount probes a PDF's page count via poppler's pdfinfo. Returns -1 when
+// pdfinfo is unavailable or the count can't be parsed (auto-render then skips).
+func pdfPageCount(ctx context.Context, data []byte) int {
+	if _, err := exec.LookPath("pdfinfo"); err != nil {
+		return -1
+	}
+	tmp, err := os.CreateTemp("", "docextract-info-*.pdf")
+	if err != nil {
+		return -1
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return -1
+	}
+	tmp.Close()
+	out, err := exec.CommandContext(ctx, "pdfinfo", tmp.Name()).Output()
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "Pages:") {
+			var n int
+			if _, err := fmt.Sscanf(strings.TrimSpace(strings.TrimPrefix(line, "Pages:")), "%d", &n); err == nil {
+				return n
+			}
+		}
+	}
+	return -1
 }
 
 // Run is the top-level entry: it decides between the single-file pipeline and

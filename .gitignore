@@ -10,6 +10,8 @@ bin/
 /workspace/
 # Local-only scratch (one-shot dispatches/probes; may reference operator data)
 .spec/scratch/
+# Build/test scratch (binaries, fixtures, probe output)
+scratch/
 # Local compose tweaks (Compose auto-merges this). Drop the coder override
 # here to keep the coder on for your own host without the -f flag, while the
 # committed default stays socket-free.

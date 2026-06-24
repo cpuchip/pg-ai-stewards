@@ -41,6 +41,7 @@ type docExtractOutput struct {
 	Mode           string   `json:"mode"`              // file | archive
 	DocType        string   `json:"doc_type,omitempty"`
 	ExtractedChars int      `json:"extracted_chars"`
+	ExtractedText  string   `json:"extracted_text,omitempty"` // the text, returned in-turn (capped) so the agent reads it now
 	ScanVerdict    string   `json:"scan_verdict"`
 	ScanFindings   []string `json:"scan_findings,omitempty"`
 	Quarantined    bool     `json:"quarantined,omitempty"`
@@ -49,84 +50,110 @@ type docExtractOutput struct {
 	Summary        string   `json:"summary"`
 }
 
+// toolTextCap bounds the text returned in the tool RESULT (the full text is
+// always persisted to chat_attachments.extracted_text and injected on later
+// turns; this just keeps a huge doc from blowing the immediate tool result).
+const toolTextCap = 24000
+
 func makeDocExtract(run *runner.Runner, pool *pgxpool.Pool) func(context.Context, *mcp.CallToolRequest, docExtractInput) (*mcp.CallToolResult, docExtractOutput, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in docExtractInput) (*mcp.CallToolResult, docExtractOutput, error) {
-		if in.AttachmentID <= 0 {
-			return errResult("attachment_id is required"), docExtractOutput{}, nil
-		}
-		// Read the stored bytes (server-side — never through the model).
-		var (
-			sessionID, filename, mime string
-			data                      []byte
-			alreadyText               *string
-		)
-		if err := pool.QueryRow(ctx,
-			`SELECT session_id, filename, coalesce(mime_type,''), bytes, extracted_text
-			   FROM stewards.chat_attachments WHERE id = $1`, in.AttachmentID,
-		).Scan(&sessionID, &filename, &mime, &data, &alreadyText); err != nil {
-			return errResult("attachment %d not found: %v", in.AttachmentID, err), docExtractOutput{}, nil
-		}
-		if len(data) == 0 {
-			return errResult("attachment %d has no bytes", in.AttachmentID), docExtractOutput{}, nil
-		}
-
-		// Spawn the hardened sandbox.
-		res, stderr, err := run.Extract(ctx, data, runner.ExtractArgs{
-			Filename: filename, Render: in.Render, MaxPages: in.MaxPages,
-			Caps: docextract.DefaultArchiveCaps(),
-		})
+		out, err := extractAttachment(ctx, pool, run, in)
 		if err != nil {
-			return errResult("extraction failed: %v", err), docExtractOutput{}, nil
+			return errResult("%v", err), docExtractOutput{}, nil
 		}
-		_ = stderr // converter logs to stderr; not surfaced unless we error
-
-		out := docExtractOutput{AttachmentID: in.AttachmentID, Mode: res.Mode}
-
-		switch res.Mode {
-		case "file":
-			fr := firstFile(res)
-			out.DocType = fr.DocType
-			out.ScanVerdict = fr.Scan.Verdict
-			out.ScanFindings = fr.Scan.Findings
-			text := fr.Text
-			if fr.Skipped { // quarantined (malicious)
-				out.Quarantined = true
-				text = fmt.Sprintf("[QUARANTINED — this file was flagged as malicious by the security scan (%s) and was NOT parsed. %s]",
-					nonEmpty(fr.Scan.Signature, "signature match"), fr.Error)
-			}
-			if err := writeExtracted(ctx, pool, in.AttachmentID, text, fr.Scan); err != nil {
-				return errResult("write extracted: %v", err), docExtractOutput{}, nil
-			}
-			out.ExtractedChars = len(text)
-			// Pixel overlay -> child image attachments under this document.
-			if len(fr.Pages) > 0 {
-				ids, perr := writePageImages(ctx, pool, in.AttachmentID, sessionID, filename, fr.Pages)
-				if perr != nil {
-					return errResult("write page images: %v", perr), docExtractOutput{}, nil
-				}
-				out.PageImageIDs = ids
-			}
-			out.Summary = fileSummary(filename, fr, len(out.PageImageIDs))
-
-		case "archive":
-			manifest, verdict, findings := archiveManifest(filename, res)
-			out.Members = len(res.Files)
-			out.ScanVerdict = verdict
-			out.ScanFindings = findings
-			scan := docextract.ScanResult{Verdict: verdict, Findings: findings, Engine: "clamav+structural"}
-			if err := writeExtracted(ctx, pool, in.AttachmentID, manifest, scan); err != nil {
-				return errResult("write archive manifest: %v", err), docExtractOutput{}, nil
-			}
-			out.ExtractedChars = len(manifest)
-			out.Summary = fmt.Sprintf("archive %q: %d member(s) unpacked + scanned (verdict %s). Surfaced as a folder tree in the conversation; use doc_import_corpus to persist it as a searchable project.",
-				filename, len(res.Files), verdict)
-
-		default:
-			return errResult("unexpected converter mode %q", res.Mode), docExtractOutput{}, nil
-		}
-
 		return nil, out, nil
 	}
+}
+
+// extractAttachment is the deterministic core (callable from the MCP tool and
+// the `-attachment` debug path): read bytes -> spawn the hardened sandbox ->
+// write extracted_text + page images back -> return a summary + the text.
+func extractAttachment(ctx context.Context, pool *pgxpool.Pool, run *runner.Runner, in docExtractInput) (docExtractOutput, error) {
+	if in.AttachmentID <= 0 {
+		return docExtractOutput{}, fmt.Errorf("attachment_id is required")
+	}
+	// Read the stored bytes (server-side — never through the model).
+	var (
+		sessionID, filename, mime string
+		data                      []byte
+		alreadyText               *string
+	)
+	if err := pool.QueryRow(ctx,
+		`SELECT session_id, filename, coalesce(mime_type,''), bytes, extracted_text
+		   FROM stewards.chat_attachments WHERE id = $1`, in.AttachmentID,
+	).Scan(&sessionID, &filename, &mime, &data, &alreadyText); err != nil {
+		return docExtractOutput{}, fmt.Errorf("attachment %d not found: %w", in.AttachmentID, err)
+	}
+	if len(data) == 0 {
+		return docExtractOutput{}, fmt.Errorf("attachment %d has no bytes", in.AttachmentID)
+	}
+
+	// Spawn the hardened sandbox. AutoRender on = the router default (render a
+	// short doc's pixels; long docs stay text-only); Render forces all pages.
+	res, stderr, err := run.Extract(ctx, data, runner.ExtractArgs{
+		Filename: filename, Render: in.Render, AutoRender: true, MaxPages: in.MaxPages,
+		Caps: docextract.DefaultArchiveCaps(),
+	})
+	if err != nil {
+		return docExtractOutput{}, fmt.Errorf("extraction failed: %w", err)
+	}
+	_ = stderr // converter logs to stderr; not surfaced unless we error
+
+	out := docExtractOutput{AttachmentID: in.AttachmentID, Mode: res.Mode}
+
+	switch res.Mode {
+	case "file":
+		fr := firstFile(res)
+		out.DocType = fr.DocType
+		out.ScanVerdict = fr.Scan.Verdict
+		out.ScanFindings = fr.Scan.Findings
+		text := fr.Text
+		if fr.Skipped { // quarantined (malicious)
+			out.Quarantined = true
+			text = fmt.Sprintf("[QUARANTINED — this file was flagged as malicious by the security scan (%s) and was NOT parsed. %s]",
+				nonEmpty(fr.Scan.Signature, "signature match"), fr.Error)
+		}
+		if err := writeExtracted(ctx, pool, in.AttachmentID, text, fr.Scan); err != nil {
+			return docExtractOutput{}, fmt.Errorf("write extracted: %w", err)
+		}
+		out.ExtractedChars = len(text)
+		out.ExtractedText = capText(text)
+		// Pixel overlay -> child image attachments under this document.
+		if len(fr.Pages) > 0 {
+			ids, perr := writePageImages(ctx, pool, in.AttachmentID, sessionID, filename, fr.Pages)
+			if perr != nil {
+				return docExtractOutput{}, fmt.Errorf("write page images: %w", perr)
+			}
+			out.PageImageIDs = ids
+		}
+		out.Summary = fileSummary(filename, fr, len(out.PageImageIDs))
+
+	case "archive":
+		manifest, verdict, findings := archiveManifest(filename, res)
+		out.Members = len(res.Files)
+		out.ScanVerdict = verdict
+		out.ScanFindings = findings
+		scan := docextract.ScanResult{Verdict: verdict, Findings: findings, Engine: "clamav+structural"}
+		if err := writeExtracted(ctx, pool, in.AttachmentID, manifest, scan); err != nil {
+			return docExtractOutput{}, fmt.Errorf("write archive manifest: %w", err)
+		}
+		out.ExtractedChars = len(manifest)
+		out.ExtractedText = capText(manifest)
+		out.Summary = fmt.Sprintf("archive %q: %d member(s) unpacked + scanned (verdict %s). Surfaced as a folder tree in the conversation; use doc_import_corpus to persist it as a searchable project.",
+			filename, len(res.Files), verdict)
+
+	default:
+		return docExtractOutput{}, fmt.Errorf("unexpected converter mode %q", res.Mode)
+	}
+
+	return out, nil
+}
+
+func capText(s string) string {
+	if len(s) <= toolTextCap {
+		return s
+	}
+	return s[:toolTextCap] + "\n\n[…truncated in this tool result; the full text is attached to the document]"
 }
 
 // writeExtracted records the extracted text + scan verdict on the attachment.

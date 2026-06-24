@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -33,6 +34,8 @@ const version = "0.1.0"
 
 func main() {
 	smoke := flag.Bool("smoke", false, "Spawn the doc-extract sandbox on a benign input, assert it extracts, and exit.")
+	attach := flag.Int64("attachment", 0, "Debug: run doc_extract on this chat_attachments id against STEWARDS_DSN, print the JSON result, and exit.")
+	render := flag.Bool("render", false, "With -attachment: force the pixel overlay.")
 	flag.Parse()
 
 	log.SetOutput(os.Stderr)
@@ -60,6 +63,18 @@ func main() {
 	defer pool.Close()
 
 	run := runner.New()
+
+	// Debug path: run the tool core directly (live DB + live container) and exit.
+	if *attach > 0 {
+		out, derr := extractAttachment(ctx, pool, run, docExtractInput{AttachmentID: *attach, Render: *render})
+		if derr != nil {
+			log.Fatalf("extract attachment %d: %v", *attach, derr)
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(out)
+		return
+	}
 	srv := mcp.NewServer(&mcp.Implementation{Name: "doc-extract-mcp", Version: version}, nil)
 	registerDocExtractTools(srv, run, pool)
 

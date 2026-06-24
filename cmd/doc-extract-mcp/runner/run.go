@@ -55,7 +55,8 @@ func New() *Runner {
 // ExtractArgs mirror the converter's flags for one run.
 type ExtractArgs struct {
 	Filename      string
-	Render        bool
+	Render        bool // FORCE the pixel overlay (every page up to MaxPages)
+	AutoRender    bool // router default: render only a SHORT doc (<= MaxPages)
 	MaxPages      int
 	DPI           int
 	Caps          docextract.ArchiveCaps
@@ -100,13 +101,16 @@ func (r *Runner) Extract(ctx context.Context, data []byte, a ExtractArgs) (docex
 	// Converter flags (the image ENTRYPOINT is the doc-extract binary).
 	args = append(args, "-filename", a.Filename)
 	if a.Render {
-		args = append(args, "-render")
-		if a.MaxPages > 0 {
-			args = append(args, "-max-pages", strconv.Itoa(a.MaxPages))
-		}
-		if a.DPI > 0 {
-			args = append(args, "-dpi", strconv.Itoa(a.DPI))
-		}
+		args = append(args, "-render") // force every page
+	}
+	// -auto-render defaults true in the converter; pass it explicitly so the
+	// caller controls the router behavior deterministically.
+	args = append(args, "-auto-render="+strconv.FormatBool(a.AutoRender))
+	if a.MaxPages > 0 {
+		args = append(args, "-max-pages", strconv.Itoa(a.MaxPages))
+	}
+	if a.DPI > 0 {
+		args = append(args, "-dpi", strconv.Itoa(a.DPI))
 	}
 	if r.ClamAVVol != "" {
 		args = append(args, "-clamav-db", "/clamav")

@@ -32,10 +32,15 @@ type Options struct {
 	// magic bytes are ambiguous — docx/xlsx/pptx all share the zip magic).
 	Filename string
 
-	// RenderPages requests the pixel overlay (poppler pdftoppm) in addition to
-	// the always-on text. Off by default — text is cheap, pixels cost a vision
-	// call per page.
+	// RenderPages FORCES the pixel overlay (poppler pdftoppm) regardless of
+	// length — "render all pages" up to MaxPages. Off by default.
 	RenderPages bool
+
+	// AutoRender is the router default (proposal §3): render the pixel overlay
+	// for a SHORT doc (page count <= MaxPages) but not a long one — text always,
+	// pixels for visual/short docs. Set by the doc_extract tool so a short PDF
+	// yields both text and page images while a 200-page report stays text-only.
+	AutoRender bool
 
 	// MaxPages caps how many pages get rendered to pixels (the per-doc cost
 	// ceiling, §9). 0 = a small built-in default. Text is never capped.
