@@ -1653,19 +1653,20 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
         .build()
         .map_err(|e| format!("http client build: {}", e))?;
 
-    let mut req = client.post(&url).json(&body);
-    if let Some(token) = provider.bearer_token()? {
-        req = req.bearer_auth(token);
-    }
-
-    let resp = req
-        .send()
-        .map_err(|e| format!("POST {}: {}", url, e))?;
-    let status = resp.status();
-    if !status.is_success() {
-        let body = resp.text().unwrap_or_default();
-        return Err(format!("embeddings HTTP {}: {}", status, body));
-    }
+    // Bearer minted once, reused across retries (same as chat).
+    let bearer: Option<String> = provider.bearer_token()?;
+    // POST with transient retry/backoff (#243): an embed 429/5xx blip is
+    // absorbed here rather than failing the embed work row.
+    let resp = send_with_retry(
+        || {
+            let mut req = client.post(&url).json(&body);
+            if let Some(token) = &bearer {
+                req = req.bearer_auth(token);
+            }
+            req
+        },
+        "embeddings",
+    )?;
 
     let parsed: serde_json::Value = resp
         .json()
@@ -1731,6 +1732,79 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
 /// On success, returns Chatted with the parsed assistant message
 /// extracted into top-level fields. Phase 3 inserts that message
 /// into stewards.messages and stamps usage.
+/// Exponential backoff for retry `attempt` (1-based): base * 2^(attempt-1), capped at 10s.
+fn backoff_delay(attempt: u32, base_ms: u64) -> std::time::Duration {
+    let shift = attempt.saturating_sub(1).min(6);
+    let ms = base_ms.saturating_mul(1u64 << shift).min(10_000);
+    std::time::Duration::from_millis(ms)
+}
+
+/// POST a request with retry + exponential backoff on TRANSIENT failures —
+/// HTTP 408/429/any 5xx (incl. Cloudflare 52x), or a network/connection error.
+/// A `reqwest` RequestBuilder is consumed by `.send()`, so `build` reconstructs
+/// the request on each attempt. Non-transient responses (4xx other than
+/// 408/429) fail fast — no point retrying a 400/401/404. Returns the first
+/// successful Response, or the final error string after exhausting attempts.
+///
+/// This closes the #243 gap: a transient blip MID-tool-loop (a Vertex
+/// preview-model 429 "Resource exhausted", an Anthropic 529 overload, a
+/// Cloudflare 52x) used to fail the whole stage — the stage model is resolved
+/// once and a single failed turn errored the chat row → failed the work_item.
+/// Now the blip is absorbed in place; only a PERSISTENT transient falls through
+/// to the steward's stage-level alias failover (32-alias-failover.sql) as the
+/// backstop. Tunable without a rebuild: STEWARDS_HTTP_RETRY_MAX (total attempts,
+/// default 3), STEWARDS_HTTP_RETRY_BASE_MS (backoff base ms, default 800).
+fn send_with_retry(
+    build: impl Fn() -> reqwest::blocking::RequestBuilder,
+    label: &str,
+) -> Result<reqwest::blocking::Response, String> {
+    let max_attempts: u32 = std::env::var("STEWARDS_HTTP_RETRY_MAX")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(3);
+    let base_ms: u64 = std::env::var("STEWARDS_HTTP_RETRY_BASE_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(800);
+    let mut attempt: u32 = 0;
+    loop {
+        attempt += 1;
+        match build().send() {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    return Ok(resp);
+                }
+                let code = status.as_u16();
+                let transient = code == 408 || code == 429 || status.is_server_error();
+                if transient && attempt < max_attempts {
+                    pgrx::log!(
+                        "stewards: {} transient HTTP {} (attempt {}/{}); backing off",
+                        label, code, attempt, max_attempts
+                    );
+                    std::thread::sleep(backoff_delay(attempt, base_ms));
+                    continue;
+                }
+                let body = resp.text().unwrap_or_default();
+                return Err(format!("{} HTTP {}: {}", label, status, body));
+            }
+            Err(e) => {
+                // Network / connection error — treat as transient and retry.
+                if attempt < max_attempts {
+                    pgrx::log!(
+                        "stewards: {} send error (attempt {}/{}): {}; backing off",
+                        label, attempt, max_attempts, e
+                    );
+                    std::thread::sleep(backoff_delay(attempt, base_ms));
+                    continue;
+                }
+                return Err(format!("{} POST: {}", label, e));
+            }
+        }
+    }
+}
+
 fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome, String> {
     let provider = PROVIDER_REGISTRY
         .get()
@@ -1831,28 +1905,30 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
         .build()
         .map_err(|e| format!("http client build: {}", e))?;
 
-    let mut req = client.post(&url).json(body);
-    if is_anthropic {
-        // Anthropic format auths via x-api-key + a version header, not Bearer.
-        if let Some(key) = &provider.api_key {
-            req = req
-                .header("x-api-key", key.as_str())
-                .header("anthropic-version", "2023-06-01");
-        }
-    } else if let Some(token) = provider.bearer_token()? {
-        // OpenAI-compat: a static api_key, or a freshly-minted Google SA token
-        // (Vertex no-train) for the google_sa auth mode.
-        req = req.bearer_auth(token);
-    }
-
-    let resp = req
-        .send()
-        .map_err(|e| format!("POST {}: {}", url, e))?;
-    let status = resp.status();
-    if !status.is_success() {
-        let resp_body = resp.text().unwrap_or_default();
-        return Err(format!("chat HTTP {}: {}", status, resp_body));
-    }
+    // Mint the bearer once (the SA token is cached anyway) so it's reused across
+    // retries; propagate an SA-mint error before entering the retry loop.
+    let bearer: Option<String> = if is_anthropic { None } else { provider.bearer_token()? };
+    // POST with transient retry/backoff (#243): a 429/5xx blip is absorbed here
+    // instead of failing the whole tool-loop stage.
+    let resp = send_with_retry(
+        || {
+            let mut req = client.post(&url).json(body);
+            if is_anthropic {
+                // Anthropic format auths via x-api-key + a version header, not Bearer.
+                if let Some(key) = &provider.api_key {
+                    req = req
+                        .header("x-api-key", key.as_str())
+                        .header("anthropic-version", "2023-06-01");
+                }
+            } else if let Some(token) = &bearer {
+                // OpenAI-compat: a static api_key, or a freshly-minted Google SA
+                // token (Vertex no-train) for the google_sa auth mode.
+                req = req.bearer_auth(token);
+            }
+            req
+        },
+        "chat",
+    )?;
 
     // ES.6: the request streams (stream:true). Parse the SSE event
     // stream and reassemble it into the standard non-streaming response
