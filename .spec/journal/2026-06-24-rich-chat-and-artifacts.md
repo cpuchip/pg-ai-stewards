@@ -102,6 +102,50 @@ verify-under-real-conditions earned its keep three times in one session.
 fresh-rig runbook (images, Gemini provider, role-alias repoint, doc-extract
 overlay, refresh-tools, verify) so the work copy can soak everything in.
 
+## Round 3 — cockpit panels + cards + image gen (Michael's batch, same day)
+
+Michael's batch: a Sessions view + windowing manager, a Models/usage panel, all 4
+fast-follows, the hardening quick wins, and "generate images too." Sequenced
+(his pick) gemini-image-first; shipped 4 of 6 slices, each proven live + pushed:
+
+1. **Sessions panel + windowing** (`ebd9835`) — `GET /api/chat/sessions/all` lists
+   EVERY chat (target parsed from the stored "(Context:…)" turn, titles batch-
+   resolved); click reopens the exact session (store.openChat → ChatPanel watchers,
+   honoringRequest guard). "▦ panels" launcher opens/reopens any pane. Closes the
+   "can't get back to a session" gap. Proven: launcher → Sessions tab → click →
+   chat loads its messages.
+2. **Models & usage panel** (`be54cbf`) — `GET /api/models/aliases` + /api/activity:
+   Running-now (N sessions/model + tokens), role aliases→members (preferred/usable),
+   24h tokens+cost. Proven (reason→qwen3.6-35b-a3b…; gemini members on a gemini rig).
+3. **Rich artifact cards** (`b43d1b1`) — attachment links in replies render as
+   icon/filename/size/⬇ cards (?meta=1 + ?download=1 on the serve handler). Proven:
+   "📕 executive_brief_counterpoint.pdf · 3 KB".
+4. **generate_image** (`b4e77bd`) — Gemini Nano Banana (gemini-2.5-flash-image,
+   responseModalities=IMAGE) → chat_attachment(kind=image); core stewards-mcp tool,
+   OFF the read-only remote profile, granted chat+dev. Proven: real 853KB PNG
+   generated + stored + served. Chat grounding now carries the agent's own session
+   id so session-scoped tools attach to the right conversation.
+
+**Gotchas:** dockview addPanel inactive-until-tab-focused (playwright must click the
+tab to read content); `npm run build` overwrites dist/ → `git checkout -- dist/`
+before commit; the IIFE form of playwright-cli `eval` errors (use single-expression
+evals / text locators).
+
+**Carried (teed up for a fresh pass):**
+- **Alias-failover hardening** — auto-shed a 503'd model so alias dispatch fails
+  over. The work_queue error row carries the provider but NOT the model, so the
+  shed must live in the bgworker (Rust, hot dispatch path) where the resolved model
+  is known → a pg rebuild + careful e2e. doc-build already dispatches via the
+  `reason` ALIAS (which fails over to usable members); the gap is immediate shed of
+  a transiently-503'd member. Best done with fresh context — hot path.
+- **Chat polish:** @-mentions + Arc D subset-select (Arc D subset needs a new
+  grounding mode for a chosen set, backend) + clickable source pills (needs tool-
+  result surfacing in the SSE stream).
+- **generate_image session-routing** — relies on the agent passing the real
+  session_id (grounding nudge helps; stronger models comply better).
+- **Rich artifact cards** also-surface artifacts that land silently in a chat
+  session (chat→/generate spawns doc-build; the export lands without a reply link).
+
 ## Carry-forward (non-blocking, dave-rule deferrals)
 
 - Arc A extras: @-mentions, clickable source pills, rich artifact cards.
