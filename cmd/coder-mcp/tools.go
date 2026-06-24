@@ -280,8 +280,8 @@ type editInput struct {
 	ReplaceAll bool   `json:"replace_all,omitempty" jsonschema:"Replace all occurrences (default false = require exactly one)"`
 }
 type editOutput struct {
-	Path        string `json:"path"`
-	Replacements int   `json:"replacements"`
+	Path         string `json:"path"`
+	Replacements int    `json:"replacements"`
 }
 
 func makeEdit(mgr *sandbox.Manager) func(context.Context, *mcp.CallToolRequest, editInput) (*mcp.CallToolResult, editOutput, error) {

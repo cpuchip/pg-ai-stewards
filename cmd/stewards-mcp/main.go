@@ -58,6 +58,9 @@ func main() {
 	var dsn string
 	flag.StringVar(&dsn, "dsn", "",
 		"Postgres DSN (default: $STEWARDS_DSN, then localhost compose port 55433)")
+	var httpAddr string
+	flag.StringVar(&httpAddr, "http-addr", os.Getenv("STEWARDS_MCP_HTTP_ADDR"),
+		"Arc C: serve a READ-ONLY MCP surface over HTTP at this addr (e.g. 127.0.0.1:8092) for remote agents (Claude Code / Codex) instead of stdio. Token via STEWARDS_MCP_HTTP_TOKEN. Bind localhost-only unless you know what you're doing.")
 	flag.Parse()
 
 	if dsn == "" {
@@ -89,6 +92,17 @@ func main() {
 		log.Fatalf("pool.Ping: %v", err)
 	}
 	log.Printf("connected to substrate (dsn=%s)", redactDSN(dsn))
+
+	// Arc C: remote MCP over HTTP — a READ-ONLY surface for other agents,
+	// token-authed, bound where you say (default localhost). Distinct from the
+	// stdio surface below (which carries the full write/spawn toolset for the
+	// in-box bridge). See runHTTP in http.go.
+	if httpAddr != "" {
+		if err := runHTTP(ctx, pool, httpAddr); err != nil {
+			log.Fatalf("http server: %v", err)
+		}
+		return
+	}
 
 	// Build the MCP server. Capabilities are auto-declared by the SDK
 	// based on what tools/resources/prompts we register.
