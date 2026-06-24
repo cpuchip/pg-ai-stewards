@@ -145,6 +145,115 @@ ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET action = EXCLUDED.action;
 -- read-only repo checkout — a repo is just a folder, so it rides this path via
 -- doc_import_corpus once a repo is mounted/cloned (see the proposal §7 P3f).
 
+-- ── §6 — P4: start_task carries the chat's attachments into spawned work ──
+-- chat_task_input builds the spawned work_item's input from the chat session:
+-- the user's assignment PLUS the extracted text of any document attachments in
+-- the session, folded into the binding question so EVERY pipeline carries the
+-- subject material (and attachment_ids for tools that want the originals). This
+-- is the deterministic, testable core; chat_start_task_tool calls it.
+CREATE OR REPLACE FUNCTION stewards.chat_task_input(
+    p_session  text,
+    p_question text
+) RETURNS jsonb LANGUAGE plpgsql AS $fn$
+DECLARE
+    v_docs    text;
+    v_att_ids bigint[];
+    v_q       text := btrim(coalesce(p_question, ''));
+    v_input   jsonb := jsonb_build_object('spawned_from_chat', coalesce(p_session, ''));
+BEGIN
+    -- The session's extracted document attachments become subject material.
+    SELECT string_agg('### ' || coalesce(filename, 'document') || E'\n' || left(extracted_text, 8000),
+                      E'\n\n' ORDER BY id),
+           array_agg(id)
+      INTO v_docs, v_att_ids
+      FROM stewards.chat_attachments
+     WHERE session_id = p_session AND kind = 'document' AND extracted_text IS NOT NULL;
+
+    IF v_docs IS NOT NULL THEN
+        -- cap the aggregate so a big folder can't blow the child's prompt
+        v_docs := left(v_docs, 24000);
+        v_q := nullif(v_q, '')
+               || CASE WHEN v_q <> '' THEN E'\n\n' ELSE '' END
+               || '--- Attached subject material (from the chat) ---' || E'\n' || v_docs;
+        v_input := v_input || jsonb_build_object(
+            'attached_documents', v_docs,
+            'attachment_ids',     to_jsonb(v_att_ids));
+    END IF;
+
+    IF coalesce(v_q, '') <> '' THEN
+        v_input := v_input || jsonb_build_object('binding_question', v_q, 'assignment', v_q);
+    END IF;
+    RETURN v_input;
+END;
+$fn$;
+
+COMMENT ON FUNCTION stewards.chat_task_input(text, text) IS
+'49/P4: build a spawned work_item input from a chat session — the assignment plus the extracted text of the session''s document attachments, folded into the binding question (so any pipeline carries it) + attachment_ids.';
+
+-- Re-author chat_start_task_tool (46) to carry the attachments via chat_task_input.
+CREATE OR REPLACE FUNCTION stewards.chat_start_task_tool(p_args jsonb)
+RETURNS text LANGUAGE plpgsql AS $fn$
+DECLARE
+    v_sess     text := p_args ->> '_session_id';
+    v_pipeline text := coalesce(p_args ->> 'pipeline', p_args ->> 'pipeline_family', '');
+    v_question text := btrim(coalesce(p_args ->> 'binding_question', p_args ->> 'assignment', p_args ->> 'task', ''));
+    v_slug     text := nullif(btrim(coalesce(p_args ->> 'slug', '')), '');
+    v_parent   uuid;
+    v_input    jsonb;
+    v_child    uuid;
+    v_wq       bigint;
+BEGIN
+    IF v_pipeline = '' THEN
+        RETURN jsonb_build_object('ok', false,
+            'note', 'pipeline required (e.g. research-summary, book-digest, playlist-digest)')::text;
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM stewards.pipelines WHERE family = v_pipeline) THEN
+        RETURN jsonb_build_object('ok', false,
+            'note', format('no pipeline named %L — list_pipelines for the options', v_pipeline))::text;
+    END IF;
+
+    v_parent := (regexp_match(coalesce(v_sess, ''),
+                 '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'))[1]::uuid;
+    IF v_parent IS NOT NULL AND NOT EXISTS (SELECT 1 FROM stewards.work_items WHERE id = v_parent) THEN
+        v_parent := NULL;
+    END IF;
+
+    -- P4: the input now carries the chat's attached documents as subject material.
+    v_input := stewards.chat_task_input(v_sess, v_question);
+
+    BEGIN
+        v_child := stewards.work_item_create(
+            v_pipeline, v_input,
+            coalesce(v_slug, v_pipeline || '-chat-' || to_char(now(), 'YYYYMMDD-HH24MISS')),
+            'work-item-chat', NULL::int, NULL::uuid);
+    EXCEPTION WHEN OTHERS THEN
+        RETURN jsonb_build_object('ok', false, 'note', 'could not create task: ' || SQLERRM)::text;
+    END;
+
+    IF v_parent IS NOT NULL THEN
+        UPDATE stewards.work_items SET parent_work_item_id = v_parent WHERE id = v_child;
+    END IF;
+
+    BEGIN
+        v_wq := stewards.work_item_dispatch_stage(v_child);
+    EXCEPTION WHEN OTHERS THEN
+        RETURN jsonb_build_object('ok', true, 'work_item_id', v_child::text,
+            'parent_work_item_id', v_parent, 'dispatched', false,
+            'note', 'task created + linked but not dispatched: ' || SQLERRM)::text;
+    END;
+
+    RETURN jsonb_build_object('ok', true,
+        'work_item_id', v_child::text,
+        'pipeline', v_pipeline,
+        'parent_work_item_id', v_parent,
+        'dispatched', true,
+        'carried_attachments', (v_input ? 'attachment_ids'),
+        'note', CASE WHEN v_parent IS NOT NULL
+                     THEN 'task started and linked to this work item — it will appear nested under it in the cockpit; watch it advance in the center panel'
+                     ELSE 'task started (top-level — this chat is not grounded in a work item); watch it in the work-item browser' END)::text;
+END;
+$fn$;
+
 -- =====================================================================
 -- End of 49-doc-extract.sql
 -- =====================================================================

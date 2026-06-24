@@ -1789,4 +1789,32 @@ BEGIN
   RAISE NOTICE 'OK 38: doc-extract surface — parent-linked page overlay + doc_extract nudge + server + grant';
 END $$;
 
+-- ---------------------------------------------------------------------
+-- 49 P4 — chat_task_input folds a chat session's extracted document
+-- attachments into the spawned task's binding question (so any pipeline
+-- carries the subject material) + attachment_ids.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_a     bigint;
+  v_input jsonb;
+BEGIN
+  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, byte_size, extracted_text)
+    VALUES ('stewdio-p4', 'brief.pdf', 'application/pdf', 'document', 0, 'The Q3 brief: ship the widget by October.')
+    RETURNING id INTO v_a;
+  v_input := stewards.chat_task_input('stewdio-p4', 'plan the launch');
+  ASSERT (v_input->>'binding_question') LIKE '%plan the launch%'
+         AND (v_input->>'binding_question') LIKE '%ship the widget by October%'
+         AND (v_input->>'binding_question') LIKE '%Attached subject material%',
+     '49/P4: chat_task_input must fold the attached document text into the binding question';
+  ASSERT v_input ? 'attachment_ids' AND (v_input->'attachment_ids')->>0 = v_a::text,
+     '49/P4: chat_task_input must carry the attachment_ids';
+  -- a session with no attachments just carries the question (no subject-material header)
+  v_input := stewards.chat_task_input('stewdio-empty', 'just a question');
+  ASSERT (v_input->>'binding_question') = 'just a question' AND NOT (v_input ? 'attachment_ids'),
+     '49/P4: a session with no document attachments carries only the question';
+  DELETE FROM stewards.chat_attachments WHERE session_id = 'stewdio-p4';
+  RAISE NOTICE 'OK 39: P4 — spawned work carries the chat''s extracted document attachments';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→49) is sound =='
