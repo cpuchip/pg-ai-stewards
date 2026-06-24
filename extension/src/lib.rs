@@ -488,6 +488,16 @@ extension_sql_file!(
     requires = ["create_work_item_chat"],
 );
 
+// rich documents in chat, P1: the substrate carries an image — content_parts
+// jsonb on messages + compose_messages passthrough + a `vision` alias on
+// dispatch_chat_turn (.spec/proposals/rich-docs-in-chat.md). Re-authors
+// compose_messages (15b), page_in_cap (33), dispatch_chat_turn (45).
+extension_sql_file!(
+    "../47-multimodal.sql",
+    name = "create_multimodal",
+    requires = ["create_chat_tasks"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

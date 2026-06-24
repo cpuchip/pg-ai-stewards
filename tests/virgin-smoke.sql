@@ -1605,10 +1605,17 @@ BEGIN
                         AND tool_pattern IN ('fetch_url','doc_create','work_item_create')
                         AND action='allow'),
      'work-item-chat must NOT allow write/egress tools';
+  -- 47 extended dispatch_chat_turn to a 6th optional p_content_parts jsonb; the
+  -- 5-arg overload is dropped (a 5-arg call would be ambiguous with the defaulted
+  -- 6-arg). Assert on pronargs + the last arg type (jsonb) — robust across pg
+  -- versions (pg_get_function_identity_arguments formatting varies).
   ASSERT EXISTS (SELECT 1 FROM pg_proc
-                  WHERE proname='dispatch_chat_turn'
-                    AND pg_get_function_identity_arguments(oid)='text, text, text, text, text'),
-     'dispatch_chat_turn(text,text,text,text,text) must exist';
+                  WHERE proname='dispatch_chat_turn' AND pronargs=6
+                    AND proargtypes[5]='jsonb'::regtype),
+     'dispatch_chat_turn must have 6 args with a jsonb 6th (47 multimodal arg)';
+  ASSERT NOT EXISTS (SELECT 1 FROM pg_proc
+                      WHERE proname='dispatch_chat_turn' AND pronargs=5),
+     'the old 5-arg dispatch_chat_turn must be dropped (would be ambiguous with the 6-arg defaulted overload)';
   RAISE NOTICE 'OK 34: work-item-chat — read-only retrieval agent (deny * + allow-list) + dispatch_chat_turn helper';
 END $$;
 
@@ -1632,4 +1639,57 @@ BEGIN
   RAISE NOTICE 'OK 35: chat delegation — start_task spawns a parent-linked sub work_item (Delegate mode)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→46) is sound =='
+-- ---------------------------------------------------------------------
+-- 47 — rich documents in chat, P1: the substrate carries an image.
+-- content_parts jsonb on messages + supports_vision capability bit +
+-- compose_messages passes a content_parts row through as a verbatim ARRAY
+-- (no [ctx:] prefix, no page-in cap on arrays).
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_msgs jsonb;
+  v_user jsonb;
+BEGIN
+  ASSERT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema='stewards' AND table_name='messages'
+                    AND column_name='content_parts' AND data_type='jsonb'),
+     'messages.content_parts jsonb must exist (multimodal content array)';
+  ASSERT EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_schema='stewards' AND table_name='model_capability'
+                    AND column_name='supports_vision'),
+     'model_capability.supports_vision must exist';
+  ASSERT stewards.model_supports_vision('nope','nope') = false,
+     'model_supports_vision defaults false for an unflagged model';
+  -- page_in_cap must pass an ARRAY-content message through untouched (never
+  -- truncate it to a corrupting string), even with a tiny cap.
+  ASSERT jsonb_typeof(stewards.page_in_cap(
+           jsonb_build_object('role','user','content',
+             jsonb_build_array(jsonb_build_object('type','text','text','hi'),
+                               jsonb_build_object('type','image_url','image_url',
+                                 jsonb_build_object('url','data:image/png;base64,AAAA')))),
+           5, 'abcd') -> 'content') = 'array',
+     'page_in_cap must pass multimodal ARRAY content through untouched';
+  -- compose_messages must render a content_parts row as a verbatim array.
+  INSERT INTO stewards.sessions (id, label, kind)
+    VALUES ('virgin-mm-smoke', 'mm smoke', 'chat') ON CONFLICT (id) DO NOTHING;
+  INSERT INTO stewards.messages (session_id, role, content, content_parts)
+    VALUES ('virgin-mm-smoke', 'user', 'what is in this image?',
+            jsonb_build_array(jsonb_build_object('type','text','text','what is in this image?'),
+                              jsonb_build_object('type','image_url','image_url',
+                                jsonb_build_object('url','data:image/png;base64,iVBORw0KGgo='))));
+  v_msgs := stewards.compose_messages('work-item-chat', 'x', 'virgin-mm-smoke', NULL);
+  -- find the user row in the composed array; its content must be an ARRAY with an image_url part.
+  SELECT e INTO v_user
+    FROM jsonb_array_elements(v_msgs) e
+   WHERE e->>'role' = 'user' AND jsonb_typeof(e->'content') = 'array'
+   LIMIT 1;
+  ASSERT v_user IS NOT NULL,
+     'compose_messages must emit the content_parts row with an ARRAY content';
+  ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v_user->'content') p
+                  WHERE p->>'type' = 'image_url'),
+     'the composed multimodal user content must carry the image_url part verbatim';
+  DELETE FROM stewards.sessions WHERE id = 'virgin-mm-smoke';  -- cascades messages
+  RAISE NOTICE 'OK 36: multimodal — content_parts column + compose_messages array passthrough + page_in_cap array guard';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→47) is sound =='
