@@ -84,7 +84,7 @@ docker run --rm
 
 The handler is **deterministic** (write blob → exec converter → read result → teardown) — no LLM in the extraction step, so it's a thin handler, not an agentic pipeline.
 
-**gVisor (`--runtime=runsc`) is a config toggle, added later** as a defense-in-depth tier once `runsc` is installed on the deploy host. Render-to-pixel already removes carry-forward, so v1 doesn't require it; the toggle makes us Dangerzone-equivalent when we want it.
+**gVisor (`--runtime=runsc`) is a config toggle, added later** as a defense-in-depth tier once `runsc` is installed on the local runtime host (the work laptop / work VM). Render-to-pixel already removes carry-forward, so v1 doesn't require it; the toggle makes us Dangerzone-equivalent when we want it.
 
 ## 5. The defense stack — four layers (Michael's "scan the file" = the new first layer)
 
@@ -120,7 +120,7 @@ Defense in depth, cheapest-and-broadest first. No single layer is trusted alone.
 | the router (text always + pixels overlay) + a thin deterministic extract handler | **new** |
 | **scan layer** — ClamAV (engine in-image + DB-via-shared-volume + networked `freshclam` sidecar) + structural maldoc check (oletools/pdfid) | **new** |
 | `is_safe` tools-off triage on extracted text | **new** (reuses judge shape) |
-| gVisor `--runtime=runsc` toggle | **later** (deferred until NOCIX confirms `runsc`) |
+| gVisor `--runtime=runsc` toggle | **later** (deferred until a local host confirms `runsc`) |
 
 ## 7. Phasing (proposed, post-ratification)
 
@@ -133,7 +133,7 @@ Defense in depth, cheapest-and-broadest first. No single layer is trusted alone.
 
 ## 8. Decisions to ratify
 
-1. **Isolation tier v1 = container + no-net** (reuse the coder spine + read-only/tmpfs/nofile delta). **gVisor `runsc` is SKIPPED for now** — revisit once Michael confirms `runsc` installs on KC NOCIX + the work VM (he has root on both). *(Michael, 2026-06-24: "skip visor until I can confirm.")*
+1. **Isolation tier v1 = container + no-net** (reuse the coder spine + read-only/tmpfs/nofile delta). **gVisor `runsc` is SKIPPED for now** — revisit once Michael confirms `runsc` installs on the **local runtime hosts (his work laptop + work VM; he has root on both)** — NOT NOCIX, which doesn't run the substrate. *(Michael, 2026-06-24: "skip visor until I can confirm.")*
 2. **Text always + pixels overlay** — text is extracted for every readable doc (cheap, models excel at it), pixels added for visual/short docs (page-count threshold, user can force-render). NOT pixels-XOR-text. *(Michael, 2026-06-24: "even for short PDFs I'd still want text too… I want images too.")*
 2b. **Scan layer = (c) BOTH — RATIFIED** *(Michael, 2026-06-24: "lets go c combo!")*: **ClamAV** (sealed: engine in-image + DB-via-volume + networked freshclam sidecar) **+ a structural maldoc check** (oletools/pdfid). Scans **every file** (incl. each member extracted from an archive — §3.5). Early-reject known-bad + flag macros/JS to the user; sits on top of the sandbox, runs sealed itself. The Python (oletools/pdfid) runs only inside the sealed sandbox — never touches our Go code or the host — so the Go-purity preference holds at our surface. A Go-only minimal check (option d in §5) remains the fallback if image weight bites.
 2c. **Archive / folder upload — RATIFIED in scope** (§3.5) *(Michael, 2026-06-24: "drop a zip… to work with or import" + "we should support 7zip")*: **zip / 7z / tar / gz-bz2-xz** (engine `mholt/archives`, pure-Go) unpacks in the sandbox under strict bomb/slip caps, each member runs the per-file pipeline (scan → text + pixels), and the result is a folder tree the chat can work with OR import as a corpus/project.
@@ -145,15 +145,16 @@ Defense in depth, cheapest-and-broadest first. No single layer is trusted alone.
 ## 8.5. Council moment (Abraham 4:26 — what to watch before building)
 
 Scanned before ratifying. Blind spots to carry into P3a:
-- **ClamAV DB freshness is the silent-degrade risk.** The air-gapped scanner uses a DB that *rots* without the `freshclam` sidecar actually running on NOCIX — it keeps catching old malware but misses new. Make the sidecar a real, scheduled part of the compose, and surface DB age. (The structural check — oletools/pdfid — does NOT rot, since it's technique-based: a second reason (c)-combo earns its keep.)
-- **Image weight + pull/build time:** ClamAV DB (~300 MB) + poppler + Python (oletools/pdfid) + Go ≈ 700 MB–1 GB. Acceptable, but plan the first-pull cost on NOCIX; keep libreoffice out until the faithful-office-pixels tier is actually wanted.
+- **Where this runs (clarified 2026-06-24):** the pg-ai-stewards stack — and therefore doc-extract — runs **locally: the dev box, Michael's work laptop, and (prepped next) his work VM.** **NOT NOCIX** — NOCIX is the bridge / control-plane (the llama hub, the public web apps), not the substrate runtime. So the scan layer's freshness rides the **local compose stack**, not a remote host.
+- **ClamAV DB freshness → a compose-stack service (resolved, not a worry).** A `clamav-freshclam` service in the pg-ai-stewards compose refreshes a shared `clamav-db` volume that the doc-extract sandbox mounts **read-only**; the scan itself stays **air-gapped** (no network while parsing untrusted bytes — the security property). Cadence = at container **startup** + a **daily-ish** check (freshclam pulls only diffs, so it's light); on a laptop that isn't always on, startup+daily naturally yields fresh-once-or-twice-a-day. **Do NOT pull-at-scan-time** — that would put the scanner online exactly when it's touching a hostile file. (The structural check — oletools/pdfid — does NOT rot, being technique-based: a second reason (c)-combo earns its keep, and it covers the window if the DB is briefly stale.)
+- **Image weight + pull/build time:** ClamAV DB (~300 MB) + poppler + Python (oletools/pdfid) + Go ≈ 700 MB–1 GB. Acceptable, but plan the first build/pull cost on each local host (dev box, work laptop, work VM); keep libreoffice out until the faithful-office-pixels tier is actually wanted.
 - **Trust boundary = the bridge (unchanged):** doc-extract reuses the coder spawn model — the bridge holds the docker socket (host-root-equiv); the extract container has none. No new exposure, but the bridge stays the thing to protect.
 - **CI weight:** virgin-smoke is fast SQL; the doc-extract smoke needs the image + adversarial samples (EICAR for AV, a macro docx for olevba, an `/OpenAction`-JS PDF for pdfid, a zip-slip zip, a small bounded zip-bomb). Put it in a SEPARATE CI lane — don't bloat virgin-smoke.
 - **Where the handler lives (decide in P3a):** deterministic, no LLM. Cleanest = a `doc-extract-mcp` mirroring `coder-mcp`'s sandbox-spawning pattern, called by the chat-attach path; alternative = a bridge handler. Lean to the former (it reuses the whole sandbox spine).
 
 ## 9. Open questions for council
 
-**Resolved 2026-06-24** (folded into §8): image weight (Go binary + poppler — light, no libreoffice/Python in v1); Python-vs-Go (tabula, Go); gVisor (skip until NOCIX confirms `runsc`).
+**Resolved 2026-06-24** (folded into §8): runs on the LOCAL stack (dev/laptop/work-VM), not NOCIX; ClamAV freshness = a `clamav-freshclam` compose service on a shared read-only DB volume, refreshed at startup + daily (scan stays air-gapped, never pull-at-scan-time); image weight (Go binary + poppler — light, no libreoffice/Python in v1); Python-vs-Go (tabula, Go); gVisor (skip until a local host confirms `runsc`).
 
 Still open:
 - **tabula quality bar:** it's a pure-Go extractor — clean-enough markdown text for full office, but its table/multi-column fidelity won't match docling. For "searchable subject text" that's fine; if a table-heavy CX/marketing deck needs faithful layout, **Path A (render→pixels→vision) covers it** (the model reads the rendered page). So between tabula-text and render-pixels we cover content + layout — but worth a real-doc smoke (a messy pptx, a multi-column report) to confirm tabula's floor before committing it as the sole text engine. docling/markitdown stays the named upgrade.
