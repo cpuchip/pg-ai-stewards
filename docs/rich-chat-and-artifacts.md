@@ -152,13 +152,14 @@ STEWARDS_MCP_HTTP_TOKEN=<token> docker exec -e STEWARDS_MCP_HTTP_TOKEN stewards-
 
 ## Known rough edges
 
-- **⚠ Gemini's multi-step tool loop is currently broken in the bgworker** — it
-  makes ~one tool call and stops. This blocks **doc-build** (its build stage needs
-  many sequential coder calls) and likely **any tools-on agent that chains tool
-  calls** on a Gemini-only rig. As of this writing the reliable engine is a local
-  model (qwen). **The fix is the immediate next task** — pull it when ready. Until
-  then, a Gemini-only box does single-shot model work (planning, synthesis, simple
-  Q&A) well, but not deep multi-tool agentic flows.
+- **✅ Gemini's multi-step tool loop works** (was broken; fixed in the bgworker —
+  three layered Gemini OpenAI-compat divergences: `finish_reason="stop"` with
+  tool_calls, streaming tool_calls with no `index`, and the Gemini-3.x
+  `thought_signature` that must round-trip). **gemini-3.1-pro drives doc-build
+  end-to-end** (plan→build→deliver, real PDF). qwen's path is unchanged. Make sure
+  the work rig has this commit. Note: `gemini-3-flash-preview` currently 503s
+  ("high demand") — prefer **`gemini-3.1-pro-preview`** (strong, drives the loop)
+  or `gemini-3.5-flash`.
 - **A raw `model_override` skips alias-failover** — a 503 on a pinned model hard-
   fails the run. Prefer a role alias (with fallback members) over a concrete id.
 - **Speed (local model):** doc-build is 4–10 min/doc on a local model and slower

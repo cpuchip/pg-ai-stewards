@@ -60,6 +60,48 @@ Then: "finish a, b, d, c — push through, dave-rule, commit + test at checkpoin
 - Windows curl couldn't reach 127.0.0.1:8081 (http=000) — used python urllib
   (which works) for the download proof. The MCP HTTP proof used curl fine on 8092.
 
+## Round 2 — fix-and-retest + the Gemini investigation (same day)
+
+Michael: "fix up those issues and run the tests again" + later "we gotta fix
+Gemini — work doesn't want us using qwen on that machine."
+
+**Hardening (51-rich-chat-hardening.sql):**
+- **Artifact-exists gate** — a BEFORE-UPDATE trigger flips a doc-build that
+  completes without exporting an artifact to `failed`. Caught the worst failure
+  mode live (an empty gemini run posing as "completed"). (Bug caught during apply:
+  the column is `pipeline_family`, not `pipeline` — a broken trigger briefly on
+  the hot work_items table, fixed immediately.)
+- **chat → brainstorm** (`start_brainstorm` grant) — one message spawned 6
+  techniques, all completed with real output.
+- **chat → /generate delegation** — the chat said "I can't emit a PDF" instead of
+  spawning doc-build; a prompt clause fixed it (proven: now calls start_task →
+  doc-build → the full chat→generate→download chain closed on qwen).
+- Also: stronger deliver-note handoff + per-format generation recipes (cut the
+  reportlab fix-loops; work-corpus ~270s vs ~583s). freshclam AV sidecar running.
+
+**The Gemini fix (bgworker.rs) — three layered OpenAI-compat divergences, peeled
+back one e2e run at a time (each fix exposed the next):**
+1. `finish_reason="stop"` *with* a complete tool_calls array (OpenAI sends
+   "tool_calls"). The loop only continued on =="tool_calls" → skipped execution.
+   Fix: key off the presence of tool_calls; only "length" = don't-dispatch.
+2. streaming tool_call deltas with **no `index`** → two calls merged into one
+   malformed name ("coder_sandbox_startdoc_get"). Fix: fall back to the per-call
+   `id`.
+3. Gemini-3.x **`thought_signature`** (tool_calls[].extra_content) must round-trip
+   or the next turn 400s. We dropped it. Fix: capture + replay it (compose_messages
+   sends m.tool_calls verbatim, so it round-trips).
+   **Result: gemini-3.1-pro drives doc-build end-to-end (6 tool-turns, real PDF).
+   qwen unchanged (regression-checked: still completes).** This was load-bearing —
+   the work rig can't run qwen, so Gemini had to work.
+
+**Method note:** the doc-build e2e was the oracle that surfaced every one of
+these — none were visible to virgin-smoke (SQL-only) or unit tests. Tool-first +
+verify-under-real-conditions earned its keep three times in one session.
+
+**Bring-up doc:** `docs/rich-chat-and-artifacts.md` — feature summary + a full
+fresh-rig runbook (images, Gemini provider, role-alias repoint, doc-extract
+overlay, refresh-tools, verify) so the work copy can soak everything in.
+
 ## Carry-forward (non-blocking, dave-rule deferrals)
 
 - Arc A extras: @-mentions, clickable source pills, rich artifact cards.
