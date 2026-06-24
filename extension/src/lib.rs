@@ -19,6 +19,7 @@
 use pgrx::prelude::*;
 
 mod bgworker;
+mod gcp_sa;
 mod providers;
 mod schema;
 mod tools;
