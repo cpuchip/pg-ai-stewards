@@ -31,15 +31,15 @@ type Result struct {
 // member). Text is always populated for a readable doc; Pages is the additive
 // pixel overlay (rendered only when requested and the doc is renderable).
 type FileResult struct {
-	Path      string      `json:"path"`                  // member path within an archive, or the filename
-	MimeType  string      `json:"mime_type,omitempty"`   // best-effort content type
-	DocType   string      `json:"doc_type,omitempty"`    // pdf|docx|xlsx|pptx|odt|epub|html|text|image|archive|unknown
-	Text      string      `json:"text,omitempty"`        // extracted markdown (the always-on path)
-	WordCount int         `json:"word_count,omitempty"`  // words in Text
-	Pages     []PageImage `json:"pages,omitempty"`       // rendered page bitmaps (the pixel overlay)
-	Scan      ScanResult  `json:"scan"`                  // the four-layer defense, layer 1
-	Skipped   bool        `json:"skipped,omitempty"`     // quarantined (malicious) — bytes never parsed for content
-	Error     string      `json:"error,omitempty"`       // extraction error (member failures don't abort the run)
+	Path      string      `json:"path"`                 // member path within an archive, or the filename
+	MimeType  string      `json:"mime_type,omitempty"`  // best-effort content type
+	DocType   string      `json:"doc_type,omitempty"`   // pdf|docx|xlsx|pptx|odt|epub|html|text|image|archive|unknown
+	Text      string      `json:"text,omitempty"`       // extracted markdown (the always-on path)
+	WordCount int         `json:"word_count,omitempty"` // words in Text
+	Pages     []PageImage `json:"pages,omitempty"`      // rendered page bitmaps (the pixel overlay)
+	Scan      ScanResult  `json:"scan"`                 // the four-layer defense, layer 1
+	Skipped   bool        `json:"skipped,omitempty"`    // quarantined (malicious) — bytes never parsed for content
+	Error     string      `json:"error,omitempty"`      // extraction error (member failures don't abort the run)
 }
 
 // PageImage is one rendered page as a base64 PNG — a dumb RGB bitmap that

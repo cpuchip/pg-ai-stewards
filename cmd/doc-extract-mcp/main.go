@@ -36,6 +36,8 @@ func main() {
 	smoke := flag.Bool("smoke", false, "Spawn the doc-extract sandbox on a benign input, assert it extracts, and exit.")
 	attach := flag.Int64("attachment", 0, "Debug: run doc_extract on this chat_attachments id against STEWARDS_DSN, print the JSON result, and exit.")
 	render := flag.Bool("render", false, "With -attachment: force the pixel overlay.")
+	importCorpus := flag.String("import-corpus", "", "Debug: with -attachment, import it into the docs pool as this corpus name and exit.")
+	importProject := flag.String("import-project", "", "Debug: with -import-corpus, tag the imported docs with this project.")
 	flag.Parse()
 
 	log.SetOutput(os.Stderr)
@@ -64,14 +66,23 @@ func main() {
 
 	run := runner.New()
 
-	// Debug path: run the tool core directly (live DB + live container) and exit.
+	// Debug paths: run a tool core directly (live DB + live container) and exit.
 	if *attach > 0 {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if *importCorpus != "" {
+			out, derr := importCorpusFn(ctx, pool, run, docImportInput{
+				AttachmentID: *attach, CorpusName: *importCorpus, Project: *importProject})
+			if derr != nil {
+				log.Fatalf("import corpus from attachment %d: %v", *attach, derr)
+			}
+			_ = enc.Encode(out)
+			return
+		}
 		out, derr := extractAttachment(ctx, pool, run, docExtractInput{AttachmentID: *attach, Render: *render})
 		if derr != nil {
 			log.Fatalf("extract attachment %d: %v", *attach, derr)
 		}
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
 		_ = enc.Encode(out)
 		return
 	}

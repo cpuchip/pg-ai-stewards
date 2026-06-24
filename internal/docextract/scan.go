@@ -98,7 +98,7 @@ func parseClamSignature(out string) string {
 // magic byte prefixes for the formats we route.
 var (
 	magicPDF = []byte("%PDF")
-	magicZIP = []byte{0x50, 0x4B, 0x03, 0x04} // PK\x03\x04 — zip / OOXML / odt / epub
+	magicZIP = []byte{0x50, 0x4B, 0x03, 0x04}                         // PK\x03\x04 — zip / OOXML / odt / epub
 	magicOLE = []byte{0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1} // CFB — legacy doc/xls/ppt
 	magicRTF = []byte(`{\rtf`)
 )
@@ -110,10 +110,10 @@ var (
 var pdfDangerMarkers = []string{
 	"/JavaScript", "/JS", // embedded scripts
 	"/OpenAction", "/AA", // run-on-open / additional (event) actions
-	"/Launch",          // launch an external program
-	"/EmbeddedFile",    // a file embedded in the PDF
-	"/RichMedia",       // Flash/embedded media (CVE-rich)
-	"/XFA",             // XFA forms (parser-heavy attack surface)
+	"/Launch",       // launch an external program
+	"/EmbeddedFile", // a file embedded in the PDF
+	"/RichMedia",    // Flash/embedded media (CVE-rich)
+	"/XFA",          // XFA forms (parser-heavy attack surface)
 }
 
 // structuralFindings runs the pure-Go, technique-based maldoc check. Returns a

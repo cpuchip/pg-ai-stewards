@@ -69,9 +69,9 @@ func TestStructuralFindings_PDF(t *testing.T) {
 
 func TestStructuralFindings_OOXMLMacro(t *testing.T) {
 	macro := buildZip(t, map[string][]byte{
-		"[Content_Types].xml":   []byte("<Types/>"),
-		"word/document.xml":     []byte("<doc/>"),
-		"word/vbaProject.bin":   []byte("\x00\x01macro-blob"),
+		"[Content_Types].xml": []byte("<Types/>"),
+		"word/document.xml":   []byte("<doc/>"),
+		"word/vbaProject.bin": []byte("\x00\x01macro-blob"),
 	})
 	got := structuralFindings(macro, "memo.docm")
 	if !contains(got, "ooxml:vbaProject.bin(macros)") {
@@ -133,9 +133,9 @@ func TestScan_StructuralOnly(t *testing.T) {
 
 func TestUnpackArchive_Benign(t *testing.T) {
 	z := buildZip(t, map[string][]byte{
-		"a.txt":       []byte("alpha"),
-		"sub/b.txt":   []byte("bravo"),
-		"sub/c.md":    []byte("# charlie"),
+		"a.txt":     []byte("alpha"),
+		"sub/b.txt": []byte("bravo"),
+		"sub/c.md":  []byte("# charlie"),
 	})
 	members, warnings, err := unpackArchive(context.Background(), z, "bundle.zip", DefaultArchiveCaps())
 	if err != nil {
@@ -151,7 +151,7 @@ func TestUnpackArchive_Benign(t *testing.T) {
 
 func TestUnpackArchive_ZipSlipRefused(t *testing.T) {
 	z := buildZip(t, map[string][]byte{
-		"ok.txt":          []byte("fine"),
+		"ok.txt":           []byte("fine"),
 		"../../etc/passwd": []byte("root:x:0:0"),
 	})
 	members, warnings, err := unpackArchive(context.Background(), z, "slip.zip", DefaultArchiveCaps())
@@ -192,7 +192,7 @@ func TestUnpackArchive_BombRatioCap(t *testing.T) {
 	big := make([]byte, 4<<20) // 4 MB of zeros -> compresses to a few KB
 	z := buildZip(t, map[string][]byte{"zeros.bin": big})
 	caps := DefaultArchiveCaps()
-	caps.MaxRatio = 10              // a real bomb is far higher than 10:1
+	caps.MaxRatio = 10                  // a real bomb is far higher than 10:1
 	caps.MaxTotalUncompressed = 1 << 30 // huge so RATIO is what trips
 	caps.MaxEntrySize = 1 << 30
 	_, _, err := unpackArchive(context.Background(), z, "ratio.zip", caps)
@@ -265,8 +265,8 @@ func TestExtractFile_Text(t *testing.T) {
 
 func TestRun_DispatchesArchive(t *testing.T) {
 	z := buildZip(t, map[string][]byte{
-		"a.txt":     []byte("alpha text"),
-		"b.md":      []byte("# bravo"),
+		"a.txt": []byte("alpha text"),
+		"b.md":  []byte("# bravo"),
 	})
 	res, err := Run(context.Background(), z, Options{Filename: "bundle.zip"})
 	if err != nil {

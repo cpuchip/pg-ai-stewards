@@ -1780,9 +1780,10 @@ BEGIN
   -- server + grant
   ASSERT EXISTS (SELECT 1 FROM stewards.mcp_servers WHERE name='doc-extract' AND enabled),
      '49: the doc-extract MCP server must be registered + enabled';
-  ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
-                  WHERE agent_family='work-item-chat' AND tool_pattern='doc_extract' AND action='allow'),
-     '49: doc_extract must be granted to the work-item-chat agent';
+  ASSERT (SELECT count(*) FROM stewards.agent_tool_perms
+                  WHERE agent_family='work-item-chat'
+                    AND tool_pattern IN ('doc_extract','doc_import_corpus') AND action='allow') = 2,
+     '49: doc_extract + doc_import_corpus must be granted to the work-item-chat agent';
 
   DELETE FROM stewards.chat_attachments WHERE session_id='dx-smoke';
   RAISE NOTICE 'OK 38: doc-extract surface — parent-linked page overlay + doc_extract nudge + server + grant';

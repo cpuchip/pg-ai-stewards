@@ -7,6 +7,7 @@ package main
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -28,6 +29,15 @@ func registerDocExtractTools(srv *mcp.Server, run *runner.Runner, pool *pgxpool.
 			"(under bomb/slip caps), scanned, and surfaced as a folder tree. Returns a summary incl. the " +
 			"security scan verdict. Call this once per document attachment before reasoning over it.",
 	}, makeDocExtract(run, pool))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "doc_import_corpus",
+		Description: "IMPORT an attached archive/folder (or a single document) into the searchable docs " +
+			"pool as a project corpus — 'drop a folder of PM/UX/CX/marketing docs, get a searchable " +
+			"project'. Each member is extracted in the hardened sandbox (scan + text), then pooled as a " +
+			"doc tagged with the given project so doc_search finds it. Pass attachment_id + a corpus_name " +
+			"(and optionally project). Malicious/empty members are skipped. Returns how many were imported.",
+	}, makeDocImportCorpus(run, pool))
 }
 
 type docExtractInput struct {
@@ -38,7 +48,7 @@ type docExtractInput struct {
 
 type docExtractOutput struct {
 	AttachmentID   int64    `json:"attachment_id"`
-	Mode           string   `json:"mode"`              // file | archive
+	Mode           string   `json:"mode"` // file | archive
 	DocType        string   `json:"doc_type,omitempty"`
 	ExtractedChars int      `json:"extracted_chars"`
 	ExtractedText  string   `json:"extracted_text,omitempty"` // the text, returned in-turn (capped) so the agent reads it now
@@ -154,6 +164,132 @@ func capText(s string) string {
 		return s
 	}
 	return s[:toolTextCap] + "\n\n[…truncated in this tool result; the full text is attached to the document]"
+}
+
+// --- doc_import_corpus: archive/folder -> searchable project pool ---
+
+type docImportInput struct {
+	AttachmentID int64  `json:"attachment_id" jsonschema:"The chat_attachments id of the uploaded archive/folder (or a single document)"`
+	CorpusName   string `json:"corpus_name" jsonschema:"A short name for this folder/corpus (used to slug the pooled docs)"`
+	Project      string `json:"project,omitempty" jsonschema:"Project tag so doc_search can scope to this corpus (project_association)"`
+}
+
+type docImportOutput struct {
+	Corpus      string   `json:"corpus"`
+	Project     string   `json:"project,omitempty"`
+	Members     int      `json:"members"`
+	Imported    int      `json:"imported"`
+	Skipped     int      `json:"skipped"`
+	Slugs       []string `json:"slugs,omitempty"`
+	ScanVerdict string   `json:"scan_verdict"`
+	Summary     string   `json:"summary"`
+}
+
+func makeDocImportCorpus(run *runner.Runner, pool *pgxpool.Pool) func(context.Context, *mcp.CallToolRequest, docImportInput) (*mcp.CallToolResult, docImportOutput, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in docImportInput) (*mcp.CallToolResult, docImportOutput, error) {
+		out, err := importCorpusFn(ctx, pool, run, in)
+		if err != nil {
+			return errResult("%v", err), docImportOutput{}, nil
+		}
+		return nil, out, nil
+	}
+}
+
+// importCorpusFn is the deterministic core (MCP tool + the -import-corpus debug
+// path): extract every member of an archive/folder and pool each as a
+// searchable doc tagged with the project.
+func importCorpusFn(ctx context.Context, pool *pgxpool.Pool, run *runner.Runner, in docImportInput) (docImportOutput, error) {
+	if in.AttachmentID <= 0 || strings.TrimSpace(in.CorpusName) == "" {
+		return docImportOutput{}, fmt.Errorf("attachment_id and corpus_name are required")
+	}
+	var (
+		filename string
+		data     []byte
+	)
+	if err := pool.QueryRow(ctx,
+		`SELECT filename, bytes FROM stewards.chat_attachments WHERE id = $1`, in.AttachmentID,
+	).Scan(&filename, &data); err != nil {
+		return docImportOutput{}, fmt.Errorf("attachment %d not found: %w", in.AttachmentID, err)
+	}
+	if len(data) == 0 {
+		return docImportOutput{}, fmt.Errorf("attachment %d has no bytes", in.AttachmentID)
+	}
+
+	// Extract all members (text only — a corpus is searchable text, no pixels).
+	res, _, err := run.Extract(ctx, data, runner.ExtractArgs{
+		Filename: filename, Caps: docextract.DefaultArchiveCaps(),
+	})
+	if err != nil {
+		return docImportOutput{}, fmt.Errorf("extraction failed: %w", err)
+	}
+
+	out := docImportOutput{Corpus: in.CorpusName, Project: strings.TrimSpace(in.Project), ScanVerdict: docextract.VerdictClean}
+	out.Members = len(res.Files)
+	corpusSlug := slugify(in.CorpusName)
+	for _, fr := range res.Files {
+		out.ScanVerdict = worseVerdict(out.ScanVerdict, fr.Scan.Verdict)
+		if fr.Skipped || strings.TrimSpace(fr.Text) == "" {
+			out.Skipped++
+			continue
+		}
+		slug := corpusSlug + "-" + slugify(fr.Path)
+		fm := map[string]any{
+			"corpus":       in.CorpusName,
+			"source_path":  fr.Path,
+			"scan":         fr.Scan.Verdict,
+			"imported_via": "doc-extract",
+		}
+		fmJSON, _ := json.Marshal(fm)
+		title := in.CorpusName + ": " + fr.Path
+		// Pool the member as a searchable doc (FTS + the graph), then tag it
+		// with the project so doc_search can scope to this corpus.
+		if _, e := pool.Exec(ctx,
+			`SELECT stewards.import_doc($1, $2, $3, $4, $5::jsonb, 'doc')`,
+			slug, fr.Path, title, fr.Text, string(fmJSON)); e != nil {
+			return docImportOutput{}, fmt.Errorf("import_doc(%s): %w", slug, e)
+		}
+		if out.Project != "" {
+			_, _ = pool.Exec(ctx,
+				`UPDATE stewards.docs SET project_association = $2 WHERE slug = $1`, slug, out.Project)
+		}
+		out.Imported++
+		if len(out.Slugs) < 50 {
+			out.Slugs = append(out.Slugs, slug)
+		}
+	}
+	projTag := ""
+	if out.Project != "" {
+		projTag = " tagged project=" + out.Project
+	}
+	out.Summary = fmt.Sprintf("imported %d/%d member(s) of %q into the docs pool as corpus %q%s (scan %s); search them with doc_search.",
+		out.Imported, out.Members, filename, in.CorpusName, projTag, out.ScanVerdict)
+	return out, nil
+}
+
+// slugify lowercases + dash-collapses to a docs.slug-safe token.
+func slugify(s string) string {
+	var b strings.Builder
+	prevDash := false
+	for _, r := range strings.ToLower(s) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		default:
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		out = "item"
+	}
+	if len(out) > 80 {
+		out = strings.Trim(out[:80], "-")
+	}
+	return out
 }
 
 // writeExtracted records the extracted text + scan verdict on the attachment.

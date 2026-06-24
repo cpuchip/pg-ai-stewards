@@ -128,9 +128,23 @@ ON CONFLICT (name) DO UPDATE SET
 -- doc_extract to read it (the nudge in §2 prompts this). Read-only allow-list,
 -- longest-glob-wins, so this specific allow beats the deny '*' base.
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
-  ('work-item-chat', 'doc_extract', 'allow', 'manual')
+  ('work-item-chat', 'doc_extract',       'allow', 'manual'),
+  ('work-item-chat', 'doc_import_corpus', 'allow', 'manual')
 ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET action = EXCLUDED.action;
 
+-- ── §5 — P3e: archive/folder import → searchable project pool ───────
+-- doc_import_corpus (a doc-extract tool, bridge-side Go) unpacks an attached
+-- archive in the sandbox and pools each member as a searchable doc via the
+-- existing import_doc path, tagged with a project_association so doc_search
+-- scopes to the corpus — "drop a folder of docs, get a searchable project."
+-- No new table: it reuses the docs pool (the substrate's existing corpus
+-- model), so doc_search/doc_get/doc_similar (already granted to work-item-chat)
+-- find the imported members immediately. The grant is in §4 above.
+--
+-- P3f (digester-reads-repos): the SAME no-network extract sandbox reads a
+-- read-only repo checkout — a repo is just a folder, so it rides this path via
+-- doc_import_corpus once a repo is mounted/cloned (see the proposal §7 P3f).
+
 -- =====================================================================
--- End of 49-doc-extract.sql (P3a/b/c surface; P3e corpus import appended below)
+-- End of 49-doc-extract.sql
 -- =====================================================================
