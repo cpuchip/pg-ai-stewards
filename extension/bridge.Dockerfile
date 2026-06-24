@@ -54,6 +54,8 @@ RUN go mod download
 
 # The whole command tree. cmd/stewards-cli/internal/* is pulled in with it.
 COPY cmd/ ./cmd/
+# Module-root internal packages (internal/docextract backs doc-extract-mcp).
+COPY internal/ ./internal/
 
 ENV CGO_ENABLED=0 GOOS=linux GOARCH=amd64
 

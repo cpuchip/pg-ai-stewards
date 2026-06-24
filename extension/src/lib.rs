@@ -492,10 +492,19 @@ extension_sql_file!(
 // jsonb on messages + compose_messages passthrough + a `vision` alias on
 // dispatch_chat_turn (.spec/proposals/rich-docs-in-chat.md). Re-authors
 // compose_messages (15b), page_in_cap (33), dispatch_chat_turn (45).
+// 47 RE-AUTHORS page_in_cap (33), compose_messages (15b), and dispatch_chat_turn
+// (45) to add the multimodal array guard. cargo-pgrx topologically sorts these
+// extension_sql_file! entries by `requires`; for 47's versions to WIN, 47 must
+// sort AFTER every file that also authors those functions. create_chat_tasks
+// (46→45) covers dispatch_chat_turn, but create_page_in (33) and
+// create_context_surface (15b) must be listed explicitly — without them the sort
+// is under-constrained and a rebuild can silently revert page_in_cap /
+// compose_messages to their pre-multimodal versions (caught by virgin-smoke OK
+// 36 when adding 49 perturbed the sort, 2026-06-24).
 extension_sql_file!(
     "../47-multimodal.sql",
     name = "create_multimodal",
-    requires = ["create_chat_tasks"],
+    requires = ["create_chat_tasks", "create_page_in", "create_context_surface"],
 );
 
 // rich documents in chat, P2: durable session-scoped attachments — bytea +
