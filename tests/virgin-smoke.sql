@@ -1612,4 +1612,24 @@ BEGIN
   RAISE NOTICE 'OK 34: work-item-chat — read-only retrieval agent (deny * + allow-list) + dispatch_chat_turn helper';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→45) is sound =='
+-- ---------------------------------------------------------------------
+-- 46 — chat delegation: the chat can start a sub work_item (Delegate mode),
+-- but still cannot call work_item_create directly (it goes through start_task,
+-- the controlled wrapper that parent-links + dispatches).
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+  ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='chat_start_task_tool'),
+     'chat_start_task_tool must exist';
+  ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='start_task' AND active),
+     'start_task tool must be registered + active';
+  ASSERT (SELECT action FROM stewards.agent_tool_perms
+           WHERE agent_family='work-item-chat' AND tool_pattern='start_task')='allow',
+     'work-item-chat must allow start_task';
+  ASSERT NOT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                      WHERE agent_family='work-item-chat' AND tool_pattern='work_item_create' AND action='allow'),
+     'work-item-chat must NOT call work_item_create directly (start_task is the controlled path)';
+  RAISE NOTICE 'OK 35: chat delegation — start_task spawns a parent-linked sub work_item (Delegate mode)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→46) is sound =='

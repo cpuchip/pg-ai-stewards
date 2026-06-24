@@ -480,6 +480,14 @@ extension_sql_file!(
     requires = ["create_graph_organize"],
 );
 
+// chat delegation: the chat can spawn a sub work_item (Delegate mode), linked
+// back to the work item it's grounded in (.spec/proposals/stewards-studio.md).
+extension_sql_file!(
+    "../46-chat-tasks.sql",
+    name = "create_chat_tasks",
+    requires = ["create_work_item_chat"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
