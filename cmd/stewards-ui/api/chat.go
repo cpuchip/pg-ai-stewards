@@ -28,6 +28,7 @@ func (d *Deps) registerChat(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/chat/send", d.chatSendHandler)
 	mux.HandleFunc("GET /api/chat/stream", d.chatStreamHandler)
 	mux.HandleFunc("GET /api/chat/sessions", d.chatSessionsHandler)        // Stewdio P4: multi-session history
+	mux.HandleFunc("GET /api/chat/sessions/all", d.chatSessionsAllHandler) // Sessions panel: EVERY chat session + its target
 	mux.HandleFunc("POST /api/chat/attach", d.chatAttachHandler)           // rich-docs P2: upload media to a chat
 	mux.HandleFunc("GET /api/chat/attachment/{id}", d.chatAttachmentHandler) // rich-docs P2: serve the bytes (inline render)
 	mux.HandleFunc("GET /api/chat/projects", d.chatProjectsHandler)        // rich-docs P3d: the empty-chat lens picker
@@ -288,6 +289,118 @@ func (d *Deps) chatSessionsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// chatAllSessionRow — a global chat session for the cockpit's Sessions panel.
+type chatAllSessionRow struct {
+	SessionID  string `json:"session_id"`
+	Preview    string `json:"preview,omitempty"`
+	LastAt     string `json:"last_at,omitempty"`
+	MsgCount   int    `json:"msg_count"`
+	TargetRef  string `json:"target_ref,omitempty"`  // work_item id / doc slug / "project:x" / "all"
+	TargetKind string `json:"target_kind,omitempty"` // work_item | doc | project | all | unknown
+	Title      string `json:"title,omitempty"`       // resolved work-item slug / doc title / friendly label
+}
+
+// regexes that recover the grounding target from the stored "(Context: …)" turn
+// (the shapes chatSendHandler writes). UUID test → work_item vs doc.
+var (
+	ctxRefRe     = regexp.MustCompile(`identified by "([^"]+)"`)
+	ctxProjectRe = regexp.MustCompile(`project/corpus "([^"]+)"`)
+	uuidRe       = regexp.MustCompile(`^[0-9a-fA-F-]{36}$`)
+)
+
+// GET /api/chat/sessions/all — EVERY Stewdio chat session, newest first, so the
+// cockpit can list them and reopen any. Closes the gap: a chat started on a work
+// item you've since navigated away from was otherwise unreachable.
+func (d *Deps) chatSessionsAllHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	rows, err := d.Pool.Query(ctx,
+		`SELECT s.id,
+		        coalesce((SELECT m.content FROM stewards.messages m
+		                   WHERE m.session_id=s.id AND m.role='user' AND m.content NOT LIKE '(Context:%'
+		                   ORDER BY m.id LIMIT 1), ''),
+		        coalesce(to_char((SELECT max(m.created_at) FROM stewards.messages m WHERE m.session_id=s.id),
+		                         'YYYY-MM-DD HH24:MI'), ''),
+		        (SELECT count(*)::int FROM stewards.messages m WHERE m.session_id=s.id),
+		        coalesce((SELECT m.content FROM stewards.messages m
+		                   WHERE m.session_id=s.id AND m.content LIKE '(Context:%'
+		                   ORDER BY m.id LIMIT 1), '')
+		   FROM stewards.sessions s
+		  WHERE s.kind='chat' AND s.id LIKE 'stewdio-%'
+		  ORDER BY (SELECT max(m.created_at) FROM stewards.messages m WHERE m.session_id=s.id) DESC NULLS LAST
+		  LIMIT 200`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "sessions: "+err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []chatAllSessionRow{}
+	var wiIDs, docSlugs []string
+	for rows.Next() {
+		var s chatAllSessionRow
+		var ctxLine string
+		if rows.Scan(&s.SessionID, &s.Preview, &s.LastAt, &s.MsgCount, &ctxLine) != nil {
+			continue
+		}
+		if len(s.Preview) > 120 {
+			s.Preview = s.Preview[:120]
+		}
+		// derive the grounding target from the stored context turn.
+		switch {
+		case strings.Contains(ctxLine, "ENTIRE knowledge pool"):
+			s.TargetRef, s.TargetKind, s.Title = "all", "all", "✸ Everything"
+		case ctxProjectRe.MatchString(ctxLine):
+			name := ctxProjectRe.FindStringSubmatch(ctxLine)[1]
+			s.TargetRef, s.TargetKind, s.Title = "project:"+name, "project", name
+		case ctxRefRe.MatchString(ctxLine):
+			ref := ctxRefRe.FindStringSubmatch(ctxLine)[1]
+			s.TargetRef = ref
+			if uuidRe.MatchString(ref) {
+				s.TargetKind = "work_item"
+				wiIDs = append(wiIDs, ref)
+			} else {
+				s.TargetKind = "doc"
+				docSlugs = append(docSlugs, ref)
+			}
+		default:
+			s.TargetKind = "unknown"
+		}
+		out = append(out, s)
+	}
+	// batch-resolve friendly titles for work items + docs.
+	titles := map[string]string{}
+	if len(wiIDs) > 0 {
+		if r2, e := d.Pool.Query(ctx, `SELECT id::text, slug FROM stewards.work_items WHERE id = ANY($1::uuid[])`, wiIDs); e == nil {
+			for r2.Next() {
+				var id, slug string
+				if r2.Scan(&id, &slug) == nil {
+					titles[id] = slug
+				}
+			}
+			r2.Close()
+		}
+	}
+	if len(docSlugs) > 0 {
+		if r2, e := d.Pool.Query(ctx, `SELECT slug, coalesce(title, slug) FROM stewards.docs WHERE slug = ANY($1)`, docSlugs); e == nil {
+			for r2.Next() {
+				var slug, title string
+				if r2.Scan(&slug, &title) == nil {
+					titles[slug] = title
+				}
+			}
+			r2.Close()
+		}
+	}
+	for i := range out {
+		if t, ok := titles[out[i].TargetRef]; ok && t != "" {
+			out[i].Title = t
+		} else if out[i].Title == "" {
+			out[i].Title = out[i].TargetRef
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"sessions": out})
 }
 
 // ── chat attachments — upload media as injectable subject material (P2). ──

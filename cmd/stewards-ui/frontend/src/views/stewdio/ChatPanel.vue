@@ -117,7 +117,36 @@ async function loadSessions(ref_: string): Promise<string> {
   } catch { sessions.value = []; return baseSessionFor(ref_) }
 }
 
+// Sessions panel → open a specific chat. Registered BEFORE the chatRef watcher
+// so they're flushed first: requestedLens drives the empty-chat lens, then
+// requestedSession opens the exact session once chatRef has settled. The flag
+// tells the chatRef watcher to stand down while a request is being honored.
+let honoringRequest = false
+watch(() => store.requestedLens, (v) => {
+  if (v === null) return
+  lens.value = v // '' | '__all__' | a project name
+  store.requestedLens = null
+})
+watch(() => store.requestedSession, async (sid) => {
+  if (!sid) return
+  honoringRequest = true
+  store.requestedSession = null
+  await nextTick() // let selectedRef / lens drive chatRef
+  const ref_ = chatRef.value
+  if (ref_) {
+    await loadSessions(ref_)
+    activeSession.value = sid
+    localStorage.setItem(lsKey(ref_), sid)
+    pending.value = false
+    err.value = ''
+    showSessions.value = false
+    openStream(sid)
+  }
+  honoringRequest = false
+})
+
 watch(chatRef, async (ref_) => {
+  if (honoringRequest) return // the requestedSession watcher owns this open
   err.value = ''; pending.value = false; showSessions.value = false
   if (!ref_) { closeStream(); messages.value = []; sessions.value = []; activeSession.value = ''; return }
   const def = await loadSessions(ref_)

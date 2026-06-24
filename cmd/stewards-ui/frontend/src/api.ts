@@ -540,6 +540,9 @@ export const api = {
   // Stewdio P4: the conversation-history sidebar — all chat sessions for a target.
   chatSessions: (targetRef: string) =>
     getJSON<ChatSessionsResp>(`/api/chat/sessions?target_ref=${encodeURIComponent(targetRef)}`),
+  // Sessions panel: EVERY chat session + the work-item/doc/project it's grounded in.
+  chatSessionsAll: () =>
+    getJSON<{ sessions: ChatAllSessionRow[] }>('/api/chat/sessions/all'),
   // rich-docs P3d: the empty-chat lens picker — projects/corpora to ground a chat in.
   chatProjects: () =>
     getJSON<{ projects: { name: string; doc_count: number }[] }>('/api/chat/projects'),
@@ -1161,6 +1164,17 @@ export type ChatSessionRow = {
 export type ChatSessionsResp = {
   default_session: string
   sessions: ChatSessionRow[]
+}
+
+// Sessions panel — every chat session + the target it's grounded in.
+export type ChatAllSessionRow = {
+  session_id: string
+  preview?: string
+  last_at?: string
+  msg_count: number
+  target_ref?: string
+  target_kind?: string // work_item | doc | project | all | unknown
+  title?: string
 }
 
 // rich-docs P2: a stored chat attachment (image/document as subject material).
