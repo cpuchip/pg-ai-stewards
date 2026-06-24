@@ -42,6 +42,7 @@ The short version:
 | [Wiring up MCP servers](docs/wiring-up-mcp-servers.md) | Give agents tools — stdio + remote-HTTP MCP, deny-by-default grants, worked examples (exa, yt, [gospel-engine](https://github.com/cpuchip/gospel-engine), [dnd-tools](https://github.com/cpuchip/dnd-tools)). |
 | [Personas + ai-chattermax](docs/personas-and-chattermax.md) | Put a durable-mind persona in a live chat room; the D&D holodeck as a tool-using example. |
 | [Rich documents in chat](docs/rich-documents.md) | Attach a PDF/Office doc/zipped folder and reason over it — the hardened no-network doc-extract sandbox (scan → contain → non-execution → content-gate), text + page-pixels, archive→corpus import. |
+| [Rich chat + artifacts](docs/rich-chat-and-artifacts.md) | Generate downloadable documents from chat (doc-build), brainstorm, chat across the whole pool, expose a read-only remote MCP — **plus a full fresh-rig bring-up runbook** (images, Gemini provider, overlays, verify). |
 
 Copy-paste starters (model catalog, content digesters) live in
 [`examples/`](examples/).
