@@ -22,6 +22,17 @@ pub(crate) struct ProviderSummary {
     pub(crate) has_api_key: bool,
 }
 
+/// How a provider authenticates each request.
+#[derive(Clone, Debug)]
+pub(crate) enum AuthMode {
+    /// Static bearer (OpenAI) / x-api-key (Anthropic) from the env API_KEY, or
+    /// none when API_KEY is unset.
+    ApiKey,
+    /// Google service-account: mint + refresh a Vertex OAuth access token from
+    /// the SA key file at this path (gcp_sa.rs). No static key lives in env.
+    GoogleSa { credentials_file: String },
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Provider {
     pub(crate) name: String,
@@ -29,6 +40,29 @@ pub(crate) struct Provider {
     pub(crate) default_model: String,
     pub(crate) kind: String,
     pub(crate) api_key: Option<String>,
+    pub(crate) auth: AuthMode,
+}
+
+impl Provider {
+    /// The bearer token to send (Authorization: Bearer …), or None for an
+    /// unauthenticated provider. GoogleSa mints/refreshes a Vertex token;
+    /// ApiKey returns the static env key. Never logs the secret.
+    pub(crate) fn bearer_token(&self) -> Result<Option<String>, String> {
+        match &self.auth {
+            AuthMode::GoogleSa { credentials_file } => {
+                crate::gcp_sa::token_for(&self.name, credentials_file).map(Some)
+            }
+            AuthMode::ApiKey => Ok(self.api_key.clone()),
+        }
+    }
+
+    /// Short auth label for logs (never the secret).
+    pub(crate) fn auth_label(&self) -> &'static str {
+        match &self.auth {
+            AuthMode::GoogleSa { .. } => "google_sa",
+            AuthMode::ApiKey => "api_key",
+        }
+    }
 }
 
 #[derive(Default, Debug)]
@@ -66,6 +100,23 @@ impl ProviderRegistry {
                 );
                 continue;
             };
+            let auth = match fields.get("AUTH").map(|s| s.to_lowercase()).as_deref() {
+                Some("google_sa") => match fields
+                    .get("CREDENTIALS_FILE")
+                    .cloned()
+                    .filter(|s| !s.is_empty())
+                {
+                    Some(credentials_file) => AuthMode::GoogleSa { credentials_file },
+                    None => {
+                        pgrx::log!(
+                            "stewards: provider '{}' AUTH=google_sa but CREDENTIALS_FILE missing — using api_key",
+                            name_upper
+                        );
+                        AuthMode::ApiKey
+                    }
+                },
+                _ => AuthMode::ApiKey,
+            };
             providers.push(Provider {
                 name: name_upper.to_lowercase(),
                 base_url,
@@ -75,6 +126,7 @@ impl ProviderRegistry {
                     .cloned()
                     .unwrap_or_else(|| "openai".to_string()),
                 api_key: fields.get("API_KEY").cloned().filter(|s| !s.is_empty()),
+                auth,
             });
         }
 
@@ -97,7 +149,14 @@ impl ProviderRegistry {
 
 /// Parse `<NAME>_<FIELD>` where FIELD is one of the four known suffixes.
 fn split_provider_key(rest: &str) -> Option<(String, String)> {
-    const FIELDS: &[&str] = &["BASE_URL", "API_KEY", "DEFAULT_MODEL", "KIND"];
+    const FIELDS: &[&str] = &[
+        "BASE_URL",
+        "API_KEY",
+        "DEFAULT_MODEL",
+        "KIND",
+        "AUTH",
+        "CREDENTIALS_FILE",
+    ];
     for field in FIELDS {
         if let Some(stripped) = rest.strip_suffix(field) {
             if let Some(name) = stripped.strip_suffix('_') {

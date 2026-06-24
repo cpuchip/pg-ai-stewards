@@ -27,6 +27,11 @@ hex = "0.4"
 # reqwest under the covers spins its own. rustls-tls avoids the need
 # for libssl-dev in the runtime image.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+# RS256 JWT signing for the Google service-account auth mode (gcp_sa.rs): mint a
+# self-signed JWT from the SA key + exchange it for a scoped Vertex access token.
+# Sync API — fits the blocking bgworker (no tokio). use_pem (default) reads the
+# SA's PEM private key.
+jsonwebtoken = "9"
 
 [dev-dependencies]
 pgrx-tests = "=0.18.0"

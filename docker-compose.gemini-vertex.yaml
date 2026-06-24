@@ -1,0 +1,19 @@
+# Opt-in overlay — mount a Google service-account key into the pg container so
+# the bgworker's `google_sa` provider auth mode (gcp_sa.rs) can mint + refresh a
+# Vertex OAuth access token. This is the work-confidential, NO-TRAIN Gemini path:
+# the SA stays on the host, mounted read-only; the token never touches env.
+#
+#   # point GEMINI_SA_FILE at your SA json (in .env or the shell), then:
+#   docker compose -f docker-compose.yaml -f docker-compose.gemini-vertex.yaml up -d
+#   # (compose with other overlays too, e.g. -f docker-compose.doc-extract.yaml)
+#
+# Then register the provider via env (see .env.example → GOOGLE_VERTEX) and point
+# your role aliases at provider='google_vertex', model='google/<model>'.
+#
+# Security: the mount is read-only and the key is never logged (providers_loaded
+# reports has_api_key=false for an SA provider; the startup log shows auth=google_sa
+# only). Prefer a box you trust with the key.
+services:
+  pg:
+    volumes:
+      - ${GEMINI_SA_FILE:?set GEMINI_SA_FILE to the host path of your service-account json}:/secrets/gemini-sa.json:ro

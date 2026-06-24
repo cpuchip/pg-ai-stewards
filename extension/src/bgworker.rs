@@ -45,9 +45,10 @@ pub extern "C-unwind" fn _PG_init() {
     );
     for p in &registry.providers {
         pgrx::log!(
-            "stewards:   provider '{}' kind={} base_url={} model={} api_key={}",
+            "stewards:   provider '{}' kind={} auth={} base_url={} model={} api_key={}",
             p.name,
             p.kind,
+            p.auth_label(),
             p.base_url,
             p.default_model,
             if p.api_key.is_some() { "yes" } else { "no" }
@@ -1653,8 +1654,8 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
         .map_err(|e| format!("http client build: {}", e))?;
 
     let mut req = client.post(&url).json(&body);
-    if let Some(key) = &provider.api_key {
-        req = req.bearer_auth(key);
+    if let Some(token) = provider.bearer_token()? {
+        req = req.bearer_auth(token);
     }
 
     let resp = req
@@ -1831,15 +1832,17 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
         .map_err(|e| format!("http client build: {}", e))?;
 
     let mut req = client.post(&url).json(body);
-    if let Some(key) = &provider.api_key {
-        if is_anthropic {
-            // Anthropic format auths via x-api-key + a version header, not Bearer.
+    if is_anthropic {
+        // Anthropic format auths via x-api-key + a version header, not Bearer.
+        if let Some(key) = &provider.api_key {
             req = req
                 .header("x-api-key", key.as_str())
                 .header("anthropic-version", "2023-06-01");
-        } else {
-            req = req.bearer_auth(key);
         }
+    } else if let Some(token) = provider.bearer_token()? {
+        // OpenAI-compat: a static api_key, or a freshly-minted Google SA token
+        // (Vertex no-train) for the google_sa auth mode.
+        req = req.bearer_auth(token);
     }
 
     let resp = req
