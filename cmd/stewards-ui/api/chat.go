@@ -497,17 +497,40 @@ func (d *Deps) chatAttachmentHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	var mimeType string
+	// ?meta=1 → JSON metadata only (no bytes) — the chat's artifact cards fetch
+	// this to render filename / type / size without pulling the whole file.
+	if r.URL.Query().Get("meta") == "1" {
+		var fn, mime, kind string
+		var size int64
+		if err := d.Pool.QueryRow(ctx,
+			`SELECT coalesce(filename,''), coalesce(mime_type,'application/octet-stream'),
+			        coalesce(kind,''), coalesce(byte_size, octet_length(bytes), 0)
+			   FROM stewards.chat_attachments WHERE id = $1`, id,
+		).Scan(&fn, &mime, &kind, &size); err != nil {
+			writeErr(w, http.StatusNotFound, "attachment not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"id": id, "filename": fn, "mime_type": mime, "kind": kind, "byte_size": size,
+		})
+		return
+	}
+
+	var mimeType, filename string
 	var data []byte
 	if err := d.Pool.QueryRow(ctx,
-		`SELECT coalesce(mime_type,'application/octet-stream'), bytes
+		`SELECT coalesce(mime_type,'application/octet-stream'), coalesce(filename,''), bytes
 		   FROM stewards.chat_attachments WHERE id = $1`, id,
-	).Scan(&mimeType, &data); err != nil {
+	).Scan(&mimeType, &filename, &data); err != nil {
 		writeErr(w, http.StatusNotFound, "attachment not found")
 		return
 	}
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Cache-Control", "private, max-age=3600")
+	// ?download=1 → force a save dialog with the real filename (artifact card ⬇).
+	if r.URL.Query().Get("download") == "1" && filename != "" {
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+strings.ReplaceAll(filename, "\"", "")+"\"")
+	}
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)

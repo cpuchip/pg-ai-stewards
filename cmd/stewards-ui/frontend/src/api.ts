@@ -545,6 +545,9 @@ export const api = {
   // Sessions panel: EVERY chat session + the work-item/doc/project it's grounded in.
   chatSessionsAll: () =>
     getJSON<{ sessions: ChatAllSessionRow[] }>('/api/chat/sessions/all'),
+  // Rich artifact cards: metadata (no bytes) for an attachment id linked in a reply.
+  chatAttachmentMeta: (id: number) =>
+    getJSON<{ id: number; filename: string; mime_type: string; kind: string; byte_size: number }>(`/api/chat/attachment/${id}?meta=1`),
   // rich-docs P3d: the empty-chat lens picker — projects/corpora to ground a chat in.
   chatProjects: () =>
     getJSON<{ projects: { name: string; doc_count: number }[] }>('/api/chat/projects'),

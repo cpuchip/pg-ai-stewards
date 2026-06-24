@@ -90,6 +90,43 @@ function facetChips(tools?: string[]): string[] {
   return [...set]
 }
 
+// Rich artifact cards — a doc-build reply ends with a /api/chat/attachment/{id}
+// download link; render each as an inline card (icon / filename / size / ⬇, or a
+// thumbnail for images) instead of only a bare link.
+type ArtMeta = { id: number; filename: string; mime_type: string; kind: string; byte_size: number }
+const artifactMeta = ref<Record<number, ArtMeta>>({})
+const ATT_RE = /\/api\/chat\/attachment\/(\d+)/g
+function artifactIds(content: string): number[] {
+  const ids = new Set<number>()
+  let m: RegExpExecArray | null
+  ATT_RE.lastIndex = 0
+  while ((m = ATT_RE.exec(content)) !== null) ids.add(Number(m[1]))
+  return [...ids]
+}
+async function fetchArtifactMeta(ids: number[]) {
+  for (const id of ids) {
+    if (artifactMeta.value[id]) continue
+    try { artifactMeta.value[id] = await api.chatAttachmentMeta(id) } catch { /* ignore */ }
+  }
+}
+// resolved (metadata-loaded) artifacts referenced in a reply — type-safe for the template
+function resolvedArtifacts(content: string): ArtMeta[] {
+  return artifactIds(content).map(id => artifactMeta.value[id]).filter((a): a is ArtMeta => !!a)
+}
+function isImageArt(a: ArtMeta) { return a.kind === 'image' || a.mime_type.startsWith('image/') }
+function artIcon(a: ArtMeta): string {
+  const m = a.mime_type, f = a.filename
+  if (m.includes('pdf')) return '📕'
+  if (m.includes('spreadsheet') || /\.(xlsx|csv)$/.test(f)) return '📊'
+  if (m.includes('presentation') || f.endsWith('.pptx')) return '📑'
+  if (m.includes('word') || f.endsWith('.docx')) return '📘'
+  if (m.includes('zip') || /\.(zip|tar|gz|tgz|7z)$/.test(f)) return '🗜'
+  return '📄'
+}
+function fmtSize(n: number): string {
+  return n < 1024 ? `${n} B` : n < 1048576 ? `${(n / 1024).toFixed(0)} KB` : `${(n / 1048576).toFixed(1)} MB`
+}
+
 function closeStream() { if (es) { es.close(); es = null } }
 
 function openStream(sid: string) {
@@ -103,6 +140,7 @@ function openStream(sid: string) {
     // drop an optimistic (negative-id) echo once the real row arrives
     if (m.role === 'user') messages.value = messages.value.filter(x => !(x.id < 0 && x.content === m.content))
     messages.value.push(m)
+    if (m.role === 'assistant' && m.content) fetchArtifactMeta(artifactIds(m.content))
     if (m.role === 'assistant' && m.finish_reason && m.finish_reason !== 'tool_calls') pending.value = false
     nextTick(() => { if (log.value) log.value.scrollTop = log.value.scrollHeight })
   }
@@ -341,6 +379,20 @@ function onKey(e: KeyboardEvent) {
         </div>
         <div v-else-if="m.role === 'assistant' && m.content.trim()" class="flex flex-col items-start group">
           <div class="max-w-[90%] bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm prose prose-invert prose-sm max-w-none" v-html="md.render(m.content)" @click="onLink"></div>
+          <!-- rich artifact cards: generated docs (doc-build exports) referenced in the reply -->
+          <div v-for="a in resolvedArtifacts(m.content)" :key="a.id" class="mt-1.5 max-w-[90%]">
+            <img v-if="isImageArt(a)" :src="`/api/chat/attachment/${a.id}`" :alt="a.filename"
+                 class="max-h-56 rounded-lg border border-zinc-800" />
+            <a v-else :href="`/api/chat/attachment/${a.id}?download=1`" download
+               class="flex items-center gap-2.5 bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 hover:border-sky-700/60 transition group/card no-underline">
+              <span class="text-2xl leading-none">{{ artIcon(a) }}</span>
+              <span class="min-w-0 flex-1">
+                <span class="block text-zinc-200 text-xs truncate">{{ a.filename || 'artifact' }}</span>
+                <span class="block text-zinc-600 text-[10px]">{{ fmtSize(a.byte_size) }} · download</span>
+              </span>
+              <span class="text-zinc-500 group-hover/card:text-sky-300 text-lg">⬇</span>
+            </a>
+          </div>
           <div class="flex gap-2 mt-0.5 ml-1 text-[10px] text-zinc-600 opacity-0 group-hover:opacity-100 transition">
             <button class="hover:text-zinc-300" title="copy" @click="copyMsg(m)">⧉ copy</button>
             <button class="hover:text-zinc-300" title="re-ask the last question" @click="regenerateLast()">↻ retry</button>
