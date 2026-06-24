@@ -15,6 +15,44 @@ import (
 
 func (d *Deps) registerModels(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/models", d.modelsHandler)
+	mux.HandleFunc("GET /api/models/aliases", d.modelAliasesHandler) // role aliases → provider/model members
+}
+
+type aliasRow struct {
+	Alias    string `json:"alias"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Priority int    `json:"priority"`
+	Usable   *bool  `json:"usable,omitempty"`
+	Notes    string `json:"notes,omitempty"`
+}
+
+// GET /api/models/aliases — the role aliases (reason / ingest / critic / vision /
+// …) and the provider+model members each resolves to, lowest-priority first
+// (the preferred member). usable comes from model_capability's last probe. Backs
+// the Stewdio Models panel ("how models are registered under aliases").
+func (d *Deps) modelAliasesHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	rows, err := d.Pool.Query(ctx, `
+		SELECT a.alias, a.provider, a.provider_model, a.priority, coalesce(a.notes,''), c.usable
+		  FROM stewards.model_aliases a
+		  LEFT JOIN stewards.model_capability c
+		    ON c.provider = a.provider AND c.model = a.provider_model
+		 ORDER BY a.alias, a.priority, a.provider`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []aliasRow{}
+	for rows.Next() {
+		var a aliasRow
+		if rows.Scan(&a.Alias, &a.Provider, &a.Model, &a.Priority, &a.Notes, &a.Usable) == nil {
+			out = append(out, a)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"aliases": out})
 }
 
 type modelRow struct {

@@ -14,6 +14,7 @@ import BrowserPanel from './stewdio/BrowserPanel.vue'
 import ArtifactPanel from './stewdio/ArtifactPanel.vue'
 import ChatPanel from './stewdio/ChatPanel.vue'
 import SessionsPanel from './stewdio/SessionsPanel.vue'
+import ModelsPanel from './stewdio/ModelsPanel.vue'
 
 // touch the store so it's instantiated for the session (panels coordinate through it)
 useStewdioStore()
@@ -31,6 +32,7 @@ const components: Record<string, VueComponent> = {
   artifact: ArtifactPanel as unknown as VueComponent,
   chat: ChatPanel as unknown as VueComponent,
   sessions: SessionsPanel as unknown as VueComponent,
+  models: ModelsPanel as unknown as VueComponent,
 }
 
 // the windowing manager's catalog — every pane the user can open/reopen.
@@ -39,6 +41,7 @@ const PANELS: { id: string; component: string; title: string }[] = [
   { id: 'artifact', component: 'artifact', title: 'Artifact' },
   { id: 'chat', component: 'chat', title: 'Chat' },
   { id: 'sessions', component: 'sessions', title: 'Sessions' },
+  { id: 'models', component: 'models', title: 'Models' },
 ]
 
 // open a panel by id — focus it if already open, else add it (reopens a closed pane).

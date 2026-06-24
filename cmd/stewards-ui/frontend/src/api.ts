@@ -531,6 +531,8 @@ export const api = {
 
   // Models catalog (UI 2026-05-29 — backs Brainstorm datalist + /models view).
   modelsList: () => getJSON<ModelsListResp>('/api/models'),
+  // Role aliases → provider/model members (Stewdio Models panel).
+  modelAliases: () => getJSON<{ aliases: AliasRow[] }>('/api/models/aliases'),
 
   // Stewdio chat-with-a-work-item (P1). chatSend appends a turn + dispatches it;
   // the reply is streamed separately via EventSource('/api/chat/stream?session_id=').
@@ -596,6 +598,15 @@ export type ModelRow = {
 export type ModelsListResp = {
   items: ModelRow[]
   total: number
+}
+
+export type AliasRow = {
+  alias: string
+  provider: string
+  model: string
+  priority: number
+  usable?: boolean
+  notes?: string
 }
 
 export type BrainstormLensRow = {
