@@ -103,7 +103,11 @@ func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
 	var grounding *string
 	if ref := strings.TrimSpace(req.TargetRef); ref != "" {
 		var g string
-		if proj, ok := strings.CutPrefix(ref, "project:"); ok {
+		if ref == "all" {
+			g = "(Context: you are grounded in the ENTIRE knowledge pool — every work item and document across all " +
+				"projects. Use doc_search broadly to find anything relevant; cite the docs you draw from. Attached " +
+				"documents are injected as subject material — call doc_extract on any not-yet-read attachment.)"
+		} else if proj, ok := strings.CutPrefix(ref, "project:"); ok {
 			g = fmt.Sprintf("(Context: you are grounded in the project/corpus %q. Use doc_search to find and quote "+
 				"its documents. Attached documents are injected as subject material — call doc_extract on any "+
 				"not-yet-read attachment, and doc_import_corpus to fold an uploaded archive/folder into this project.)", proj)

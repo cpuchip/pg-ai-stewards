@@ -23,8 +23,10 @@ const onLink = makeLinkClick(store)
 const lens = ref('')
 const projects = ref<{ name: string; doc_count: number }[]>([])
 onMounted(async () => { try { projects.value = (await api.chatProjects()).projects } catch { /* none */ } })
-// the effective conversation ref: a selected work item, else the chosen lens.
-const chatRef = computed(() => store.selectedRef || (lens.value ? `project:${lens.value}` : ''))
+// the effective conversation ref: a selected work item, else the chosen lens
+// (a project corpus, or "all" = the whole pool — Arc D).
+const chatRef = computed(() =>
+  store.selectedRef || (lens.value === '__all__' ? 'all' : lens.value ? `project:${lens.value}` : ''))
 
 type Msg = { id: number; role: string; content: string; finish_reason?: string; tool_calls: number; tools?: string[]; images?: string[] }
 const messages = ref<Msg[]>([])
@@ -271,6 +273,7 @@ function onKey(e: KeyboardEvent) {
         <select v-model="lens" class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] text-zinc-300 max-w-[60%] truncate"
                 title="ground this chat in a project/corpus (doc_search scopes to it)">
           <option value="">— pick a project —</option>
+          <option value="__all__">✸ Everything (whole pool)</option>
           <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}<span v-if="p.doc_count"> ({{ p.doc_count }})</span></option>
         </select>
       </div>
