@@ -507,6 +507,18 @@ extension_sql_file!(
     requires = ["create_multimodal"],
 );
 
+// rich documents in chat, P3: document extraction surface — parent-linked page
+// images + scan verdict columns on chat_attachments, chat_attachment_parts
+// re-authored for the pixel overlay + doc_extract nudge, the doc-extract MCP
+// server, and the doc_extract grant. The hardened extraction itself runs in the
+// bridge's doc-extract-mcp + the doc-extract sandbox image
+// (.spec/proposals/doc-extract-sandbox.md).
+extension_sql_file!(
+    "../49-doc-extract.sql",
+    name = "create_doc_extract",
+    requires = ["create_chat_attachments"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

@@ -1,0 +1,51 @@
+# Opt-in doc-extract overlay — adds the hardened document-extraction capability
+# to the bridge (rich-docs P3). Turns untrusted uploads (PDF / Office / HTML /
+# archives) into safe subject material inside a no-network sandbox.
+#
+#   # build the converter image once:
+#   docker build -f extension/doc-extract.Dockerfile -t doc-extract:latest .
+#   # then bring the stack up WITH doc-extract:
+#   docker compose -f docker-compose.yaml -f docker-compose.doc-extract.yaml up -d
+#
+# Like the coder overlay, this mounts the HOST docker socket into the bridge so
+# doc-extract-mcp can spawn the hardened converter as a sibling container. **The
+# docker socket is host-root-equivalent** — read SECURITY.md before enabling.
+#
+# ⚠ If you ALSO enable docker-compose.coder.yaml, do not stack both socket
+# mounts — pick ONE overlay to provide `/var/run/docker.sock` (docker compose
+# errors on a duplicate mount target). The two capabilities can share the one
+# socket; just omit this file's bridge.volumes socket line in that case.
+#
+# The scan layer is AIR-GAPPED: the converter runs --network=none and reads a
+# read-only ClamAV signature DB from the `clamav-db` volume that the freshclam
+# sidecar keeps fresh out-of-band (startup + a daily-ish check). The scanner is
+# never online while it touches a hostile file (proposal §8.5).
+services:
+  bridge:
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      # Override per host if you renamed the image / volume.
+      DOC_EXTRACT_IMAGE: ${DOC_EXTRACT_IMAGE:-doc-extract:latest}
+      DOC_EXTRACT_CLAMAV_VOLUME: ${DOC_EXTRACT_CLAMAV_VOLUME:-clamav-db}
+
+  # The ClamAV signature-DB refresher. Runs freshclam ONLY (no clamd) and writes
+  # the DB to the shared clamav-db volume. The converter mounts that volume
+  # read-only — this sidecar is the only thing that ever goes online for AV.
+  clamav-freshclam:
+    image: clamav/clamav:latest
+    container_name: stewards-oss-clamav-freshclam
+    environment:
+      CLAMAV_NO_CLAMD: "true"        # freshclam only — we don't run a clamd daemon
+      CLAMAV_NO_MILTERD: "true"
+      FRESHCLAM_CHECKS: "2"          # check ~twice a day (light; diffs only)
+    volumes:
+      - clamav-db:/var/lib/clamav    # the signature DB the converter reads (RO) at /clamav
+    restart: unless-stopped
+
+volumes:
+  clamav-db:
+    # Fixed name so doc-extract-mcp's `docker run -v clamav-db:/clamav:ro`
+    # resolves to this volume regardless of the compose project prefix
+    # (same trick as coder-worktrees).
+    name: clamav-db

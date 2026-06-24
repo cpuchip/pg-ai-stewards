@@ -22,6 +22,11 @@
 #   - coder-mcp     (the sandbox coding capability — spawns hardened
 #                    coder-runtime sandboxes against the host docker daemon;
 #                    see SECURITY.md for the trust model + hardening review)
+#   - doc-extract-mcp (the document-extraction capability — spawns the hardened
+#                    no-network doc-extract sandbox to turn untrusted uploads
+#                    into safe text + page pixels; rich-docs P3, opt-in via
+#                    docker-compose.doc-extract.yaml. Same docker-socket trust
+#                    model as coder.)
 #   - fetch-md-mcp  (fetch a URL -> readable markdown; fetch_url / fetch_urls)
 #   - git-mcp       (general git ops, distinct from coder's sandbox-scoped git)
 #   - yt-mcp        (YouTube transcript + playlist tools via yt-dlp — OPT-IN,
@@ -60,6 +65,7 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/stewards-mcp  ./cmd/stewards-mcp
  && go build -trimpath -ldflags="-s -w" -o /out/fs-read-mcp   ./cmd/fs-read-mcp   \
  && go build -trimpath -ldflags="-s -w" -o /out/stewards-cli  ./cmd/stewards-cli  \
  && go build -trimpath -ldflags="-s -w" -o /out/coder-mcp     ./cmd/coder-mcp     \
+ && go build -trimpath -ldflags="-s -w" -o /out/doc-extract-mcp ./cmd/doc-extract-mcp \
  && go build -trimpath -ldflags="-s -w" -o /out/fetch-md-mcp  ./cmd/fetch-md-mcp  \
  && go build -trimpath -ldflags="-s -w" -o /out/git-mcp       ./cmd/git-mcp       \
  && if [ "$WITH_YT" = "1" ]; then \

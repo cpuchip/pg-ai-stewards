@@ -1730,4 +1730,62 @@ BEGIN
   RAISE NOTICE 'OK 37: chat attachments — session-scoped media -> content_parts (image_url data URL), consumed-marking, NULL-when-empty';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→48) is sound =='
+-- ---------------------------------------------------------------------
+-- 49 — rich documents in chat, P3: doc-extract surface. parent_id + scan
+-- columns on chat_attachments; chat_attachment_parts surfaces a document's
+-- extracted text (or a doc_extract nudge) AND its rendered page images (the
+-- pixel overlay); the doc-extract MCP server is registered + doc_extract is
+-- granted to work-item-chat.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_doc   bigint;
+  v_page  bigint;
+  v_raw   bigint;
+  v_parts jsonb;
+BEGIN
+  -- columns exist
+  ASSERT (SELECT count(*) FROM information_schema.columns
+           WHERE table_schema='stewards' AND table_name='chat_attachments'
+             AND column_name IN ('parent_id','scan_verdict','scan_findings')) = 3,
+     '49: chat_attachments must gain parent_id + scan_verdict + scan_findings';
+
+  -- an EXTRACTED document + a rendered page image child of it
+  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, byte_size, extracted_text, scan_verdict)
+    VALUES ('dx-smoke','report.pdf','application/pdf','document', 0, 'Quarterly revenue rose 12%.', 'clean')
+    RETURNING id INTO v_doc;
+  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size, parent_id)
+    VALUES ('dx-smoke','report-p1.png','image/png','image', decode('89504e470d0a1a0a','hex'), 8, v_doc)
+    RETURNING id INTO v_page;
+
+  -- referencing ONLY the document must surface its text part AND its page image
+  -- (the overlay), document text first.
+  v_parts := stewards.chat_attachment_parts(ARRAY[v_doc], 'dx-smoke');
+  ASSERT v_parts IS NOT NULL AND jsonb_array_length(v_parts) = 2,
+     '49: a referenced document must surface its text part + its page-image overlay (2 parts)';
+  ASSERT v_parts->0->>'type' = 'text' AND (v_parts->0->>'text') LIKE '%Quarterly revenue%',
+     '49: the document text part must come first and carry the extracted text';
+  ASSERT v_parts->1->>'type' = 'image_url'
+         AND (v_parts->1->'image_url'->>'url') LIKE 'data:image/png;base64,%',
+     '49: the rendered page image must ride along as the pixel overlay';
+
+  -- an UN-extracted document must surface a doc_extract nudge
+  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, byte_size)
+    VALUES ('dx-smoke','unread.pdf','application/pdf','document', 0)
+    RETURNING id INTO v_raw;
+  v_parts := stewards.chat_attachment_parts(ARRAY[v_raw], 'dx-smoke');
+  ASSERT v_parts IS NOT NULL AND (v_parts->0->>'text') LIKE '%doc_extract%',
+     '49: an unread document must surface a doc_extract nudge';
+
+  -- server + grant
+  ASSERT EXISTS (SELECT 1 FROM stewards.mcp_servers WHERE name='doc-extract' AND enabled),
+     '49: the doc-extract MCP server must be registered + enabled';
+  ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                  WHERE agent_family='work-item-chat' AND tool_pattern='doc_extract' AND action='allow'),
+     '49: doc_extract must be granted to the work-item-chat agent';
+
+  DELETE FROM stewards.chat_attachments WHERE session_id='dx-smoke';
+  RAISE NOTICE 'OK 38: doc-extract surface — parent-linked page overlay + doc_extract nudge + server + grant';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→49) is sound =='
