@@ -5,7 +5,7 @@
 // P4: the panel layout is serialized to localStorage (toJSON/fromJSON) so a
 // user's arrangement survives reloads; "⟲ layout" resets to the default.
 // Spec: .spec/proposals/stewards-studio.md.
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { DockviewVue, type VueComponent } from 'dockview-vue'
 import type { DockviewApi, DockviewReadyEvent } from 'dockview'
 import 'dockview-core/dist/styles/dockview.css'
@@ -24,38 +24,59 @@ let dockApi: DockviewApi | null = null
 const showLauncher = ref(false)
 const openPanelIds = ref<string[]>([]) // reactive — which panes are currently open (launcher dots)
 
-// b3: VS-Code-style collapse of the leftmost (Work items) and rightmost (Chat)
-// columns. The toggle is anchored to those panels' groups (robust to rearrange +
-// reload), collapsing to zero width and restoring the prior width. State is
-// re-measured from the DOM on every layout change, so it survives a reload where
-// the layout persisted collapsed.
-const COLLAPSE_ANCHOR = { left: 'browser', right: 'chat' } as const
+// b3: VS-Code-style collapse of the LEFTMOST and RIGHTMOST columns. Geometric —
+// the rail collapses whichever group sits at that edge, so wherever you dock a
+// panel (e.g. Sessions on the left), the matching edge rail collapses it. The
+// collapsed group is tracked by its dockview id so expand restores the exact
+// group even at width 0; collapse state is re-derived from the DOM on every
+// layout change (survives reload + close).
 const savedEdgeW = { left: 300, right: 380 }
-const edgeCollapsed = ref<{ left: boolean; right: boolean }>({ left: false, right: false })
-function edgeGroup(side: 'left' | 'right') {
-  return dockApi?.getPanel(COLLAPSE_ANCHOR[side])?.group ?? null
+const collapsedId = ref<{ left: string | null; right: string | null }>({ left: null, right: null })
+const edgeCollapsed = computed(() => ({ left: !!collapsedId.value.left, right: !!collapsedId.value.right }))
+
+function groupWidth(g: { element: HTMLElement }): number {
+  return Math.round(g.element.getBoundingClientRect().width)
 }
-function edgeWidth(side: 'left' | 'right'): number {
-  const g = edgeGroup(side)
-  return g ? Math.round(g.element.getBoundingClientRect().width) : 0
-}
-function measureEdges() {
-  edgeCollapsed.value = {
-    left: !!edgeGroup('left') && edgeWidth('left') < 24,
-    right: !!edgeGroup('right') && edgeWidth('right') < 24,
+// the group currently at a given edge (min left / max right), skipping any that
+// are already collapsed so the next non-collapsed column becomes the edge.
+function geomEdgeGroup(side: 'left' | 'right') {
+  const groups = dockApi?.groups ?? []
+  let best: (typeof groups)[number] | null = null
+  let bestv = side === 'left' ? Infinity : -Infinity
+  for (const g of groups) {
+    if (groupWidth(g) < 24) continue
+    const r = g.element.getBoundingClientRect()
+    const v = side === 'left' ? r.left : r.right
+    if (side === 'left' ? v < bestv : v > bestv) { bestv = v; best = g }
   }
+  return best
 }
 function toggleEdge(side: 'left' | 'right') {
-  const g = edgeGroup(side)
-  if (!g) return
-  if (edgeWidth(side) < 24) {
-    g.api.setSize({ width: savedEdgeW[side] })
+  if (!dockApi) return
+  const cid = collapsedId.value[side]
+  if (cid) {
+    const g = dockApi.groups.find(x => x.id === cid)
+    if (g) g.api.setSize({ width: savedEdgeW[side] })
+    collapsedId.value = { ...collapsedId.value, [side]: null }
   } else {
-    savedEdgeW[side] = edgeWidth(side) || savedEdgeW[side]
+    const g = geomEdgeGroup(side)
+    if (!g) return
+    savedEdgeW[side] = groupWidth(g) || savedEdgeW[side]
     g.api.setConstraints({ minimumWidth: 0 })
     g.api.setSize({ width: 0 })
+    collapsedId.value = { ...collapsedId.value, [side]: g.id }
   }
-  // onDidLayoutChange → measureEdges keeps the glyph in sync.
+}
+function measureEdges() {
+  // drop a tracked collapse if its group was removed or is no longer narrow.
+  const c = { ...collapsedId.value }
+  for (const side of ['left', 'right'] as const) {
+    const id = c[side]
+    if (!id) continue
+    const g = dockApi?.groups.find(x => x.id === id)
+    if (!g || groupWidth(g) > 24) c[side] = null
+  }
+  if (c.left !== collapsedId.value.left || c.right !== collapsedId.value.right) collapsedId.value = c
 }
 
 // dockview maps these names → the Vue components it mounts in each panel.
@@ -140,14 +161,14 @@ function resetLayout() {
     <!-- b3: collapse/expand the leftmost (Work items) column, VS-Code style -->
     <button
       class="absolute top-1 left-2 z-20 text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
-      :title="edgeCollapsed.left ? 'show the work-items panel' : 'collapse the work-items panel'"
+      :title="edgeCollapsed.left ? 'show the left panel' : 'collapse the left panel'"
       @click="toggleEdge('left')">{{ edgeCollapsed.left ? '❯' : '❮' }}</button>
     <!-- windowing manager: open / reopen any pane -->
     <div class="absolute top-1 right-2 z-20 flex items-center gap-1">
       <!-- b3: collapse/expand the rightmost (Chat) column -->
       <button
         class="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
-        :title="edgeCollapsed.right ? 'show the chat panel' : 'collapse the chat panel'"
+        :title="edgeCollapsed.right ? 'show the right panel' : 'collapse the right panel'"
         @click="toggleEdge('right')">{{ edgeCollapsed.right ? '❮' : '❯' }}</button>
       <div class="relative">
         <button
