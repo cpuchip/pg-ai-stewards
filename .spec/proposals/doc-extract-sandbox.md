@@ -48,6 +48,26 @@ So the only things that ever touch our DB or our model are bitmaps and text — 
 
 The router records what it did (so a 200-page PDF is text + maybe first/key pages, not 200 silent vision calls), and the page-count threshold for the pixel overlay has a default a user can override ("render all pages").
 
+## 3.5. Archives & folders — drop a zip, get a corpus (per Michael)
+
+Upload a **zip** (or tar) holding one-to-many files in a folder structure → the sandbox unpacks it → **each member runs the per-file pipeline** (scan → text + pixels) → the result is a **folder tree** the chat can *work with* (reference files by path, ask across them) or *import* as a corpus/project.
+
+**This is the highest-risk input** — and the reason the scan + sandbox layers matter most. The unpack is the dangerous step, so it happens **inside the no-network sandbox** under strict, enforced caps (Go's `archive/zip` is pure-Go — fits the preference):
+
+| Threat | Guard |
+|---|---|
+| **Decompression bomb** (42.zip → petabytes) | cap total uncompressed bytes + per-entry size + **compression-ratio** ceiling; the sandbox `tmpfs` size is the hard backstop (extraction simply fails when the tmpfs fills) |
+| **Zip-slip / path traversal** (`../../etc/passwd`) | reject entries with `..` or absolute paths; safe-join every path under the confined extract dir (the coder sandbox already refuses `..` in `resolvePath`) |
+| **Symlink escape** (entry is a symlink to `/`) | refuse symlink / non-regular entries |
+| **Nested archives** (zip-in-zip to evade scan) | bounded depth (default: do NOT recurse; a contained archive is surfaced as a file, not auto-unpacked) — or a small depth cap, scanning each level |
+| **Inode/file-count flood** (10k tiny files) | cap entry count; cap total files processed |
+
+**Two modes (the payoff):**
+- **Work with** — the members become subject material in the chat: a tree manifest (`path → type → text handle / image attachment / scan verdict`) the agent reasons over ("the deck in `/q3/marketing.pptx` says…"). 
+- **Import** — the folder becomes a persistent **corpus / project**: each member's extracted markdown is chunked + indexed exactly like the **book corpus** (`book_chunks` pattern), tagged to a project. *Drop a folder of PM/UX/CX/marketing docs → a searchable project pool* — this lands straight in the substrate's existing intent/project/corpus model and is the bigger win.
+
+**Per-file scan is non-negotiable here:** ratified scan layer (c) runs on **each extracted member**, not just the outer zip — a clean-looking zip can carry a weaponized doc. A member that fails the scan is quarantined + reported in the tree, the rest proceed.
+
 ## 4. The sandbox (ratified tier: container + no-net; gVisor later)
 
 A **separate, lean `doc-extract` image** (NOT the 1.5 GB Go+Node coder image) so it hardens independently. Because the text engine is **tabula (Go)**, the image is small: a single static **Go `doc-extract` binary** (tabula + the in-tree readability/html-to-markdown linked in) + **poppler-utils** (`pdftoppm` for Path A PDF→pixels, ~native, small). No Python, no markitdown. **libreoffice is NOT in v1** — it's only needed for *faithful office→pixels* (Path A on a docx/pptx), an optional later tier; v1 sends office files to Path B (tabula text). Run via the existing `sandbox.Manager` with the untrusted-input hardening delta:
@@ -108,13 +128,15 @@ Defense in depth, cheapest-and-broadest first. No single layer is trusted alone.
 - **P3b — text always (the workhorse).** PDF/office → **tabula** → markdown; HTML → in-tree readability path; chunk + index like the book corpus; the `is_safe` gate. (Smoke tabula on a messy pptx + a multi-column report first — confirm the quality floor.)
 - **P3c — pixels overlay.** doc → page PNGs (poppler) → `chat_attachments` → vision, added alongside the text. Reuses P2 end-to-end.
 - **P3d — the router** (text always + pixels overlay by page-count threshold, force-render override) + the empty-chat corpus/project lens picker (the rich-docs P3 UI).
-- **P3e — fold in the digester-reads-repos lane** (the same no-network extract sandbox reads a read-only repo checkout for the "cross-reference our corpus" stage).
+- **P3e — archives & folders (§3.5).** Safe-unpack in the sandbox (the caps table) → per-member scan + extract → a folder-tree result → "work with" (subject) and "import" (folder → corpus/project, book-chunks reuse). Proven on a benign multi-file zip + a **zip-bomb / zip-slip smoke** (both refused, nothing escapes).
+- **P3f — fold in the digester-reads-repos lane** (the same no-network extract sandbox reads a read-only repo checkout for the "cross-reference our corpus" stage — a repo is just a folder, so it rides P3e's tree-extract).
 
 ## 8. Decisions to ratify
 
 1. **Isolation tier v1 = container + no-net** (reuse the coder spine + read-only/tmpfs/nofile delta). **gVisor `runsc` is SKIPPED for now** — revisit once Michael confirms `runsc` installs on KC NOCIX + the work VM (he has root on both). *(Michael, 2026-06-24: "skip visor until I can confirm.")*
 2. **Text always + pixels overlay** — text is extracted for every readable doc (cheap, models excel at it), pixels added for visual/short docs (page-count threshold, user can force-render). NOT pixels-XOR-text. *(Michael, 2026-06-24: "even for short PDFs I'd still want text too… I want images too.")*
-2b. **Scan layer (NEW, ratify the combo):** scan the file before extraction — recommended **ClamAV (sealed: engine in-image + DB-via-volume + networked freshclam sidecar) + a structural maldoc check (oletools/pdfid)**. Early-reject known-bad + flag macros/JS to the user; sits on top of the sandbox (the real containment), runs sealed itself. The Go-purity tension is real (ClamAV=C, oletools/pdfid=Python) — a Go-only minimal check (option d in §5) is the fallback. *(Michael, 2026-06-24: "run Windows Defender on the file" — yes, ClamAV.)*
+2b. **Scan layer = (c) BOTH — RATIFIED** *(Michael, 2026-06-24: "lets go c combo!")*: **ClamAV** (sealed: engine in-image + DB-via-volume + networked freshclam sidecar) **+ a structural maldoc check** (oletools/pdfid). Scans **every file** (incl. each member extracted from an archive — §3.5). Early-reject known-bad + flag macros/JS to the user; sits on top of the sandbox, runs sealed itself. The Python (oletools/pdfid) runs only inside the sealed sandbox — never touches our Go code or the host — so the Go-purity preference holds at our surface. A Go-only minimal check (option d in §5) remains the fallback if image weight bites.
+2c. **Archive / folder upload — RATIFIED in scope** (§3.5) *(Michael, 2026-06-24: "drop a zip with 1 or many files/folder structure to work with or import")*: a zip (or tar) unpacks in the sandbox under strict caps, each member runs the per-file pipeline (scan → text + pixels), and the result is a folder tree the chat can work with OR import as a corpus/project.
 3. **Engines = Go-first, full office, already in-tree:** **`tabula`** (pure-Go) for PDF/DOCX/XLSX/PPTX/ODT/EPUB → markdown (Path B), in-tree readability+html-to-markdown for HTML, **poppler `pdftoppm`** for PDF→pixels (Path A). **No markitdown, no Python.** libreoffice only for the optional *faithful office→pixels* upgrade tier. Docling deferred as a table-heavy upgrade. *(Michael, 2026-06-24: "Go only to keep it light" + "full office support" — tabula satisfies both; he'd used it before via fetch-md.)*
 4. **`is_safe` gate on extracted text, not bytes** — layered on the existing injection regex; pixels ungated.
 5. **A separate lean `doc-extract` image** (Go binary + poppler), not the coder image.
@@ -129,3 +151,5 @@ Still open:
 - **Faithful office→pixels:** v1 renders only PDF/image to pixels (poppler). A docx/pptx as *pixels* needs office→PDF first (libreoffice, ~600 MB) — worth it later for marketing decks where layout IS the content, or does tabula-text + a "convert to PDF yourself" note suffice for v1?
 - **Per-doc cost ceiling:** Path A on a long doc is many vision calls — the router's page-count threshold (>N pages → force Path B) needs a default.
 - **Retention:** extracted text + page PNGs are derived artifacts — keep on `chat_attachments` (durable, carries into spawned work) or treat as ephemeral cache? Ties to the P2 attachment-retention follow-up.
+- **Archive caps (defaults to set, §3.5):** max total uncompressed size (e.g. 200 MB?), max entry count (e.g. 1000?), compression-ratio ceiling, max files actually extracted/processed, and the nested-archive policy (recommend: do NOT auto-recurse — surface a contained archive as a file). These are the zip-bomb guardrails; pick conservative defaults, make them config.
+- **Import target:** when a folder is "imported," does it create a new project, attach to the selected project, or land as a session-scoped corpus? (Ties to the empty-chat lens picker in P3d.)
