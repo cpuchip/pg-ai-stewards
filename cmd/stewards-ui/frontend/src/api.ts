@@ -225,15 +225,29 @@ export const api = {
     getJSON<AttachmentMeta>(`/api/chat/attachment/${id}?meta=1`),
   // Self-serve "Build a World": register the world + dispatch the world-build
   // agent over a canon source (a project pool, or inline canon text).
-  worldBuild: async (req: { name: string; slug?: string; project?: string; canon?: string; instructions?: string }):
+  worldBuild: async (req: { name: string; slug?: string; project?: string; canon?: string; instructions?: string; file?: File }):
     Promise<{ slug: string; session_id: string }> => {
-    const r = await fetch('/api/world/build', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
-    })
+    let r: Response
+    if (req.file) {
+      // upload path — multipart so the agent imports the source into the project
+      const fd = new FormData()
+      fd.set('name', req.name)
+      if (req.slug) fd.set('slug', req.slug)
+      if (req.project) fd.set('project', req.project)
+      if (req.instructions) fd.set('instructions', req.instructions)
+      fd.set('file', req.file)
+      r = await fetch('/api/world/build', { method: 'POST', body: fd })
+    } else {
+      r = await fetch('/api/world/build', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      })
+    }
     if (!r.ok) throw new Error(await r.text())
     return r.json()
   },
+  // selectable canon projects (formal + corpus tags) for the Build a World form
+  worldProjects: () => getJSON<{ items: { name: string; doc_count: number }[] }>('/api/world/projects'),
   studiesSearch: (q: string, opts?: { mode?: string; limit?: number }) => {
     const p = new URLSearchParams({ q })
     if (opts?.mode) p.set('mode', opts.mode)

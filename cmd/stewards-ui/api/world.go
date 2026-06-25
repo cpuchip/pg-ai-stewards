@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -19,12 +20,15 @@ func (d *Deps) registerWorld(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/world/list", d.worldListHandler)
 	mux.HandleFunc("GET /api/world/graph", d.worldGraphHandler)
 	mux.HandleFunc("GET /api/world/node", d.worldNodeHandler)
-	mux.HandleFunc("POST /api/world/build", d.worldBuildHandler) // self-serve "Build a World"
+	mux.HandleFunc("GET /api/world/projects", d.worldProjectsHandler) // selectable canon projects (formal + corpus tags)
+	mux.HandleFunc("POST /api/world/build", d.worldBuildHandler)      // self-serve "Build a World"
 }
 
-// worldBuildReq — kick off a world build from the UI. A canon source is required:
-// a `project` (a doc pool the source was imported into; the agent doc_searches it)
-// or inline `canon` text (for small/pasted lore).
+// worldBuildReq — kick off a world build from the UI. A canon source is required,
+// one of: an uploaded file (multipart `file`, imported into `project`), an existing
+// `project` (the agent doc_searches it), or inline `canon` text. The same form
+// EXPANDS an existing world/project: pick its name + project and upload more — the
+// import adds docs and world_*_upsert merges (idempotent), so the graph grows.
 type worldBuildReq struct {
 	Name         string `json:"name"`
 	Slug         string `json:"slug,omitempty"`
@@ -43,18 +47,55 @@ func worldSlugify(s string) string {
 	return strings.Trim(sessionSafe.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "-"), "-")
 }
 
+func nz(s, def string) string {
+	if strings.TrimSpace(s) == "" {
+		return def
+	}
+	return s
+}
+
 // worldBuildHandler — register the world (private by default) and dispatch the
-// world-build agent over the chosen canon. Returns the world slug + the chat
-// session the build runs in, so the UI can open it and watch the graph fill in.
+// world-build agent over the chosen canon. Accepts a multipart upload (a PDF /
+// Office doc / zip / folder) which it stores + has the agent import into the
+// project, OR a JSON body naming an existing project / pasted canon. Returns the
+// world slug + the chat session the build runs in, so the UI opens it and watches
+// the graph fill in.
 func (d *Deps) worldBuildHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	var req worldBuildReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var (
+		req       worldBuildReq
+		fileBytes []byte
+		fileName  string
+		fileMime  string
+	)
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(maxAttachmentBytes); err != nil {
+			writeErr(w, http.StatusBadRequest, "parse upload: "+err.Error())
+			return
+		}
+		req.Name = r.FormValue("name")
+		req.Slug = r.FormValue("slug")
+		req.Project = r.FormValue("project")
+		req.Canon = r.FormValue("canon")
+		req.Instructions = r.FormValue("instructions")
+		if f, hdr, err := r.FormFile("file"); err == nil {
+			defer f.Close()
+			b, e := io.ReadAll(f)
+			if e != nil {
+				writeErr(w, http.StatusBadRequest, "read upload: "+e.Error())
+				return
+			}
+			fileBytes = b
+			fileName = hdr.Filename
+			fileMime = nz(hdr.Header.Get("Content-Type"), "application/octet-stream")
+		}
+	} else if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErr(w, http.StatusBadRequest, "bad request body")
 		return
 	}
+
 	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		writeErr(w, http.StatusBadRequest, "name required")
@@ -73,19 +114,41 @@ func (d *Deps) worldBuildHandler(w http.ResponseWriter, r *http.Request) {
 	canonText := strings.TrimSpace(req.Canon)
 	instr := strings.TrimSpace(req.Instructions)
 
-	// the canon clause — how the agent finds the source material.
+	// An upload stores the file as an attachment; the agent imports it into the
+	// project (default = the world slug, so a new world gets its own project).
+	var attID int64
+	if len(fileBytes) > 0 {
+		if proj == "" {
+			proj = slug
+		}
+		if err := d.Pool.QueryRow(ctx,
+			`INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size)
+			 VALUES ($1, $2, $3, 'document', $4, $5) RETURNING id`,
+			"world-build-"+slug, nz(fileName, "upload"), fileMime, fileBytes, len(fileBytes),
+		).Scan(&attID); err != nil {
+			writeErr(w, http.StatusInternalServerError, "store upload: "+err.Error())
+			return
+		}
+	}
+
+	// the canon clause — how the agent finds (or loads) the source material.
 	var canon string
 	switch {
+	case attID > 0:
+		canon = fmt.Sprintf("Your canon is an uploaded source. FIRST call doc_import_corpus(attachment_id=%d, "+
+			"corpus_name=%q, project=%q) EXACTLY ONCE to load + chunk it into project %q, then build from "+
+			"that project with doc_search.", attID, req.Name, proj, proj)
 	case proj != "":
 		canon = fmt.Sprintf("The canon lives in the project %q — call doc_search (scoped to project %q) to read it thoroughly before extracting.", proj, proj)
 	case canonText != "":
 		canon = "Canon (the full source to extract from):\n" + canonText
 	default:
-		writeErr(w, http.StatusBadRequest, "provide a canon source: a project or inline canon text")
+		writeErr(w, http.StatusBadRequest, "provide a canon source: upload a file, name a project, or paste canon text")
 		return
 	}
 
-	// 1. register the world — private by default (purchased/world content stays local).
+	// register the world — private by default (purchased/world content stays local).
+	// Idempotent: re-running for an existing slug merges (expand-a-world).
 	var summaryArg any
 	if instr != "" {
 		summaryArg = instr
@@ -102,7 +165,6 @@ func (d *Deps) worldBuildHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. dispatch the world-build agent over the canon.
 	prompt := fmt.Sprintf(
 		"Build the world '%s' (%s). %s%s Extract every entity (character, place, faction, "+
 			"item, event, lore) and the relationships between them that the canon actually "+
@@ -121,6 +183,40 @@ func (d *Deps) worldBuildHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, worldBuildResp{Slug: slug, SessionID: session})
+}
+
+// worldProjectsHandler — the projects a canon can live in: the formal projects
+// table UNION the corpus tags actually on docs (so an imported corpus like
+// `star-trek` is selectable, not just formal projects). Doc count per project.
+func (d *Deps) worldProjectsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	rows, err := d.Pool.Query(ctx, `
+		SELECT name, max(doc_count) AS doc_count FROM (
+		    SELECT slug AS name, 0 AS doc_count FROM stewards.projects WHERE NOT archived
+		    UNION ALL
+		    SELECT project_association AS name, count(*) AS doc_count
+		      FROM stewards.docs WHERE project_association IS NOT NULL AND project_association <> ''
+		      GROUP BY project_association
+		) u
+		GROUP BY name ORDER BY doc_count DESC, name`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	type proj struct {
+		Name     string `json:"name"`
+		DocCount int64  `json:"doc_count"`
+	}
+	out := []proj{}
+	for rows.Next() {
+		var p proj
+		if err := rows.Scan(&p.Name, &p.DocCount); err == nil {
+			out = append(out, p)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
 func instructionsClause(instr string) string {

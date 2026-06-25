@@ -100,8 +100,13 @@ VALUES (
   'primary',
   $PROMPT$You are BUILDING a World — turning a pile of source lore into a structured, explorable knowledge graph.
 
-Your task names a world_slug and the canon project it is built from. Work in passes:
+Your task names a world_slug and the canon it is built from. Work in passes:
 
+0. LOAD THE CANON IF ASKED. If your task says to import an attachment (gives an attachment_id and a
+   project name), call doc_import_corpus(attachment_id, corpus_name, project) EXACTLY ONCE first —
+   that extracts + chunks the uploaded source into the searchable project. Wait for it to finish, then
+   build from that project. If the task instead names an existing project or pastes the canon inline,
+   skip this step.
 1. SURVEY the canon with doc_search (and book_search if the canon is a book) over the named project.
    Search broadly first — the major figures, places, factions, the shape of the setting.
 2. For each thing the canon actually describes, call world_entity_upsert with the right kind
@@ -150,6 +155,7 @@ INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, sourc
   ('world-build', 'world_entity_search', 'allow', 'manual'),
   ('world-build', 'doc_search',          'allow', 'manual'),
   ('world-build', 'doc_get',             'allow', 'manual'),
+  ('world-build', 'doc_import_corpus',   'allow', 'manual'),  -- load an uploaded source into its project, then build
   ('world-build', 'book_search',         'allow', 'manual'),
   ('world-build', 'result_search',       'allow', 'manual'),
   ('world-build', 'read_corpus_parents', 'allow', 'manual')

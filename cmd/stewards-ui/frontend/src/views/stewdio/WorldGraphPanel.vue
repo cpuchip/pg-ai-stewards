@@ -60,16 +60,21 @@ const loading = ref(false)
 const orbiting = ref(true)
 const showSearch = ref(false)
 
-// "Build a World" — self-serve: name + a canon source (a project pool the source
-// was imported into, or pasted canon) → dispatch the world-build agent.
+// "Build a World" — self-serve: name + a canon source (upload a PDF/zip, an
+// existing project, or pasted canon) → dispatch the world-build agent. The same
+// form EXPANDS an existing world: reuse its name + project and upload more.
 const showBuild = ref(false)
 const projects = ref<{ name: string; doc_count?: number }[]>([])
 const buildName = ref('')
 const buildProject = ref('')
 const buildCanon = ref('')
 const buildInstr = ref('')
+const buildFile = ref<File | null>(null)
 const building = ref(false)
 const buildErr = ref('')
+function onBuildFile(e: Event) {
+  buildFile.value = (e.target as HTMLInputElement).files?.[0] ?? null
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Graph = any
@@ -223,8 +228,9 @@ function resize() {
 function toggleBuild() {
   showBuild.value = !showBuild.value
   if (showBuild.value) {
-    buildName.value = ''; buildProject.value = ''; buildCanon.value = ''; buildInstr.value = ''; buildErr.value = ''
-    if (!projects.value.length) api.projectsList().then(r => { projects.value = r.items ?? [] }).catch(() => {})
+    buildName.value = ''; buildProject.value = ''; buildCanon.value = ''; buildInstr.value = ''; buildErr.value = ''; buildFile.value = null
+    // selectable projects = formal + corpus tags (so an imported corpus shows up)
+    api.worldProjects().then(r => { projects.value = r.items ?? [] }).catch(() => {})
   }
 }
 
@@ -233,14 +239,17 @@ function toggleBuild() {
 async function buildWorld() {
   const name = buildName.value.trim()
   if (!name) { buildErr.value = 'name the world'; return }
-  if (!buildProject.value && !buildCanon.value.trim()) { buildErr.value = 'pick a canon project or paste canon text'; return }
+  if (!buildFile.value && !buildProject.value.trim() && !buildCanon.value.trim()) {
+    buildErr.value = 'give it a source — upload a file, pick/name a project, or paste canon'; return
+  }
   building.value = true; buildErr.value = ''
   try {
     const r = await api.worldBuild({
       name,
-      project: buildProject.value || undefined,
+      project: buildProject.value.trim() || undefined,
       canon: buildCanon.value.trim() || undefined,
       instructions: buildInstr.value.trim() || undefined,
+      file: buildFile.value || undefined,
     })
     showBuild.value = false
     worlds.value = (await api.worldList()).items   // pick up the freshly-registered world
@@ -413,18 +422,31 @@ onUnmounted(() => {
 
     <!-- Build a World form -->
     <div v-if="showBuild" class="absolute top-9 left-2 right-2 z-30 rounded-lg border border-zinc-800 bg-zinc-900/95 shadow-xl p-3 space-y-2 text-[12px] max-w-md">
-      <div class="text-zinc-300 font-medium">🌍 Build a world</div>
+      <div class="text-zinc-300 font-medium">🌍 Build a world <span class="text-zinc-600 font-normal">(or expand one)</span></div>
       <input v-model="buildName" placeholder="world name (e.g. Star Trek Adventures)"
              class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200" />
+
+      <!-- canon source: upload a file (primary) -->
       <div>
-        <label class="text-zinc-500 text-[11px]">Canon source — a project you imported the source into:</label>
-        <select v-model="buildProject" class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 mt-0.5">
-          <option value="">— pick a project —</option>
-          <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}<span v-if="p.doc_count"> ({{ p.doc_count }})</span></option>
-        </select>
+        <label class="text-zinc-500 text-[11px]">Canon — upload a PDF / Office doc / zip / folder:</label>
+        <input type="file" @change="onBuildFile"
+               accept=".pdf,.txt,.md,.markdown,.html,.htm,.docx,.doc,.pptx,.xlsx,.zip,.epub"
+               class="w-full text-[11px] text-zinc-300 mt-0.5 file:mr-2 file:rounded file:border-0 file:bg-zinc-800 file:px-2 file:py-1 file:text-zinc-200" />
+        <div v-if="buildFile" class="text-emerald-400 text-[10px] mt-0.5">{{ buildFile.name }} ({{ (buildFile.size/1048576).toFixed(1) }} MB)</div>
       </div>
-      <div class="text-zinc-600 text-[10px]">…or paste canon directly (for small/quick worlds):</div>
-      <textarea v-model="buildCanon" rows="3" placeholder="paste source lore here (optional if a project is picked)"
+
+      <!-- project: new (type a name) OR existing (pick from the list, incl. imported corpora) -->
+      <div>
+        <label class="text-zinc-500 text-[11px]">Project — a new name, or pick an existing one to add to / build from:</label>
+        <input v-model="buildProject" list="world-projects" placeholder="defaults to the world name"
+               class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 mt-0.5" />
+        <datalist id="world-projects">
+          <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}<span v-if="p.doc_count"> · {{ p.doc_count }} docs</span></option>
+        </datalist>
+      </div>
+
+      <div class="text-zinc-600 text-[10px]">…or paste canon directly (for a small/quick world):</div>
+      <textarea v-model="buildCanon" rows="2" placeholder="paste source lore here (optional)"
                 class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 resize-none"></textarea>
       <input v-model="buildInstr" placeholder="extra direction (optional, e.g. focus on factions + ships)"
              class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200" />
@@ -435,7 +457,7 @@ onUnmounted(() => {
         <button class="text-xs px-2 py-1 rounded text-zinc-400 hover:text-zinc-200" @click="showBuild = false">Cancel</button>
         <span v-if="buildErr" class="text-rose-400 text-[11px] truncate">{{ buildErr }}</span>
       </div>
-      <div class="text-zinc-600 text-[10px] leading-snug">The world-build agent reads the canon and extracts entities + relationships. It runs as a chat session (opens on the right) — the graph fills in as it works; re-pick the world to refresh. Private by default.</div>
+      <div class="text-zinc-600 text-[10px] leading-snug">Upload → it's imported into the project, then the world-build agent extracts entities + relationships. Reuse an existing world name + project to EXPAND it (new lore merges in). Runs as a chat session (opens on the right); the graph fills in — re-pick the world to refresh. Private by default.</div>
     </div>
 
     <!-- the 3D canvas -->
