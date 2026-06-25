@@ -18,7 +18,9 @@ function persisted<T>(key: string, initial: T) {
 // browser, artifact, chat, sessions, and models panels are mounted
 // independently, so they coordinate through this Pinia store.
 // See .spec/proposals/stewards-studio.md.
-export type SelectedKind = 'doc' | 'work_item'
+// 'object' = a stored binary object (locator `att:<id>`) rendered by the
+// ArtifactPanel's object viewer (image / PDF page-flip / download).
+export type SelectedKind = 'doc' | 'work_item' | 'object'
 
 export const useStewdioStore = defineStore('stewdio', () => {
   // left browser: filter work items / docs by project (null = all)

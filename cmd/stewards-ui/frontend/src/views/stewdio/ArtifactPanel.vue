@@ -5,7 +5,7 @@
 // P2 live plan=progress)
 import { ref, computed, watch, onUnmounted } from 'vue'
 import MarkdownIt from 'markdown-it'
-import { api, type StudyDetail, type WorkItemDetail } from '@/api'
+import { api, type StudyDetail, type WorkItemDetail, type AttachmentMeta, type ObjectPage } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
 import { makeLinkClick } from './useDocLinks'
 
@@ -50,8 +50,20 @@ const loading = ref(false)
 const err = ref('')
 const doc = ref<StudyDetail | null>(null)
 const wi = ref<WorkItemDetail | null>(null)
+const obj = ref<AttachmentMeta | null>(null)        // O1: a stored binary object
+const objPages = ref<ObjectPage[]>([])               // a document's rendered pages
 const stages = ref<{ name: string; agent_family?: string; model?: string }[]>([])
 let poll: number | null = null
+
+const objIsImage = computed(() => obj.value?.mime_type?.startsWith('image/') ?? false)
+const objUrl = (id: number, download = false) =>
+  `/api/chat/attachment/${id}${download ? '?download=1' : ''}`
+const prettyBytes = (n?: number) => {
+  if (!n) return ''
+  if (n < 1024) return `${n} B`
+  if (n < 1048576) return `${(n / 1024).toFixed(1)} KB`
+  return `${(n / 1048576).toFixed(1)} MB`
+}
 
 function stopPoll() { if (poll !== null) { clearInterval(poll); poll = null } }
 const terminal = (s?: string) => s === 'completed' || s === 'failed' || s === 'cancelled'
@@ -71,12 +83,22 @@ async function refreshWorkItem(id: string) {
 }
 
 async function load() {
-  stopPoll(); doc.value = null; wi.value = null; stages.value = []; err.value = ''
+  stopPoll(); doc.value = null; wi.value = null; obj.value = null; objPages.value = []
+  stages.value = []; err.value = ''
   if (!store.selectedRef || !store.selectedKind) return
   loading.value = true
   try {
     if (store.selectedKind === 'doc') {
       doc.value = await api.studyGet(store.selectedRef)
+    } else if (store.selectedKind === 'object') {
+      // locator is `att:<id>` (or a bare numeric id) → the object viewer.
+      const id = parseInt(store.selectedRef.replace(/^att:/, ''), 10)
+      if (Number.isNaN(id)) throw new Error('bad object locator')
+      obj.value = await api.attachmentMeta(id)
+      // a document attachment may have rendered page images (PDF flip).
+      if (!objIsImage.value) {
+        try { objPages.value = (await api.objectPages(id)).pages } catch { objPages.value = [] }
+      }
     } else {
       wi.value = await api.workItemGet(store.selectedRef)
       try { stages.value = (await api.pipelineGet(wi.value.pipeline)).stages } catch { stages.value = [] }
@@ -90,7 +112,7 @@ onUnmounted(stopPoll)
 
 <template>
   <div class="h-full overflow-auto bg-zinc-950 px-5 py-4 text-sm">
-    <div v-if="loading && !wi && !doc" class="text-zinc-500">loading…</div>
+    <div v-if="loading && !wi && !doc && !obj" class="text-zinc-500">loading…</div>
     <div v-else-if="err" class="text-rose-400">{{ err }}</div>
 
     <div v-else-if="doc">
@@ -120,6 +142,36 @@ onUnmounted(stopPoll)
       </div>
 
       <div class="prose prose-invert prose-sm max-w-none" v-html="md.render(doc.body || '')" @click="onLink"></div>
+    </div>
+
+    <!-- O1: a stored binary object — paint the original back (image / PDF pages /
+         download). The bytes are the durable source the world/digest was built from. -->
+    <div v-else-if="obj">
+      <div class="flex items-start justify-between gap-2 mb-1">
+        <div class="text-zinc-100 text-base font-medium break-all">{{ obj.filename }}</div>
+        <a :href="objUrl(obj.id, true)"
+           class="shrink-0 text-[11px] text-sky-400 hover:text-sky-300 border border-zinc-800 rounded px-1.5 py-0.5"
+           title="download the original file" download>⬇ file</a>
+      </div>
+      <div class="text-zinc-600 text-xs mb-4">{{ obj.mime_type }}<span v-if="obj.byte_size"> · {{ prettyBytes(obj.byte_size) }}</span></div>
+
+      <!-- an image renders inline -->
+      <img v-if="objIsImage" :src="objUrl(obj.id)" :alt="obj.filename"
+           class="max-w-full rounded-lg border border-zinc-800 bg-zinc-900" />
+
+      <!-- a document with rendered page images → flip through the pages -->
+      <div v-else-if="objPages.length" class="space-y-3">
+        <div class="text-zinc-500 text-[11px] uppercase tracking-wide">{{ objPages.length }} page{{ objPages.length === 1 ? '' : 's' }}</div>
+        <img v-for="(p, i) in objPages" :key="p.id" :src="p.url" :alt="`page ${i + 1}`"
+             loading="lazy" class="w-full rounded border border-zinc-800 bg-white" />
+      </div>
+
+      <!-- no preview path (e.g. a raw document with no page render) → offer the file -->
+      <div v-else class="text-zinc-500 text-sm">
+        No inline preview for this type.
+        <a :href="objUrl(obj.id, true)" class="text-sky-400 hover:text-sky-300" download>Download the file</a>
+        to open it.
+      </div>
     </div>
 
     <div v-else-if="wi">

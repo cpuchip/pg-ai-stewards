@@ -88,6 +88,24 @@ export type StudyDetail = {
   similar: SimilarHit[]
 }
 
+// O1: a stored binary object (chat_attachments) + its rendered pages.
+export type ObjectBrief = {
+  id: number
+  locator: string
+  kind: string        // image | document
+  filename: string
+  mime: string
+  byte_size: number
+  session_id?: string
+  pages: number       // rendered page images (documents); 0 otherwise
+  url: string         // GET to render/download the bytes
+  created_at?: string
+}
+export type ObjectListResp = { items: ObjectBrief[] }
+export type ObjectPage = { id: number; mime: string; url: string }
+export type ObjectPagesResp = { pages: ObjectPage[] }
+export type AttachmentMeta = { id: number; filename: string; mime_type: string; kind: string; byte_size: number }
+
 export type SearchHit = {
   slug: string
   kind?: string
@@ -192,6 +210,19 @@ export const api = {
   },
   studyGet: (slug: string) =>
     getJSON<StudyDetail>(`/api/studies/get?slug=${encodeURIComponent(slug)}`),
+  // O1: the object registry's read surface — browsable stored media (images +
+  // documents) and a document's rendered page images.
+  objectList: (params?: { kind?: string; limit?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.kind) q.set('kind', params.kind)
+    if (params?.limit) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return getJSON<ObjectListResp>(`/api/object/list${qs ? '?' + qs : ''}`)
+  },
+  objectPages: (att: number) =>
+    getJSON<ObjectPagesResp>(`/api/object/pages?att=${att}`),
+  attachmentMeta: (id: number) =>
+    getJSON<AttachmentMeta>(`/api/chat/attachment/${id}?meta=1`),
   studiesSearch: (q: string, opts?: { mode?: string; limit?: number }) => {
     const p = new URLSearchParams({ q })
     if (opts?.mode) p.set('mode', opts.mode)

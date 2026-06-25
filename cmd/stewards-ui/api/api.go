@@ -50,6 +50,7 @@ func Register(mux *http.ServeMux, deps *Deps) {
 	deps.registerModels(mux)
 	deps.registerRig(mux)
 	deps.registerActivity(mux)
+	deps.registerObjects(mux)
 	deps.registerChat(mux)
 }
 

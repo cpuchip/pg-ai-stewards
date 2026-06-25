@@ -4,7 +4,7 @@
 // (or launching one) sets the shared selection, which drives the center artifact
 // / plan-progress view and the chat panel. (Stewdio P1 + P2 launcher)
 import { ref, computed, onMounted, watch } from 'vue'
-import { api, type StudyBrief, type WorkItemRow } from '@/api'
+import { api, type StudyBrief, type WorkItemRow, type ObjectBrief } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
 
 defineOptions({ inheritAttrs: false })
@@ -13,7 +13,10 @@ const store = useStewdioStore()
 const projects = ref<{ slug: string; name?: string }[]>([])
 const pipelines = ref<{ family: string; description: string }[]>([])
 const docs = ref<StudyBrief[]>([])
+const media = ref<ObjectBrief[]>([])
 const items = ref<WorkItemRow[]>([])
+
+const mediaIcon = (o: ObjectBrief) => o.kind === 'image' ? '🖼' : o.pages > 0 ? '📑' : '📄'
 const err = ref('')
 const loading = ref(false)
 
@@ -69,12 +72,14 @@ async function loadItems() {
   loading.value = true; err.value = ''
   try {
     const proj = store.projectFilter || undefined
-    const [d, w] = await Promise.allSettled([
+    const [d, w, m] = await Promise.allSettled([
       api.studiesList({ limit: 200 }),
       api.workItemsList({ project_association: proj, limit: 100 }),
+      api.objectList({ limit: 200 }),
     ])
     docs.value = d.status === 'fulfilled' ? (d.value.items ?? []) : []
     items.value = w.status === 'fulfilled' ? (w.value.items ?? []) : []
+    media.value = m.status === 'fulfilled' ? (m.value.items ?? []) : []
   } catch (e) { err.value = String(e) } finally { loading.value = false }
 }
 
@@ -175,6 +180,22 @@ watch(() => store.projectFilter, loadItems)
           </button>
         </li>
         <li v-if="!docs.length && !loading" class="text-zinc-600 text-xs px-2 py-1">no docs</li>
+      </ul>
+    </div>
+
+    <div v-if="media.length" class="px-3 py-2 border-t border-zinc-900">
+      <div class="text-zinc-500 text-[11px] uppercase tracking-wide mb-1">Media</div>
+      <ul class="space-y-0.5">
+        <li v-for="o in media" :key="o.locator">
+          <button
+            class="w-full text-left px-2 py-1 rounded hover:bg-zinc-900 truncate"
+            :class="store.selectedRef === o.locator ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300'"
+            :title="o.filename"
+            @click="store.select(o.locator, 'object', o.filename)">
+            <span class="text-[10px] mr-1">{{ mediaIcon(o) }}</span>{{ o.filename }}
+            <span v-if="o.pages > 0" class="text-zinc-600 text-[10px]">{{ o.pages }}p</span>
+          </button>
+        </li>
       </ul>
     </div>
 
