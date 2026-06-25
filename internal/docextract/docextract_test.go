@@ -365,3 +365,30 @@ func itoa(i int) string {
 	}
 	return string(b)
 }
+
+func TestStripPurchaseWatermarks(t *testing.T) {
+	// The real DriveThruRPG/Renegade per-page stamp + a lowercase variant must go;
+	// genuine prose (even with parentheses or the word "order") must stay.
+	// CRLF on the watermark line on purpose — poppler emits \r\n on some hosts,
+	// and an anchor that ignored \r let the stamp survive (the real MLP bug).
+	in := "Michael Stufflebeam (Order #52343719)\r\n" +
+		"Welcome to Equestria!\n" +
+		"Twilight Sparkle restores order to Ponyland (with help).\n" +
+		"jane doe (order #99)\n" +
+		"The Mane Six are the heroes.\n"
+	got := stripPurchaseWatermarks(in)
+	for _, bad := range []string{"Stufflebeam", "52343719", "Order #", "order #99"} {
+		if strings.Contains(got, bad) {
+			t.Errorf("watermark not stripped: %q still present in:\n%s", bad, got)
+		}
+	}
+	for _, keep := range []string{"Welcome to Equestria!", "restores order to Ponyland (with help)", "The Mane Six are the heroes."} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("real content dropped: %q missing from:\n%s", keep, got)
+		}
+	}
+	// idempotent + no-op on clean text
+	if stripPurchaseWatermarks("plain text") != "plain text" {
+		t.Error("clean text should pass through unchanged")
+	}
+}

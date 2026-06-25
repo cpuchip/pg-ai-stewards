@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -90,11 +91,14 @@ func ExtractFile(ctx context.Context, data []byte, name string, opts Options) Fi
 
 	// Text — always, for any readable doc (layers 3+4 make this safe even when
 	// the scan flagged macros: tabula reads structure, it never runs VBA).
-	if text, err := extractText(data, docType, ext); err != nil {
+	if text, err := extractText(ctx, data, docType, ext); err != nil {
 		fr.Error = err.Error()
 	} else {
-		fr.Text = text
-		fr.WordCount = len(strings.Fields(text))
+		// Strip per-page purchase watermarks (e.g. DriveThruRPG / Renegade stamp
+		// the buyer's name + order number on every page) so the buyer's PII does
+		// not pollute the corpus or get mistaken for a recurring entity.
+		fr.Text = stripPurchaseWatermarks(text)
+		fr.WordCount = len(strings.Fields(fr.Text))
 	}
 
 	// Pixels — the additive overlay. The router (proposal §3): render when
@@ -118,7 +122,7 @@ func ExtractFile(ctx context.Context, data []byte, name string, opts Options) Fi
 // tabula (pure Go); HTML through readability + html-to-markdown (the in-tree
 // path); plain text passes through. Images and unknown/legacy-OLE yield no
 // text (the model gets pixels, or nothing).
-func extractText(data []byte, docType, ext string) (string, error) {
+func extractText(ctx context.Context, data []byte, docType, ext string) (string, error) {
 	switch {
 	case docType == "image":
 		return "", nil // images carry no text; the pixel path handles them
@@ -126,7 +130,9 @@ func extractText(data []byte, docType, ext string) (string, error) {
 		return htmlToMarkdown(data)
 	case docType == "text":
 		return string(data), nil
-	case tabulaExts["."+strings.TrimPrefix(ext, ".")] || tabulaExts[ext] || docType == "pdf":
+	case docType == "pdf":
+		return pdfText(ctx, data)
+	case tabulaExts["."+strings.TrimPrefix(ext, ".")] || tabulaExts[ext]:
 		return tabulaExtract(data, normalizeTabulaExt(docType, ext))
 	case docType == "legacy-office":
 		return "", fmt.Errorf("legacy OLE office format (doc/xls/ppt) is not supported for text; convert to a modern format or render to pixels")
@@ -174,6 +180,79 @@ func tabulaExtract(data []byte, ext string) (string, error) {
 		return "", fmt.Errorf("tabula extract %s: %w", ext, err)
 	}
 	return out, nil
+}
+
+// pdfFallbackMinWords is the floor below which tabula's PDF output is treated as
+// "tabula couldn't parse this PDF" and we fall back to poppler's pdftotext. A
+// real page carries hundreds of words; a near-empty result is a parse failure.
+const pdfFallbackMinWords = 50
+
+// pdfText extracts a PDF's text. tabula (pure Go) is tried first — it renders
+// tables as markdown — but it silently yields nothing on a range of real-world
+// PDFs (e.g. the MLP rulebook: tabula→0 words, poppler→141k). So when tabula
+// errors or returns too little, fall back to poppler's pdftotext, which parses
+// a far wider range. Whichever yields more text wins.
+func pdfText(ctx context.Context, data []byte) (string, error) {
+	md, terr := tabulaExtract(data, ".pdf")
+	mdWords := len(strings.Fields(md))
+	if terr == nil && mdWords >= pdfFallbackMinWords {
+		return md, nil
+	}
+	txt, perr := popplerText(ctx, data)
+	if perr == nil && len(strings.Fields(txt)) > mdWords {
+		return txt, nil
+	}
+	if terr != nil {
+		if perr != nil {
+			return "", fmt.Errorf("pdf text: tabula: %v; poppler: %v", terr, perr)
+		}
+		return txt, nil // tabula errored; poppler's output (even if short) stands
+	}
+	return md, nil // tabula's output stands (poppler unavailable or not richer)
+}
+
+// popplerText shells poppler's pdftotext (present in the sandbox image alongside
+// pdftoppm). UTF-8, no page-break form-feeds — just the text.
+func popplerText(ctx context.Context, data []byte) (string, error) {
+	if _, err := exec.LookPath("pdftotext"); err != nil {
+		return "", fmt.Errorf("pdftotext (poppler) not found: %w", err)
+	}
+	tmp, err := os.CreateTemp("", "docextract-pdftext-*.pdf")
+	if err != nil {
+		return "", fmt.Errorf("temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return "", fmt.Errorf("write temp: %w", err)
+	}
+	tmp.Close()
+	out, err := exec.CommandContext(ctx, "pdftotext", "-enc", "UTF-8", "-nopgbrk", "-q", tmp.Name(), "-").Output()
+	if err != nil {
+		return "", fmt.Errorf("pdftotext: %w", err)
+	}
+	return string(out), nil
+}
+
+// purchaseWatermarkLine matches a per-page purchase/DRM watermark line — the
+// shape storefronts (DriveThruRPG, Renegade, itch) stamp on every page:
+// "<buyer name> (Order #1234567)". Precision over recall: only a whole line
+// that ENDS in "(order #<digits>)" is stripped, so real prose is never touched.
+var purchaseWatermarkLine = regexp.MustCompile(`(?im)^[ \t]*.{0,80}\(\s*order\s*#?\s*\d+\s*\)[ \t\r]*$`)
+
+// collapseBlankRuns squeezes 3+ consecutive blank lines (left behind after a
+// strip) down to a single blank line.
+var collapseBlankRuns = regexp.MustCompile(`\n[ \t]*\n([ \t]*\n)+`)
+
+// stripPurchaseWatermarks removes per-page buyer-PII watermark lines from
+// extracted text so they neither pollute the corpus nor get mistaken for a
+// recurring entity by a downstream world/digest builder.
+func stripPurchaseWatermarks(text string) string {
+	if text == "" {
+		return text
+	}
+	cleaned := purchaseWatermarkLine.ReplaceAllString(text, "")
+	return collapseBlankRuns.ReplaceAllString(cleaned, "\n\n")
 }
 
 // htmlToMarkdown extracts the main article (readability) then converts to
