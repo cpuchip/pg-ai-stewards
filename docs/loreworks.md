@@ -105,8 +105,9 @@ With no embed provider configured, search degrades cleanly to the lexical leg.
    `3d-force-graph`/`three`/`three-spritetext`).
 3. Set the embed config (above). Privacy: keep purchased/world content `file_private`; embed
    locally (nomic); never send to a train-on-data provider.
-4. **Note (carry-forward 2026-06-25): the World panel's bloom is too strong — node labels are
-   hard to read. Tone down / disable the `UnrealBloomPass` and raise label/node legibility.**
+4. The committed `cmd/stewards-ui/frontend/dist/index.html` is a STUB — the `ui` Docker stage
+   builds the real SPA. A local `npm run build` overwrites the stub; `git checkout` it back
+   before committing (only `index.html` is tracked; built assets are gitignored).
 
 ## Files
 
