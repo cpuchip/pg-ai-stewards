@@ -9,6 +9,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -17,6 +19,79 @@ import (
 	"github.com/cpuchip/pg-ai-stewards/cmd/doc-extract-mcp/runner"
 	"github.com/cpuchip/pg-ai-stewards/internal/docextract"
 )
+
+// --- corpus import tuning (env-configurable, generic OSS) ---
+
+// defaultChunkChars: a pooled doc bigger than this is split into ~chunk-sized
+// parts so doc_search returns focused passages and a world-build agent can
+// actually read them — a single giant doc makes the agent flail (it pulls the
+// whole body and burns its budget searching). Override: DOC_IMPORT_CHUNK_CHARS.
+const defaultChunkChars = 12000
+
+func importChunkChars() int {
+	if v := os.Getenv("DOC_IMPORT_CHUNK_CHARS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1000 {
+			return n
+		}
+	}
+	return defaultChunkChars
+}
+
+func envMB(key string) int64 {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return int64(n) << 20
+		}
+	}
+	return 0
+}
+
+// archiveCaps is DefaultArchiveCaps with optional env overrides so an operator
+// with a large TRUSTED corpus (e.g. a multi-hundred-MB doc folder) can raise the
+// ceilings: DOC_EXTRACT_MAX_TOTAL_MB / DOC_EXTRACT_MAX_ENTRY_MB / DOC_EXTRACT_MAX_ENTRIES.
+func archiveCaps() docextract.ArchiveCaps {
+	caps := docextract.DefaultArchiveCaps()
+	if v := envMB("DOC_EXTRACT_MAX_TOTAL_MB"); v > 0 {
+		caps.MaxTotalUncompressed = v
+	}
+	if v := envMB("DOC_EXTRACT_MAX_ENTRY_MB"); v > 0 {
+		caps.MaxEntrySize = v
+	}
+	if s := os.Getenv("DOC_EXTRACT_MAX_ENTRIES"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			caps.MaxEntries = n
+		}
+	}
+	return caps
+}
+
+// chunkText splits s into ~size-rune pieces, preferring to break on a newline in
+// the back half of each window so chunks end at line boundaries (cleaner for FTS
+// and reading). Returns [s] unchanged when it already fits.
+func chunkText(s string, size int) []string {
+	r := []rune(s)
+	if len(r) <= size {
+		return []string{s}
+	}
+	var out []string
+	for i := 0; i < len(r); {
+		end := i + size
+		if end >= len(r) {
+			out = append(out, string(r[i:]))
+			break
+		}
+		cut := end
+		for j := end; j > i+size/2; j-- {
+			if r[j] == '\n' {
+				cut = j + 1
+				break
+			}
+		}
+		out = append(out, string(r[i:cut]))
+		i = cut
+	}
+	return out
+}
 
 func registerDocExtractTools(srv *mcp.Server, run *runner.Runner, pool *pgxpool.Pool) {
 	mcp.AddTool(srv, &mcp.Tool{
@@ -110,7 +185,7 @@ func extractAttachment(ctx context.Context, pool *pgxpool.Pool, run *runner.Runn
 	// short doc's pixels; long docs stay text-only); Render forces all pages.
 	res, stderr, err := run.Extract(ctx, data, runner.ExtractArgs{
 		Filename: filename, Render: in.Render, AutoRender: true, MaxPages: in.MaxPages,
-		Caps: docextract.DefaultArchiveCaps(), TimeoutSecs: bulkExtractTimeoutSecs,
+		Caps: archiveCaps(), TimeoutSecs: bulkExtractTimeoutSecs,
 	})
 	if err != nil {
 		return docExtractOutput{}, fmt.Errorf("extraction failed: %w", err)
@@ -238,7 +313,7 @@ func importCorpusFn(ctx context.Context, pool *pgxpool.Pool, run *runner.Runner,
 	// The bulk timeout (RC-3) lets a big document corpus finish instead of dying
 	// at the old ~120s cliff.
 	res, _, err := run.Extract(ctx, data, runner.ExtractArgs{
-		Filename: filename, Caps: docextract.DefaultArchiveCaps(), TimeoutSecs: bulkExtractTimeoutSecs,
+		Filename: filename, Caps: archiveCaps(), TimeoutSecs: bulkExtractTimeoutSecs,
 	})
 	if err != nil {
 		return docImportOutput{}, fmt.Errorf("extraction failed: %w", err)
@@ -247,47 +322,59 @@ func importCorpusFn(ctx context.Context, pool *pgxpool.Pool, run *runner.Runner,
 	out := docImportOutput{Corpus: in.CorpusName, Project: strings.TrimSpace(in.Project), ScanVerdict: docextract.VerdictClean}
 	out.Members = len(res.Files)
 	corpusSlug := slugify(in.CorpusName)
+	chunkChars := importChunkChars()
 	for _, fr := range res.Files {
 		out.ScanVerdict = worseVerdict(out.ScanVerdict, fr.Scan.Verdict)
 		if fr.Skipped || strings.TrimSpace(fr.Text) == "" {
 			out.Skipped++
 			continue
 		}
-		slug := corpusSlug + "-" + slugify(fr.Path)
-		fm := map[string]any{
-			"corpus":       in.CorpusName,
-			"source_path":  fr.Path,
-			"scan":         fr.Scan.Verdict,
-			"imported_via": "doc-extract",
-			// O3 forward-population: stamp the originating object so the pooled doc
-			// (and anything built from it — a world entity, a digest) can open the
-			// EXACT source the content came from. att:<id> resolves in the object
-			// viewer (ArtifactPanel "🖼 view source").
-			"source_object": fmt.Sprintf("att:%d", in.AttachmentID),
-		}
-		fmJSON, _ := json.Marshal(fm)
-		title := in.CorpusName + ": " + fr.Path
-		// Pool the member as a searchable doc (FTS + the graph), then tag it
-		// with the project so doc_search can scope to this corpus.
-		if _, e := pool.Exec(ctx,
-			`SELECT stewards.import_doc($1, $2, $3, $4, $5::jsonb, 'doc')`,
-			slug, fr.Path, title, fr.Text, string(fmJSON)); e != nil {
-			return docImportOutput{}, fmt.Errorf("import_doc(%s): %w", slug, e)
-		}
-		if out.Project != "" {
-			_, _ = pool.Exec(ctx,
-				`UPDATE stewards.docs SET project_association = $2 WHERE slug = $1`, slug, out.Project)
-		}
-		out.Imported++
-		if len(out.Slugs) < 50 {
-			out.Slugs = append(out.Slugs, slug)
+		baseSlug := corpusSlug + "-" + slugify(fr.Path)
+		// Chunk a large member so doc_search returns focused passages (a single
+		// giant doc makes the world-build agent flail). Small members stay one doc.
+		parts := chunkText(fr.Text, chunkChars)
+		for pi, ptext := range parts {
+			slug := baseSlug
+			title := in.CorpusName + ": " + fr.Path
+			fm := map[string]any{
+				"corpus":       in.CorpusName,
+				"source_path":  fr.Path,
+				"scan":         fr.Scan.Verdict,
+				"imported_via": "doc-extract",
+				// O3 forward-population: stamp the originating object so the pooled doc
+				// (and anything built from it — a world entity, a digest) can open the
+				// EXACT source it came from. att:<id> resolves in the object viewer.
+				"source_object": fmt.Sprintf("att:%d", in.AttachmentID),
+			}
+			if len(parts) > 1 {
+				slug = fmt.Sprintf("%s-%03d", baseSlug, pi+1)
+				title = fmt.Sprintf("%s: %s (part %d/%d)", in.CorpusName, fr.Path, pi+1, len(parts))
+				fm["part"] = pi + 1
+				fm["parts"] = len(parts)
+			}
+			fmJSON, _ := json.Marshal(fm)
+			// Pool the chunk as a searchable doc (FTS + the graph), then tag it
+			// with the project so doc_search can scope to this corpus.
+			if _, e := pool.Exec(ctx,
+				`SELECT stewards.import_doc($1, $2, $3, $4, $5::jsonb, 'doc')`,
+				slug, fr.Path, title, ptext, string(fmJSON)); e != nil {
+				return docImportOutput{}, fmt.Errorf("import_doc(%s): %w", slug, e)
+			}
+			if out.Project != "" {
+				_, _ = pool.Exec(ctx,
+					`UPDATE stewards.docs SET project_association = $2 WHERE slug = $1`, slug, out.Project)
+			}
+			out.Imported++
+			if len(out.Slugs) < 50 {
+				out.Slugs = append(out.Slugs, slug)
+			}
 		}
 	}
 	projTag := ""
 	if out.Project != "" {
 		projTag = " tagged project=" + out.Project
 	}
-	out.Summary = fmt.Sprintf("imported %d/%d member(s) of %q into the docs pool as corpus %q%s (scan %s); search them with doc_search.",
+	out.Summary = fmt.Sprintf("imported %d doc(s) from %d member(s) of %q into the docs pool as corpus %q%s (scan %s); large members were chunked for focused search. Search them with doc_search.",
 		out.Imported, out.Members, filename, in.CorpusName, projTag, out.ScanVerdict)
 	return out, nil
 }
