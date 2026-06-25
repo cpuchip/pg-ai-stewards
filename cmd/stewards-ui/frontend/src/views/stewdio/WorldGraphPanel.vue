@@ -43,6 +43,12 @@ const KIND_LABEL: Record<string, string> = {
 const kindColor = (k: string) => KIND_COLOR[k] ?? '#71717a'
 const labelColor = (k: string) => KIND_LABEL[k] ?? '#e4e4e7'
 
+// the default sphere radius in 3d-force-graph is cbrt(nodeVal) · nodeRelSize.
+// We pin nodeRelSize so the label offset (below) uses the same constant and a
+// name always clears its circle, hub or leaf.
+const NODE_REL_SIZE = 4
+const nodeRadius = (n: WorldNode) => Math.cbrt(1 + (n.degree ?? 0)) * NODE_REL_SIZE
+
 const el = ref<HTMLDivElement>()
 const worlds = ref<WorldBrief[]>([])
 const selected = ref<WorldNodeDetail | WorldNode | null>(null)
@@ -205,6 +211,7 @@ onMounted(async () => {
     .showNavInfo(false)
     .nodeColor((n: WorldNode) => kindColor(n.kind))
     .nodeVal((n: WorldNode) => 1 + (n.degree ?? 0))
+    .nodeRelSize(NODE_REL_SIZE)          // pin the radius scale (see nodeRadius)
     .nodeOpacity(0.92)                   // a touch of translucency for depth
     .nodeResolution(18)                  // smooth spheres (default 8 = faceted)
     .nodeLabel((n: WorldNode) => n.name)
@@ -222,6 +229,9 @@ onMounted(async () => {
       s.borderColor = kindColor(n.kind) + 'aa'       // subtle kind-coloured frame
       s.borderRadius = 3
       s.padding = 2
+      // lift the label clear of the sphere so the name sits ABOVE the circle
+      // instead of hidden under it — offset scales with the node radius.
+      s.position.y = nodeRadius(n) + s.textHeight / 2 + 4
       return s
     })
     .nodeThreeObjectExtend(true)        // keep the sphere AND the label
