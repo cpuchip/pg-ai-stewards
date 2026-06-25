@@ -2166,7 +2166,17 @@ BEGIN
     SELECT prompt INTO v_prompt_after FROM stewards.agents WHERE family='world-build' AND active;
     ASSERT v_prompt_after = v_prompt_before, 'revert restored the prior prompt exactly';
     DELETE FROM stewards.prompt_improvements WHERE agent_family='world-build';
-    RAISE NOTICE 'OK 49: self-improvement — GATE escalates judges/critics/self/constraint-language/over-long; in-bounds worker guidance auto-applies + is reversible (eval-gaming guard holds)';
+
+    -- EXERCISE agent_failure_patterns (its SQL body hid a jsonb[]::jsonb cast bug that
+    -- pgrx's check_function_bodies=off let through the build; call it so it can't hide).
+    INSERT INTO stewards.trajectory_verdicts(target_session, agent_family, verdict, issues) VALUES
+      ('si-smoke-a','world-build','flawed','["empty summaries"]'::jsonb),
+      ('si-smoke-b','world-build','flawed','["empty summaries again"]'::jsonb);
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_failure_patterns(2) WHERE agent_family='world-build'),
+        'agent_failure_patterns returns a thresholded pattern AND its body executes (no cast error)';
+    DELETE FROM stewards.trajectory_verdicts WHERE target_session LIKE 'si-smoke-%';
+
+    RAISE NOTICE 'OK 49: self-improvement — GATE escalates judges/critics/self/constraint-language/over-long; in-bounds worker guidance auto-applies + is reversible (eval-gaming guard holds); agent_failure_patterns executes';
 END $$;
 
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→59) is sound =='

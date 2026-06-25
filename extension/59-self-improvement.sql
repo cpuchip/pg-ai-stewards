@@ -199,7 +199,7 @@ LANGUAGE sql STABLE AS $$
     SELECT v.agent_family,
            count(*) AS bad_runs,
            jsonb_object_agg(v.verdict, 1) FILTER (WHERE v.verdict IS NOT NULL) AS verdicts,
-           (array_agg(v.issues ORDER BY v.created_at DESC))[1:3]::jsonb AS sample_issues,
+           to_jsonb((array_agg(v.issues ORDER BY v.created_at DESC))[1:3]) AS sample_issues,
            (array_agg(v.id ORDER BY v.created_at DESC))[1:10] AS sample_verdict_ids
       FROM stewards.trajectory_verdicts v
      WHERE v.agent_family IS NOT NULL
