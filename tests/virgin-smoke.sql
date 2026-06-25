@@ -1917,4 +1917,56 @@ BEGIN
   RAISE NOTICE 'OK 43: explore-repos — research_codebase granted to work-item-chat (read-only repo exploration, no embed)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→53) is sound =='
+-- ---------------------------------------------------------------------
+-- 44. Loreworks engine — a World = canon + entity/edge knowledge graph
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_world bigint; v_e1 bigint; v_e2 bigint; v_edge bigint;
+        v_graph jsonb; v_show record; v_hits int;
+BEGIN
+    -- embed_query primitive (A) exists for the semantic leg
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='embed_query'),
+        'stewards.embed_query (A) must be registered';
+
+    -- build a tiny world
+    v_world := stewards.world_upsert('smoke-realm', 'Smoke Realm', 'a test canon', 'ttrpg-smoke', true);
+    ASSERT v_world IS NOT NULL, 'world_upsert returns an id';
+    v_e1 := stewards.world_entity_upsert('smoke-realm', 'character', 'Aria', 'a ranger', ARRAY['the ranger'], '[{"doc":"x","quote":"q"}]'::jsonb);
+    v_e2 := stewards.world_entity_upsert('smoke-realm', 'place', 'Eastwatch', 'a fortress');
+    ASSERT v_e1 IS NOT NULL AND v_e2 IS NOT NULL, 'entities upsert';
+
+    -- upsert is idempotent + merges aliases (no duplicate row)
+    PERFORM stewards.world_entity_upsert('smoke-realm', 'character', 'Aria', NULL, ARRAY['Aria the Bold']);
+    ASSERT (SELECT count(*) FROM stewards.world_entities WHERE world_id=v_world AND kind='character' AND name='Aria') = 1,
+        'entity dedup on (world,kind,name)';
+    ASSERT (SELECT cardinality(aliases) FROM stewards.world_entities WHERE entity_id=v_e1) = 2,
+        'aliases union on re-upsert';
+
+    -- edge by name; auto-creates a missing endpoint as concept
+    v_edge := stewards.world_edge_upsert('smoke-realm', 'Aria', 'Eastwatch', 'located_in', 'lives there');
+    PERFORM stewards.world_edge_upsert('smoke-realm', 'Aria', 'Silverleaf Order', 'member_of');
+    ASSERT v_edge IS NOT NULL, 'edge upsert';
+    ASSERT EXISTS (SELECT 1 FROM stewards.world_entities WHERE world_id=v_world AND name='Silverleaf Order' AND kind='concept'),
+        'world_edge_upsert auto-creates a missing endpoint as concept';
+
+    -- world_show counts
+    SELECT * INTO v_show FROM stewards.world_show('smoke-realm');
+    ASSERT v_show.entity_count = 3 AND v_show.edge_count = 2,
+        format('world_show counts (got e=%s g=%s, want 3/2)', v_show.entity_count, v_show.edge_count);
+
+    -- world_graph shape for the 3D viz
+    v_graph := stewards.world_graph('smoke-realm');
+    ASSERT jsonb_array_length(v_graph->'nodes') = 3 AND jsonb_array_length(v_graph->'links') = 2,
+        'world_graph returns nodes + links';
+
+    -- lexical entity search finds by name
+    SELECT count(*) INTO v_hits FROM stewards.world_entity_search('smoke-realm', 'Aria', 5);
+    ASSERT v_hits >= 1, 'world_entity_search locates by name';
+
+    -- clean up the smoke world (CASCADE drops its entities + edges)
+    DELETE FROM stewards.worlds WHERE slug = 'smoke-realm';
+    RAISE NOTICE 'OK 44: loreworks engine — world + entity/edge graph (dedup, alias-union, auto-endpoint, show/graph/search)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→54) is sound =='

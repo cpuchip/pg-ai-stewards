@@ -566,6 +566,16 @@ extension_sql_file!(
     requires = ["create_session_scoped_tools"],
 );
 
+// 54: Loreworks engine — worlds + world_entities + world_edges (the relational
+// lore graph) + world_upsert/entity_upsert/edge_upsert/show/graph/entity_search.
+// A World = a named canon (project corpus) + an extracted entity/relationship
+// knowledge graph. Generic core; private worlds set is_private (local-only).
+extension_sql_file!(
+    "../54-loreworks.sql",
+    name = "create_loreworks",
+    requires = ["create_explore_repos"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
