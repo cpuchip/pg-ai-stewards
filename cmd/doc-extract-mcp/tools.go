@@ -57,6 +57,8 @@ type docExtractOutput struct {
 	Quarantined    bool     `json:"quarantined,omitempty"`
 	PageImageIDs   []int64  `json:"page_image_ids,omitempty"`
 	Members        int      `json:"members,omitempty"`
+	RepoKind       string   `json:"repo_kind,omitempty"`   // archive only: code | docs | mixed (RC-2 routing hint)
+	RepoReason     string   `json:"repo_reason,omitempty"` // why (e.g. "has a build manifest (go.mod)")
 	Summary        string   `json:"summary"`
 }
 
@@ -149,8 +151,19 @@ func extractAttachment(ctx context.Context, pool *pgxpool.Pool, run *runner.Runn
 		}
 		out.ExtractedChars = len(manifest)
 		out.ExtractedText = capText(manifest)
+		// RC-2 routing hint: is this a CODE repo or a DOCUMENT corpus? Code is
+		// better EXPLORED in a sandbox (read it where it lives) than embedded
+		// file-by-file; docs belong in the searchable pool.
+		paths := make([]string, 0, len(res.Files))
+		for _, fr := range res.Files {
+			paths = append(paths, fr.Path)
+		}
+		out.RepoKind, out.RepoReason = docextract.Classify(paths)
 		out.Summary = fmt.Sprintf("archive %q: %d member(s) unpacked + scanned (verdict %s). Surfaced as a folder tree in the conversation; use doc_import_corpus to persist it as a searchable project.",
 			filename, len(res.Files), verdict)
+		if out.RepoKind == "code" {
+			out.Summary += fmt.Sprintf(" ⚙ This looks like a CODE repo (%s) — for code, EXPLORING it read-only in a sandbox beats embedding every file. If it's a PUBLIC repo, ask for the clone URL and use research_codebase (the /explore path); doc_import_corpus only makes it keyword-searchable.", out.RepoReason)
+		}
 
 	default:
 		return docExtractOutput{}, fmt.Errorf("unexpected converter mode %q", res.Mode)
