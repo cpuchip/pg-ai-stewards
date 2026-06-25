@@ -44,6 +44,16 @@ chk "model-role select HIDDEN again"   false "$(ev "!!document.querySelector('op
 chk "Models pane CLOSED on Dev OFF"    false "$(ev "document.body.innerText.toLowerCase().includes('running now')")"
 chk "dev flag persisted false"         false "$(ev "JSON.parse(localStorage.getItem('stewdio.dev')||'false')")"
 
+echo "== S5 intent-named launcher (everyday surface, Dev off) =="
+playwright-cli --raw eval "(function(){var b=[...document.querySelectorAll('button')].find(x=>x.textContent.trim().startsWith('＋ New task')); if(b){b.click();return 'ok'} return 'none'})()" >/dev/null 2>&1; sleep 1
+chk "verb: Research"                       true  "$(ev "[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Research'))")"
+chk "verb: Generate"                       true  "$(ev "[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Generate'))")"
+chk "Build verb DROPPED (needs a form)"    false "$(ev "[...document.querySelectorAll('button')].some(b=>b.textContent.includes('Build'))")"
+chk "raw families HIDDEN by default"       false "$(ev "!!document.querySelector('option[value=\"brainstorm-six-hats\"]')")"
+chk "'more pipelines' is Dev-only (hidden)" false "$(ev "[...document.querySelectorAll('button')].some(b=>b.textContent.includes('more pipelines'))")"
+playwright-cli --raw eval "(function(){var b=[...document.querySelectorAll('button')].find(x=>x.textContent.includes('Research')); if(b){b.click();return 'ok'} return 'none'})()" >/dev/null 2>&1; sleep 1
+chk "picking Research sets a pipeline"     true  "$(ev "document.body.innerText.includes('research-write')")"
+
 playwright-cli close >/dev/null 2>&1
 echo "---- $PASS passed, $FAIL failed ----"
 [ "$FAIL" = "0" ]
