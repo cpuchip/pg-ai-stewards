@@ -60,6 +60,17 @@ const loading = ref(false)
 const orbiting = ref(true)
 const showSearch = ref(false)
 
+// "Build a World" — self-serve: name + a canon source (a project pool the source
+// was imported into, or pasted canon) → dispatch the world-build agent.
+const showBuild = ref(false)
+const projects = ref<{ name: string; doc_count?: number }[]>([])
+const buildName = ref('')
+const buildProject = ref('')
+const buildCanon = ref('')
+const buildInstr = ref('')
+const building = ref(false)
+const buildErr = ref('')
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Graph = any
 let graph: Graph | null = null
@@ -209,6 +220,39 @@ function resize() {
   graph.width(r.width).height(r.height)
 }
 
+function toggleBuild() {
+  showBuild.value = !showBuild.value
+  if (showBuild.value) {
+    buildName.value = ''; buildProject.value = ''; buildCanon.value = ''; buildInstr.value = ''; buildErr.value = ''
+    if (!projects.value.length) api.projectsList().then(r => { projects.value = r.items ?? [] }).catch(() => {})
+  }
+}
+
+// dispatch the world-build agent over the chosen canon, then switch to the new
+// world and open the build session so the user watches the graph fill in.
+async function buildWorld() {
+  const name = buildName.value.trim()
+  if (!name) { buildErr.value = 'name the world'; return }
+  if (!buildProject.value && !buildCanon.value.trim()) { buildErr.value = 'pick a canon project or paste canon text'; return }
+  building.value = true; buildErr.value = ''
+  try {
+    const r = await api.worldBuild({
+      name,
+      project: buildProject.value || undefined,
+      canon: buildCanon.value.trim() || undefined,
+      instructions: buildInstr.value.trim() || undefined,
+    })
+    showBuild.value = false
+    worlds.value = (await api.worldList()).items   // pick up the freshly-registered world
+    store.worldSlug = r.slug
+    store.requestedSession = r.session_id          // open the build session in chat to watch it work
+  } catch (e) {
+    buildErr.value = String(e)
+  } finally {
+    building.value = false
+  }
+}
+
 onMounted(async () => {
   await nextTick()
   if (!el.value) return
@@ -319,6 +363,10 @@ onUnmounted(() => {
       <span v-if="currentWorld" class="text-zinc-600">
         {{ currentWorld.entity_count }} entities · {{ currentWorld.edge_count }} edges
       </span>
+      <button
+        @click="toggleBuild"
+        class="rounded px-1.5 py-0.5 border border-emerald-700/60 text-emerald-300 bg-emerald-900/30 hover:bg-emerald-900/50"
+        title="build a new world from a source corpus">🌍 build</button>
 
       <!-- search → fly-to -->
       <div class="relative">
@@ -361,6 +409,33 @@ onUnmounted(() => {
         :title="orbiting ? 'stop the idle orbit' : 'orbit the camera'">
         {{ orbiting ? '⏸ orbit' : '▷ orbit' }}
       </button>
+    </div>
+
+    <!-- Build a World form -->
+    <div v-if="showBuild" class="absolute top-9 left-2 right-2 z-30 rounded-lg border border-zinc-800 bg-zinc-900/95 shadow-xl p-3 space-y-2 text-[12px] max-w-md">
+      <div class="text-zinc-300 font-medium">🌍 Build a world</div>
+      <input v-model="buildName" placeholder="world name (e.g. Star Trek Adventures)"
+             class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200" />
+      <div>
+        <label class="text-zinc-500 text-[11px]">Canon source — a project you imported the source into:</label>
+        <select v-model="buildProject" class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 mt-0.5">
+          <option value="">— pick a project —</option>
+          <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}<span v-if="p.doc_count"> ({{ p.doc_count }})</span></option>
+        </select>
+      </div>
+      <div class="text-zinc-600 text-[10px]">…or paste canon directly (for small/quick worlds):</div>
+      <textarea v-model="buildCanon" rows="3" placeholder="paste source lore here (optional if a project is picked)"
+                class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200 resize-none"></textarea>
+      <input v-model="buildInstr" placeholder="extra direction (optional, e.g. focus on factions + ships)"
+             class="w-full bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-zinc-200" />
+      <div class="flex items-center gap-2">
+        <button :disabled="building" class="text-xs px-3 py-1 rounded bg-emerald-600 text-white disabled:opacity-50" @click="buildWorld">
+          {{ building ? 'dispatching…' : 'Build' }}
+        </button>
+        <button class="text-xs px-2 py-1 rounded text-zinc-400 hover:text-zinc-200" @click="showBuild = false">Cancel</button>
+        <span v-if="buildErr" class="text-rose-400 text-[11px] truncate">{{ buildErr }}</span>
+      </div>
+      <div class="text-zinc-600 text-[10px] leading-snug">The world-build agent reads the canon and extracts entities + relationships. It runs as a chat session (opens on the right) — the graph fills in as it works; re-pick the world to refresh. Private by default.</div>
     </div>
 
     <!-- the 3D canvas -->

@@ -9,7 +9,9 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,6 +19,115 @@ func (d *Deps) registerWorld(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/world/list", d.worldListHandler)
 	mux.HandleFunc("GET /api/world/graph", d.worldGraphHandler)
 	mux.HandleFunc("GET /api/world/node", d.worldNodeHandler)
+	mux.HandleFunc("POST /api/world/build", d.worldBuildHandler) // self-serve "Build a World"
+}
+
+// worldBuildReq — kick off a world build from the UI. A canon source is required:
+// a `project` (a doc pool the source was imported into; the agent doc_searches it)
+// or inline `canon` text (for small/pasted lore).
+type worldBuildReq struct {
+	Name         string `json:"name"`
+	Slug         string `json:"slug,omitempty"`
+	Project      string `json:"project,omitempty"`
+	Canon        string `json:"canon,omitempty"`
+	Instructions string `json:"instructions,omitempty"`
+}
+
+type worldBuildResp struct {
+	Slug      string `json:"slug"`
+	SessionID string `json:"session_id"`
+}
+
+// worldSlugify — name → a stable lowercase slug (reuses sessionSafe from chat.go).
+func worldSlugify(s string) string {
+	return strings.Trim(sessionSafe.ReplaceAllString(strings.ToLower(strings.TrimSpace(s)), "-"), "-")
+}
+
+// worldBuildHandler — register the world (private by default) and dispatch the
+// world-build agent over the chosen canon. Returns the world slug + the chat
+// session the build runs in, so the UI can open it and watch the graph fill in.
+func (d *Deps) worldBuildHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	var req worldBuildReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request body")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeErr(w, http.StatusBadRequest, "name required")
+		return
+	}
+	slug := worldSlugify(req.Slug)
+	if slug == "" {
+		slug = worldSlugify(req.Name)
+	}
+	if slug == "" {
+		writeErr(w, http.StatusBadRequest, "could not derive a slug from the name")
+		return
+	}
+
+	proj := strings.TrimSpace(req.Project)
+	canonText := strings.TrimSpace(req.Canon)
+	instr := strings.TrimSpace(req.Instructions)
+
+	// the canon clause — how the agent finds the source material.
+	var canon string
+	switch {
+	case proj != "":
+		canon = fmt.Sprintf("The canon lives in the project %q — call doc_search (scoped to project %q) to read it thoroughly before extracting.", proj, proj)
+	case canonText != "":
+		canon = "Canon (the full source to extract from):\n" + canonText
+	default:
+		writeErr(w, http.StatusBadRequest, "provide a canon source: a project or inline canon text")
+		return
+	}
+
+	// 1. register the world — private by default (purchased/world content stays local).
+	var summaryArg any
+	if instr != "" {
+		summaryArg = instr
+	}
+	var projArg any
+	if proj != "" {
+		projArg = proj
+	}
+	if _, err := d.Pool.Exec(ctx,
+		`SELECT stewards.world_upsert($1, $2, $3, $4, true)`,
+		slug, req.Name, summaryArg, projArg,
+	); err != nil {
+		writeErr(w, http.StatusInternalServerError, "world_upsert: "+err.Error())
+		return
+	}
+
+	// 2. dispatch the world-build agent over the canon.
+	prompt := fmt.Sprintf(
+		"Build the world '%s' (%s). %s%s Extract every entity (character, place, faction, "+
+			"item, event, lore) and the relationships between them that the canon actually "+
+			"describes, recording each with world_entity_upsert / world_edge_upsert and "+
+			"grounding it in source_refs. Do not invent anything the canon does not state.",
+		slug, req.Name, canon, instructionsClause(instr))
+	grounding := fmt.Sprintf("You are building the world '%s' (%s). %s", slug, req.Name, canon)
+	session := fmt.Sprintf("world-build-%s-%d", slug, time.Now().Unix())
+
+	if _, err := d.Pool.Exec(ctx,
+		`SELECT stewards.dispatch_chat_turn($1, $2, $3, $4, $5)`,
+		session, prompt, "world-build", "reason", grounding,
+	); err != nil {
+		writeErr(w, http.StatusInternalServerError, "dispatch world-build: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, worldBuildResp{Slug: slug, SessionID: session})
+}
+
+func instructionsClause(instr string) string {
+	if instr == "" {
+		return ""
+	}
+	return " Extra direction: " + instr + "."
 }
 
 func (d *Deps) worldListHandler(w http.ResponseWriter, r *http.Request) {

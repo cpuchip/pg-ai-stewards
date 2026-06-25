@@ -223,6 +223,17 @@ export const api = {
     getJSON<ObjectPagesResp>(`/api/object/pages?att=${att}`),
   attachmentMeta: (id: number) =>
     getJSON<AttachmentMeta>(`/api/chat/attachment/${id}?meta=1`),
+  // Self-serve "Build a World": register the world + dispatch the world-build
+  // agent over a canon source (a project pool, or inline canon text).
+  worldBuild: async (req: { name: string; slug?: string; project?: string; canon?: string; instructions?: string }):
+    Promise<{ slug: string; session_id: string }> => {
+    const r = await fetch('/api/world/build', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  },
   studiesSearch: (q: string, opts?: { mode?: string; limit?: number }) => {
     const p = new URLSearchParams({ q })
     if (opts?.mode) p.set('mode', opts.mode)
