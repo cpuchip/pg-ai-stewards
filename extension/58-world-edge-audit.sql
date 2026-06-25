@@ -131,7 +131,9 @@ ON CONFLICT (name) DO UPDATE
 
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
   ('world-critic', 'world_edge_audit', 'allow', 'manual'),
-  ('world-critic', 'world_vocabulary', 'allow', 'manual')
+  ('world-critic', 'world_vocabulary', 'allow', 'manual'),
+  -- world-build reads the vocabulary at build time so it picks the right verb/direction
+  ('world-build',  'world_vocabulary', 'allow', 'manual')
 ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET action=EXCLUDED.action, source=EXCLUDED.source;
 
 -- Re-author the world-critic prompt to lead with the deterministic audit.

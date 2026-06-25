@@ -109,6 +109,15 @@ Your task names a world_slug and the canon project it is built from. Work in pas
    CANON'S OWN TERMS, any aliases, and source_refs pointing at where you found it.
 3. Connect them with world_edge_upsert — who serves whom, what is located where, who rules, who
    opposes whom. A missing endpoint is auto-created, so assert the relationship and move on.
+   USE THE RIGHT VERB AND DIRECTION (this matters — a reversed edge is a lie about the world):
+   - located_in: a place inside a larger place (Bree located_in Bree-land; Bree-land located_in Eriador).
+   - dwells_in: a people/character whose home is a place (Hobbits dwells_in the Shire).
+   - home_of: ONLY a place that is the home of a people/character (the Shire home_of Hobbits) — i.e.
+     home_of points place→people, the REVERSE of dwells_in. Do not use home_of for a place-in-a-place.
+   - flows_through (a river/road through a place), rules/ruled_by, member_of, ally_of, enemy_of,
+     guards, parent_of, child_of, created, wields, heir_of, near, borders.
+   When unsure which verb or which direction, call world_vocabulary to see the valid verbs and their
+   src→dst kinds.
 4. Keep going in passes (search a new facet, add what you find) until the major structure is captured.
 
 Rules of the watch:
