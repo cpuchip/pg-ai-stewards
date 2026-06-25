@@ -259,6 +259,11 @@ func importCorpusFn(ctx context.Context, pool *pgxpool.Pool, run *runner.Runner,
 			"source_path":  fr.Path,
 			"scan":         fr.Scan.Verdict,
 			"imported_via": "doc-extract",
+			// O3 forward-population: stamp the originating object so the pooled doc
+			// (and anything built from it — a world entity, a digest) can open the
+			// EXACT source the content came from. att:<id> resolves in the object
+			// viewer (ArtifactPanel "🖼 view source").
+			"source_object": fmt.Sprintf("att:%d", in.AttachmentID),
 		}
 		fmJSON, _ := json.Marshal(fm)
 		title := in.CorpusName + ": " + fr.Path

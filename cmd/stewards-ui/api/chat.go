@@ -40,8 +40,9 @@ func (d *Deps) registerChat(mux *http.ServeMux) {
 
 // maxAttachmentBytes caps an uploaded file. Images fit comfortably; the :8090
 // router caps at 256MB, but the chat compose carries the base64 inline so we
-// keep attachments modest.
-const maxAttachmentBytes = 25 << 20 // 25 MB
+// keep attachments modest — though a TTRPG rulebook / source PDF runs 30-60MB,
+// and "drop the source, build a world" is a first-class flow, so allow them.
+const maxAttachmentBytes = 64 << 20 // 64 MB
 
 // session ids are derived from a target ref; keep them to a safe charset.
 var sessionSafe = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
