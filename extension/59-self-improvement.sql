@@ -104,8 +104,11 @@ BEGIN
     IF char_length(p_clause) > v_cap THEN
         RETURN jsonb_build_object('disposition','escalate','reason',format('clause too long (%s > %s chars) — large changes escalate', char_length(p_clause), v_cap));
     END IF;
-    IF p_clause ~* '(ignore (the |all |previous|prior)|disregard|override|jailbreak|bypass|unrestricted|without (limit|restriction|approval|verif)|do not (verify|check|cite|ground|stop)|skip (the )?(verification|check|grounding)|always (allow|approve|say)|\ballow\b|\bdeny\b|\bgrant\b|permission|tool_perm|self_prompt|base prompt|system prompt|autonomy_paused|spend.?cap|delete from|drop table)' THEN
-        RETURN jsonb_build_object('disposition','escalate','reason','clause contains permission/constraint/guard/destructive language — escalate (auto-apply is additive guidance only)');
+    -- Red-flag WORDS (Postgres word boundary is \y, NOT \b — \b is backspace):
+    IF p_clause ~* '\y(ignore|disregard|override|bypass|jailbreak|unrestricted|allow|deny|grant|permission|autonomy)\y'
+       -- Red-flag PHRASES (grounding/verification bypass, permission/capability, self/base/destructive):
+       OR p_clause ~* '(tool_perm|any tool|all tools|self.?prompt|base prompt|system prompt|spend.?cap|delete from|drop table|truncate table|do not (verify|check|cite|ground|stop|validate|refuse)|skip (the )?(verification|check|grounding|validation)|always (allow|approve|say|pass)|without (limit|restriction|approval|verif|check|grounding)|use your (own )?(memory|training|knowledge)|from (your )?(memory|training)|trust your (memory|judgment|training)|grounding rules)' THEN
+        RETURN jsonb_build_object('disposition','escalate','reason','clause contains permission/constraint/guard/grounding-bypass/destructive language — escalate (auto-apply is additive guidance only)');
     END IF;
     RETURN jsonb_build_object('disposition','auto_apply','reason','scoped additive guidance to a worker agent (within bounds)');
 END $$;
