@@ -524,6 +524,13 @@ export const api = {
     const q = limit ? `?limit=${limit}` : ''
     return getJSON<GraphResp>(`/api/graph/studies-citations${q}`)
   },
+
+  // Loreworks World panel (Stewdio 3D knowledge graph).
+  worldList: () => getJSON<{ items: WorldBrief[] }>('/api/world/list'),
+  worldGraph: (slug: string, includeRefs = true) =>
+    getJSON<WorldGraphResp>(`/api/world/graph?slug=${encodeURIComponent(slug)}${includeRefs ? '&include_refs=1' : ''}`),
+  worldNode: (slug: string, id: number) =>
+    getJSON<WorldNodeDetail>(`/api/world/node?slug=${encodeURIComponent(slug)}&id=${id}`),
   workItemCreate: async (req: WorkItemCreateReq): Promise<WorkItemCreateResp> => {
     const r = await fetch('/api/work-items/create', {
       method: 'POST',
@@ -963,6 +970,22 @@ export type WorkItemCreateResp = {
 export type GraphNode = { id: string; label: string; kind?: string }
 export type GraphEdge = { source: string; target: string; weight?: number }
 export type GraphResp = { nodes: GraphNode[]; edges: GraphEdge[] }
+
+// Loreworks World knowledge-graph (Stewdio 3D World panel). world_graph(slug)
+// returns {nodes,links}; include_refs=1 enriches each node with source_refs,
+// aliases, and degree so the click-detail drawer is one round-trip.
+export type WorldRef = { doc?: string; chunk?: number; quote?: string }
+export type WorldNode = {
+  id: number; kind: string; name: string; summary?: string
+  aliases?: string[]; source_refs?: WorldRef[]; degree?: number
+  // 3d-force-graph mutates these in place during simulation — declare optional:
+  x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number
+}
+export type WorldLink = { source: number | WorldNode; target: number | WorldNode; rel: string }
+export type WorldGraphResp = { nodes: WorldNode[]; links: WorldLink[] }
+export type WorldBrief = { slug: string; name: string; summary?: string; is_private: boolean; entity_count: number; edge_count: number }
+export type WorldEdgeDetail = { rel: string; dir: 'in' | 'out'; other_id: number; other_name: string; evidence?: string }
+export type WorldNodeDetail = WorldNode & { edges: WorldEdgeDetail[] }
 
 
 export type PassRow = {

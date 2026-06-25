@@ -39,6 +39,10 @@ export const useStewdioStore = defineStore('stewdio', () => {
   // full power surface back. One flag, zero capability loss, persisted.
   const dev = persisted<boolean>('stewdio.dev', false)
 
+  // Loreworks World panel: the selected world slug, persisted so the 3D graph
+  // reopens on the same world. '' → the panel defaults to the first world.
+  const worldSlug = persisted<string>('stewdio.world', '')
+
   // Sessions panel → chat coordination. requestedLens drives the empty-chat
   // lens (''/'__all__'/project name); requestedSession opens an exact chat. The
   // ChatPanel watches both and clears them after honoring (one-shot signals).
@@ -69,7 +73,7 @@ export const useStewdioStore = defineStore('stewdio', () => {
   }
 
   return {
-    projectFilter, selectedRef, selectedKind, selectedTitle, chatModel, dev,
+    projectFilter, selectedRef, selectedKind, selectedTitle, chatModel, dev, worldSlug,
     requestedLens, requestedSession, select, openChat,
   }
 })

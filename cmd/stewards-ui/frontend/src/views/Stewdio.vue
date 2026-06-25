@@ -15,6 +15,7 @@ import ArtifactPanel from './stewdio/ArtifactPanel.vue'
 import ChatPanel from './stewdio/ChatPanel.vue'
 import SessionsPanel from './stewdio/SessionsPanel.vue'
 import ModelsPanel from './stewdio/ModelsPanel.vue'
+import WorldGraphPanel from './stewdio/WorldGraphPanel.vue'
 
 // the shared cockpit store — panels coordinate through it; we read store.dev here
 // to drive the Details toggle (one surface, two depths) + gate the details-only panes.
@@ -89,6 +90,7 @@ const components: Record<string, VueComponent> = {
   chat: ChatPanel as unknown as VueComponent,
   sessions: SessionsPanel as unknown as VueComponent,
   models: ModelsPanel as unknown as VueComponent,
+  world: WorldGraphPanel as unknown as VueComponent,
 }
 
 // the windowing manager's catalog — every pane the user can open/reopen.
@@ -97,6 +99,7 @@ const PANELS: { id: string; component: string; title: string; dev?: boolean }[] 
   { id: 'artifact', component: 'artifact', title: 'Artifact' },
   { id: 'chat', component: 'chat', title: 'Chat' },
   { id: 'sessions', component: 'sessions', title: 'Sessions' },
+  { id: 'world', component: 'world', title: 'World' }, // Loreworks 3D knowledge graph — the showpiece, on the everyday surface
   { id: 'models', component: 'models', title: 'Activity', dev: true }, // live models/tokens/dispatch stream → Details only
 ]
 // the Activity pane is a details surface; hide it from the launcher unless Details is on.
