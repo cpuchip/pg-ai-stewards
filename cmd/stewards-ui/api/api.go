@@ -35,6 +35,7 @@ func Register(mux *http.ServeMux, deps *Deps) {
 	deps.registerBridge(mux)
 	deps.registerNewWork(mux)
 	deps.registerGraph(mux)
+	deps.registerWorld(mux)
 	deps.registerProviders(mux)
 	deps.registerIntents(mux)
 	deps.registerCovenants(mux)
