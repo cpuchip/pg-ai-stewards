@@ -135,10 +135,19 @@ export type ActivityProviderRollup = {
   out_tokens: number
   micro_usd: number
 }
+export type ActivityTool = {
+  tool: string
+  server: string
+  status: string // pending | in_progress | done | error
+  error?: string
+  at?: string
+  run_ms?: number
+}
 export type ActivityResp = {
   active: ActivityActive[] | null
   recent: ActivityRecent[] | null
   by_provider: ActivityProviderRollup[] | null
+  tools: ActivityTool[] | null
   gpu_by_model: Record<string, string>
   generated_at: string
 }

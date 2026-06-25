@@ -45,6 +45,7 @@ chk "Activity pane in launcher"   true  "$(ev "[...document.querySelectorAll('bu
 playwright-cli click "getByRole('button', { name: 'Activity', exact: true })" >/dev/null 2>&1; sleep 2
 chk "Activity pane MOUNTED (Running now)"  true "$(ev "document.body.innerText.toLowerCase().includes('running now')")"
 chk "live token stream present (Live dispatches)" true "$(ev "document.body.innerText.toLowerCase().includes('live dispatches')")"
+chk "non-LLM tool/scan section (Tools & sandboxes)" true "$(ev "document.body.innerText.toLowerCase().includes('sandboxes')")"
 
 echo "== toggle Details OFF again (inverse hypothesis — the leak the fan-out found) =="
 playwright-cli click "getByText('⚙ Details')" >/dev/null 2>&1; sleep 1

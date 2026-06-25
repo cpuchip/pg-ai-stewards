@@ -5,7 +5,7 @@
 // cost rollups per provider/model. Complements the GPU/pool view (local rig) by
 // covering ALL providers. Reads /api/models/aliases + /api/activity.
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { api, type AliasRow, type ActivityResp, type ActivityActive } from '@/api'
+import { api, type AliasRow, type ActivityResp, type ActivityActive, type ActivityTool } from '@/api'
 
 defineOptions({ inheritAttrs: false })
 const aliases = ref<AliasRow[]>([])
@@ -52,6 +52,27 @@ const liveByModel = computed<LiveModel[]>(() => {
 
 const usd = (micro: number) => micro > 0 ? `$${(micro / 1e6).toFixed(4)}` : '—'
 const k = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+// non-LLM tool/sandbox pulse: in-flight first, then most-recent.
+const toolRows = computed<ActivityTool[]>(() => {
+  const live = (activity.value?.tools || []) as ActivityTool[]
+  const rank = (s: string) => (s === 'in_progress' || s === 'pending' ? 0 : 1)
+  return [...live].sort((a, b) => rank(a.status) - rank(b.status)).slice(0, 12)
+})
+const toolRunning = (t: ActivityTool) => t.status === 'in_progress' || t.status === 'pending'
+function toolGlyph(t: ActivityTool): string {
+  if (toolRunning(t)) return '◐'
+  return t.status === 'error' ? '⚠' : '✓'
+}
+function toolCls(t: ActivityTool): string {
+  if (toolRunning(t)) return 'text-amber-400'
+  return t.status === 'error' ? 'text-rose-400' : 'text-emerald-500'
+}
+function dur(ms?: number): string {
+  if (!ms || ms <= 0) return ''
+  const s = Math.round(ms / 1000)
+  return s < 60 ? `${s}s` : `${Math.round(s / 60)}m`
+}
+
 // relative "12s / 3m / 1h" for the live dispatch stream timestamps.
 function ago(ts?: string): string {
   if (!ts) return ''
@@ -97,6 +118,21 @@ function ago(ts?: string): string {
         <span class="ml-auto text-emerald-600/90 tabular-nums" title="input tokens">↑{{ k(d.in_tokens) }}</span>
         <span class="text-sky-500/90 tabular-nums" title="output tokens">↓{{ k(d.out_tokens) }}</span>
         <span class="text-zinc-700 tabular-nums w-8 text-right">{{ ago(d.at) }}</span>
+      </div>
+    </div>
+
+    <!-- NON-LLM activity: doc-extract (ClamAV scan + unpack), coder sandboxes,
+         etc. — each is a container the box spawns. in-flight rows are live; an
+         errored row (e.g. a doc-extract timeout) shows what a silent stall was. -->
+    <div class="px-3 py-2 border-b border-zinc-900">
+      <div class="text-[10px] uppercase tracking-wide text-zinc-600 mb-1">Tools &amp; sandboxes <span class="text-zinc-700 normal-case">· scans / extract / coder</span></div>
+      <div v-if="!toolRows.length" class="text-zinc-600 text-xs">no recent tool runs</div>
+      <div v-for="(t, i) in toolRows" :key="i" class="flex items-center gap-2 text-[11px] py-0.5" :title="t.error || t.status">
+        <span :class="[toolCls(t), toolRunning(t) ? 'animate-pulse' : '']">{{ toolGlyph(t) }}</span>
+        <span class="text-zinc-300 font-mono truncate">{{ t.tool }}</span>
+        <span class="text-zinc-600 truncate">{{ t.server }}</span>
+        <span v-if="t.status === 'error'" class="text-rose-400/80 truncate max-w-[35%]">{{ t.error }}</span>
+        <span class="ml-auto text-zinc-700 tabular-nums">{{ toolRunning(t) ? dur(t.run_ms) || 'running' : (dur(t.run_ms) || ago(t.at)) }}</span>
       </div>
     </div>
 

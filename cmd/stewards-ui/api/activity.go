@@ -34,8 +34,22 @@ type activityResponse struct {
 	Active      []activeWork      `json:"active"`
 	Recent      []recentDispatch  `json:"recent"`
 	ByProvider  []providerRollup  `json:"by_provider"`
+	Tools       []toolActivity    `json:"tools"` // non-LLM: doc-extract / coder sandbox / scan calls
 	GPUByModel  map[string]string `json:"gpu_by_model"`
 	GeneratedAt string            `json:"generated_at"`
+}
+
+// toolActivity is one non-LLM tool dispatch — a doc-extract run (ClamAV scan +
+// unpack, in its own container), a coder sandbox op, etc. The "what's the box
+// doing that ISN'T a model call" view: each mcp_proxy work_queue row spawns a
+// container/tool, so this is the sandbox/scan pulse alongside the model stream.
+type toolActivity struct {
+	Tool   string     `json:"tool"`
+	Server string     `json:"server"`
+	Status string     `json:"status"` // pending | in_progress | done | error (work_queue status)
+	Error  string     `json:"error,omitempty"`
+	At     *time.Time `json:"at,omitempty"`
+	RunMs  int64      `json:"run_ms,omitempty"` // claimed→done (or →now if running)
 }
 
 // activeWork is one in_progress work_item, enriched with the model/
@@ -95,12 +109,13 @@ func (d *Deps) activityHandler(w http.ResponseWriter, r *http.Request) {
 		Active:      []activeWork{},
 		Recent:      []recentDispatch{},
 		ByProvider:  []providerRollup{},
+		Tools:       []toolActivity{},
 		GPUByModel:  map[string]string{},
 		GeneratedAt: time.Now().Format(time.RFC3339),
 	}
 
 	var wg sync.WaitGroup
-	wg.Add(4)
+	wg.Add(5)
 
 	// active — in_progress work_items, latest dispatch model/provider +
 	// summed tokens/spend across each item's cost_events.
@@ -200,6 +215,42 @@ func (d *Deps) activityHandler(w http.ResponseWriter, r *http.Request) {
 			if err := rows.Scan(&p.Provider, &p.Model, &p.Calls,
 				&p.InTokens, &p.OutTokens, &p.MicroUSD); err == nil {
 				resp.ByProvider = append(resp.ByProvider, p)
+			}
+		}
+	}()
+
+	// tools — recent NON-LLM tool dispatches (mcp_proxy work_queue rows): each
+	// is a doc-extract run (ClamAV scan + unpack in its own container), a coder
+	// sandbox op, etc. The "what's the box doing that isn't a model call" pulse —
+	// in_progress rows are live containers; an errored row shows e.g. a doc-extract
+	// timeout, which would otherwise look like a silent stall.
+	go func() {
+		defer wg.Done()
+		rows, err := d.Pool.Query(ctx,
+			`SELECT coalesce(payload->>'tool',''),
+			        coalesce(payload->>'server',''),
+			        status,
+			        coalesce(error,''),
+			        coalesce(done_at, claimed_at, created_at),
+			        CASE WHEN claimed_at IS NOT NULL
+			             THEN (extract(epoch FROM coalesce(done_at, now()) - claimed_at) * 1000)::bigint
+			             ELSE 0 END
+			   FROM stewards.work_queue
+			  WHERE kind = 'mcp_proxy'
+			  ORDER BY coalesce(done_at, claimed_at, created_at) DESC
+			  LIMIT 20`,
+		)
+		if err != nil {
+			return
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var t toolActivity
+			if err := rows.Scan(&t.Tool, &t.Server, &t.Status, &t.Error, &t.At, &t.RunMs); err == nil {
+				if t.Tool == "" {
+					t.Tool = "tool"
+				}
+				resp.Tools = append(resp.Tools, t)
 			}
 		}
 	}()
