@@ -98,6 +98,12 @@ services:
         required: false
     environment:
       STEWARDS_DSN: "postgres://${POSTGRES_USER:-stewards}:${POSTGRES_PASSWORD:-stewards}@pg:5432/${POSTGRES_DB:-stewards}?sslmode=disable"
+    extra_hosts:
+      # The UI health-checks providers (e.g. flexllama / llama-chip at
+      # host.docker.internal:8090). Without this the ui container can't resolve
+      # the host and reports otherwise-reachable providers as down. (pg, bridge,
+      # and persona-host already have it; the ui service was missing it.)
+      - "host.docker.internal:host-gateway"
     ports:
       # Local-only: bind 127.0.0.1 so the substrate UI is never exposed on
       # the network. Host 8081 offsets from a workspace dev UI on 8080.
