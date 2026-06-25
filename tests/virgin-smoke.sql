@@ -1969,4 +1969,37 @@ BEGIN
     RAISE NOTICE 'OK 44: loreworks engine — world + entity/edge graph (dedup, alias-union, auto-endpoint, show/graph/search)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→54) is sound =='
+-- ---------------------------------------------------------------------
+-- 45. Loreworks build — world-build tools (sql_fn) + the world-build agent
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_res jsonb; v_world bigint;
+BEGIN
+    ASSERT (SELECT count(*) FROM stewards.tool_defs
+            WHERE name IN ('world_entity_upsert','world_edge_upsert','world_show','world_entity_search') AND active) = 4,
+        'the 4 world-build tools are registered + active';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='world_entity_upsert'
+                   AND execute_target->>'kind'='sql_fn' AND execute_target->>'name'='world_entity_upsert_tool'),
+        'world_entity_upsert dispatches via sql_fn';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agents WHERE family='world-build' AND active),
+        'world-build agent exists';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms WHERE agent_family='world-build' AND tool_pattern='*' AND action='deny'),
+        'world-build is an allow-list (deny *)';
+    ASSERT (SELECT count(*) FROM stewards.agent_tool_perms WHERE agent_family='world-build' AND action='allow') >= 8,
+        'world-build has its allow-list grants';
+
+    -- the wrapper actually dispatches end-to-end
+    v_world := stewards.world_upsert('smoke-build', 'Smoke Build', NULL, NULL, true);
+    v_res := stewards.world_entity_upsert_tool(jsonb_build_object('world_slug','smoke-build','kind','character','name','Borin','summary','a smith'));
+    ASSERT v_res->>'ok' = 'true', format('world_entity_upsert_tool ok (got %s)', v_res);
+    v_res := stewards.world_edge_upsert_tool(jsonb_build_object('world_slug','smoke-build','src','Borin','dst','Ironhold','rel_type','located_in'));
+    ASSERT v_res->>'ok' = 'true', 'world_edge_upsert_tool ok (auto-creates Ironhold)';
+    v_res := stewards.world_entity_upsert_tool(jsonb_build_object('world_slug','smoke-build','kind','spaceship','name','X'));
+    ASSERT v_res ? 'error', 'world_entity_upsert_tool rejects an unknown kind';
+    ASSERT (SELECT entity_count FROM stewards.world_show('smoke-build')) = 2,
+        'the tools built 2 entities (Borin + auto-created Ironhold)';
+    DELETE FROM stewards.worlds WHERE slug='smoke-build';
+    RAISE NOTICE 'OK 45: loreworks build — world tools (sql_fn dispatch, kind-validation, auto-endpoint) + world-build agent allow-list';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→55) is sound =='

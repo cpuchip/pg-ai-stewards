@@ -576,6 +576,16 @@ extension_sql_file!(
     requires = ["create_explore_repos"],
 );
 
+// 55: world-build tools + agent — the two sql_fn tools a model calls to
+// populate a world from its canon (world_entity_upsert / world_edge_upsert) +
+// world_show/world_entity_search read tools + the world-build agent family and
+// its allow-list. "Build a world" = one dispatch to this agent.
+extension_sql_file!(
+    "../55-loreworks-build.sql",
+    name = "create_loreworks_build",
+    requires = ["create_loreworks"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
