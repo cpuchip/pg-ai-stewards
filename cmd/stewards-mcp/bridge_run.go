@@ -39,6 +39,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -57,6 +58,7 @@ func runBridgeRun(args []string) error {
 	workers := fs.Int("workers", 4, "Number of concurrent worker goroutines")
 	tickMs := fs.Int("tick-ms", 1000, "Poll interval safety net in ms (LISTEN is primary)")
 	callTimeoutSecs := fs.Int("call-timeout", 120, "Per-tool-call timeout in seconds (ES.5.s1: 60->120 headroom; fs_search returns partial results gracefully on deadline)")
+	slowCallTimeoutSecs := fs.Int("slow-call-timeout", 600, "Per-call timeout (s) for inherently-slow BULK tools (doc_extract / doc_import_corpus over a big archive) — RC-3: these legitimately run minutes; fast tools stay on --call-timeout. Slow-tool set overridable via STEWARDS_SLOW_TOOLS.")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -98,11 +100,12 @@ func runBridgeRun(args []string) error {
 		go func(workerID int) {
 			defer wg.Done()
 			runWorker(rootCtx, workerID, pool, cache, jobCh,
-				time.Duration(*callTimeoutSecs)*time.Second)
+				time.Duration(*callTimeoutSecs)*time.Second,
+				time.Duration(*slowCallTimeoutSecs)*time.Second)
 		}(i)
 	}
-	log.Printf("bridge run: spawned %d worker(s); call-timeout=%ds",
-		*workers, *callTimeoutSecs)
+	log.Printf("bridge run: spawned %d worker(s); call-timeout=%ds slow-call-timeout=%ds (slow tools: %v)",
+		*workers, *callTimeoutSecs, *slowCallTimeoutSecs, slowToolNames())
 
 	// am1 (2026-05-22): Autonomous materializer. Drains
 	// stewards.pending_file_writes via stewards-cli on NOTIFY + 60s
@@ -201,26 +204,65 @@ func drainOne(ctx context.Context, pool *pgxpool.Pool, jobCh chan<- int64) bool 
 // runWorker pulls claimed row ids from jobCh, dispatches each one,
 // writes the result back to the substrate.
 func runWorker(ctx context.Context, workerID int, pool *pgxpool.Pool,
-	cache *sessionCache, jobCh <-chan int64, callTimeout time.Duration) {
+	cache *sessionCache, jobCh <-chan int64, callTimeout, slowTimeout time.Duration) {
 	for jobID := range jobCh {
-		callCtx, cancel := context.WithTimeout(ctx, callTimeout)
-		dispatchOne(callCtx, workerID, pool, cache, jobID)
-		cancel()
+		// dispatchOne owns the per-call timeout now: it reads the payload first
+		// (the tool name decides whether this is a slow bulk tool — RC-3).
+		dispatchOne(ctx, workerID, pool, cache, jobID, callTimeout, slowTimeout)
 	}
+}
+
+// slowTools are inherently-slow BULK MCP tools (multi-file extract / corpus
+// import over a big archive) that legitimately run for minutes; they get the
+// --slow-call-timeout while every other tool stays on the snappy --call-timeout.
+// Overridable wholesale via STEWARDS_SLOW_TOOLS (comma-separated tool names).
+var slowTools = func() map[string]bool {
+	if v := strings.TrimSpace(os.Getenv("STEWARDS_SLOW_TOOLS")); v != "" {
+		m := map[string]bool{}
+		for _, t := range strings.Split(v, ",") {
+			if t = strings.TrimSpace(t); t != "" {
+				m[t] = true
+			}
+		}
+		return m
+	}
+	return map[string]bool{"doc_extract": true, "doc_import_corpus": true}
+}()
+
+func slowToolNames() []string {
+	out := make([]string, 0, len(slowTools))
+	for t := range slowTools {
+		out = append(out, t)
+	}
+	return out
+}
+
+// callTimeoutFor picks the per-call timeout for a tool: slow bulk tools get the
+// longer window, everything else the snappy default.
+func callTimeoutFor(tool string, base, slow time.Duration) time.Duration {
+	if slowTools[tool] {
+		return slow
+	}
+	return base
 }
 
 // dispatchOne handles a single claimed mcp_proxy row end-to-end.
 // On success: writes result + NOTIFY. On failure: writes error +
 // NOTIFY (so the parent tool_dispatch's completion pass releases
 // the waiting tool reply with an error message).
-func dispatchOne(ctx context.Context, workerID int, pool *pgxpool.Pool,
-	cache *sessionCache, jobID int64) {
+func dispatchOne(parentCtx context.Context, workerID int, pool *pgxpool.Pool,
+	cache *sessionCache, jobID int64, callTimeout, slowTimeout time.Duration) {
+	// Read the payload under a short bound (the tool name decides the call
+	// timeout — RC-3), then apply the per-tool timeout to the actual call.
+	readCtx, readCancel := context.WithTimeout(parentCtx, 15*time.Second)
 	var payloadJSON []byte
-	if err := pool.QueryRow(ctx,
+	readErr := pool.QueryRow(readCtx,
 		"SELECT payload FROM stewards.work_queue WHERE id = $1",
 		jobID,
-	).Scan(&payloadJSON); err != nil {
-		writeError(ctx, pool, jobID, fmt.Errorf("read payload: %w", err))
+	).Scan(&payloadJSON)
+	readCancel()
+	if readErr != nil {
+		writeError(parentCtx, pool, jobID, fmt.Errorf("read payload: %w", readErr))
 		return
 	}
 
@@ -230,9 +272,14 @@ func dispatchOne(ctx context.Context, workerID int, pool *pgxpool.Pool,
 		Args   json.RawMessage `json:"args"`
 	}
 	if err := json.Unmarshal(payloadJSON, &payload); err != nil {
-		writeError(ctx, pool, jobID, fmt.Errorf("decode payload: %w", err))
+		writeError(parentCtx, pool, jobID, fmt.Errorf("decode payload: %w", err))
 		return
 	}
+
+	// Per-tool call timeout: a slow bulk tool gets the longer window, everything
+	// else stays snappy. From here, ctx carries that deadline.
+	ctx, cancel := context.WithTimeout(parentCtx, callTimeoutFor(payload.Tool, callTimeout, slowTimeout))
+	defer cancel()
 
 	// Decode args as map[string]any — that's what the SDK's CallTool
 	// wants for Arguments. Models almost always emit objects; if they

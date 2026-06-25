@@ -67,6 +67,12 @@ type docExtractOutput struct {
 // turns; this just keeps a huge doc from blowing the immediate tool result).
 const toolTextCap = 24000
 
+// bulkExtractTimeoutSecs is the converter + container deadline for the slow doc
+// tools — a big archive's per-member extract+scan legitimately runs minutes. It
+// sits UNDER the bridge daemon's --slow-call-timeout (600s) so the converter
+// reports a clean timeout instead of the bridge killing the call. RC-3.
+const bulkExtractTimeoutSecs = 540
+
 func makeDocExtract(run *runner.Runner, pool *pgxpool.Pool) func(context.Context, *mcp.CallToolRequest, docExtractInput) (*mcp.CallToolResult, docExtractOutput, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in docExtractInput) (*mcp.CallToolResult, docExtractOutput, error) {
 		out, err := extractAttachment(ctx, pool, run, in)
@@ -104,7 +110,7 @@ func extractAttachment(ctx context.Context, pool *pgxpool.Pool, run *runner.Runn
 	// short doc's pixels; long docs stay text-only); Render forces all pages.
 	res, stderr, err := run.Extract(ctx, data, runner.ExtractArgs{
 		Filename: filename, Render: in.Render, AutoRender: true, MaxPages: in.MaxPages,
-		Caps: docextract.DefaultArchiveCaps(),
+		Caps: docextract.DefaultArchiveCaps(), TimeoutSecs: bulkExtractTimeoutSecs,
 	})
 	if err != nil {
 		return docExtractOutput{}, fmt.Errorf("extraction failed: %w", err)
@@ -229,8 +235,10 @@ func importCorpusFn(ctx context.Context, pool *pgxpool.Pool, run *runner.Runner,
 	}
 
 	// Extract all members (text only — a corpus is searchable text, no pixels).
+	// The bulk timeout (RC-3) lets a big document corpus finish instead of dying
+	// at the old ~120s cliff.
 	res, _, err := run.Extract(ctx, data, runner.ExtractArgs{
-		Filename: filename, Caps: docextract.DefaultArchiveCaps(),
+		Filename: filename, Caps: docextract.DefaultArchiveCaps(), TimeoutSecs: bulkExtractTimeoutSecs,
 	})
 	if err != nil {
 		return docImportOutput{}, fmt.Errorf("extraction failed: %w", err)

@@ -61,6 +61,11 @@ type ExtractArgs struct {
 	DPI           int
 	Caps          docextract.ArchiveCaps
 	RecurseNested bool
+	// TimeoutSecs raises BOTH the converter (-timeout) and the container ctx for
+	// this run — the bulk-import / big-archive path legitimately runs minutes
+	// (RC-3). 0 = the converter default + r.Timeout. A fast single file finishes
+	// early regardless, so a high value here is a ceiling, not a floor.
+	TimeoutSecs int
 }
 
 // Extract spawns the hardened container, pipes data to its stdin, and decodes
@@ -68,9 +73,18 @@ type ExtractArgs struct {
 // process except into the sealed, no-network container. Returns the Result and
 // the container's stderr (diagnostics) — a non-empty stderr is normal (logs).
 func (r *Runner) Extract(ctx context.Context, data []byte, a ExtractArgs) (docextract.Result, string, error) {
-	if r.Timeout > 0 {
+	// Container ctx: the default r.Timeout, or — for a long bulk run — a window a
+	// little larger than the converter's own deadline (so the converter reports
+	// its timeout cleanly instead of being SIGKILL'd by docker).
+	containerTimeout := r.Timeout
+	if a.TimeoutSecs > 0 {
+		if d := time.Duration(a.TimeoutSecs+30) * time.Second; d > containerTimeout {
+			containerTimeout = d
+		}
+	}
+	if containerTimeout > 0 {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, r.Timeout)
+		ctx, cancel = context.WithTimeout(ctx, containerTimeout)
 		defer cancel()
 	}
 
@@ -106,6 +120,9 @@ func (r *Runner) Extract(ctx context.Context, data []byte, a ExtractArgs) (docex
 	// -auto-render defaults true in the converter; pass it explicitly so the
 	// caller controls the router behavior deterministically.
 	args = append(args, "-auto-render="+strconv.FormatBool(a.AutoRender))
+	if a.TimeoutSecs > 0 {
+		args = append(args, "-timeout", strconv.Itoa(a.TimeoutSecs)) // RC-3: raise the converter's own deadline for a bulk run
+	}
 	if a.MaxPages > 0 {
 		args = append(args, "-max-pages", strconv.Itoa(a.MaxPages))
 	}
