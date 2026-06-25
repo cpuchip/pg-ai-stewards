@@ -596,6 +596,16 @@ extension_sql_file!(
     requires = ["create_loreworks_build"],
 );
 
+// 57: Loreworks C/G — hybrid lore search (world_entity_hybrid = the embed_query
+// semantic leg the 54 comment promised) + the lore tools (lore_search/
+// lore_entity/lore_neighbors) + the read-only loremaster agent + lore_inject
+// for grounding a persona in a world room.
+extension_sql_file!(
+    "../57-loreworks-chat.sql",
+    name = "create_loreworks_chat",
+    requires = ["create_trajectory_critic"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

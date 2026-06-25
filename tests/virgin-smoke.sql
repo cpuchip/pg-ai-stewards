@@ -2043,4 +2043,48 @@ BEGIN
     RAISE NOTICE 'OK 46: trajectory critic — assemble_trajectory + Glass-Box judge + world-critic edge-grounding (list/prune)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→56) is sound =='
+-- ---------------------------------------------------------------------
+-- 47. Loreworks chat — hybrid lore search + loremaster + lore tools (C/G)
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_world bigint; v_res jsonb; v_n int; v_block text;
+BEGIN
+    -- the lore tools + loremaster + embed/hybrid functions exist
+    ASSERT (SELECT count(*) FROM stewards.tool_defs
+            WHERE name IN ('lore_search','lore_entity','lore_neighbors','world_entity_embed') AND active) = 4,
+        'lore tools + embed tool registered';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agents WHERE family='loremaster' AND active), 'loremaster agent exists';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms WHERE agent_family='loremaster' AND tool_pattern='*' AND action='deny')
+       AND EXISTS (SELECT 1 FROM stewards.agent_tool_perms WHERE agent_family='loremaster' AND tool_pattern='lore_search' AND action='allow'),
+        'loremaster is a read-only allow-list';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='world_entity_hybrid'), 'world_entity_hybrid exists';
+
+    -- build a tiny world; the lexical leg + graph tools work WITHOUT an embed provider
+    v_world := stewards.world_upsert('lore-smoke2','Lore Smoke 2',NULL,NULL,true);
+    PERFORM stewards.world_entity_upsert('lore-smoke2','character','Aria','a ranger of the north');
+    PERFORM stewards.world_entity_upsert('lore-smoke2','place','Eastwatch','a border fortress');
+    PERFORM stewards.world_edge_upsert('lore-smoke2','Aria','Eastwatch','located_in','guards the pass');
+
+    -- hybrid search degrades to lexical when no embed provider is configured (the EXCEPTION path)
+    SELECT count(*) INTO v_n FROM stewards.world_entity_hybrid('lore-smoke2','Aria',5);
+    ASSERT v_n >= 1, 'world_entity_hybrid returns the lexical leg without an embed provider';
+
+    -- lore_entity returns the entity + its 1-hop connections
+    v_res := stewards.lore_entity_tool(jsonb_build_object('world_slug','lore-smoke2','name','Aria'));
+    ASSERT (v_res->>'found')='true' AND jsonb_array_length(v_res->'connections') >= 1,
+        'lore_entity returns connections';
+
+    -- lore_neighbors walks the graph
+    v_res := stewards.lore_neighbors_tool(jsonb_build_object('world_slug','lore-smoke2','name','Aria'));
+    ASSERT (v_res->>'found')='true', 'lore_neighbors walks from Aria';
+
+    -- lore_inject builds a grounded block (the G auto-injection, model-free)
+    v_block := stewards.lore_inject('lore-smoke2','ranger fortress', 5);
+    ASSERT v_block LIKE '%RELEVANT WORLD LORE%' AND v_block LIKE '%Lore Smoke 2%', 'lore_inject builds a lore block';
+
+    DELETE FROM stewards.worlds WHERE slug='lore-smoke2';
+    RAISE NOTICE 'OK 47: loreworks chat — hybrid search (lexical fallback) + lore_entity/neighbors/inject + loremaster allow-list';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→57) is sound =='

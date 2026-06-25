@@ -70,7 +70,7 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      50-doc-build.sql 51-rich-chat-hardening.sql \
      52-session-scoped-tools.sql 53-explore-repos.sql \
      54-loreworks.sql 55-loreworks-build.sql \
-     56-trajectory-critic.sql ./
+     56-trajectory-critic.sql 57-loreworks-chat.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
