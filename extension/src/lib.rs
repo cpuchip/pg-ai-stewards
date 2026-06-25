@@ -622,6 +622,78 @@ fn providers_loaded() -> TableIterator<
     }))
 }
 
+/// Synchronously embed `text` and return the raw vector (the caller casts
+/// `::vector`). This is the query-time embedding primitive the substrate lacked:
+/// `doc_search`/`pool_search` are full-text and `doc_similar` uses *precomputed*
+/// edges, so nothing could embed an arbitrary query at search time. With this, a
+/// hybrid full-text + semantic (RRF) search becomes pure SQL over any embedded
+/// table.
+///
+/// Resolution: `provider` (else `stewards.config 'embed_provider'`), `model`
+/// (else the provider's default), `dimensions` (default 768 = nomic; pass 1536
+/// for Vertex gemini-embedding). The provider is resolved in THIS backend,
+/// preferring the postmaster-inherited `PROVIDER_REGISTRY` and falling back to
+/// parsing env on demand (covers a not-preloaded backend).
+///
+/// **Latency:** blocks the backend for one embeddings round-trip (~100-500ms, up
+/// to 120s on a cold local model). Fine for interactive search; bulk embedding
+/// keeps the async work-queue path (`stewards.enqueue('embed', ...)`).
+#[pg_extern]
+fn embed_query(
+    text: &str,
+    provider: default!(Option<&str>, "NULL"),
+    model: default!(Option<&str>, "NULL"),
+    dimensions: default!(i32, 768),
+) -> Vec<f32> {
+    match embed_query_impl(text, provider, model, dimensions) {
+        Ok(v) => v,
+        Err(e) => error!("embed_query: {}", e),
+    }
+}
+
+/// Resolve a provider by name in a backend: prefer the registry the postmaster
+/// set in `_PG_init` (inherited via fork), else parse env on demand and memoize
+/// it for this backend.
+fn resolve_embed_provider(name: &str) -> Result<crate::providers::Provider, String> {
+    if let Some(reg) = PROVIDER_REGISTRY.get() {
+        if let Some(p) = reg.providers.iter().find(|p| p.name == name) {
+            return Ok(p.clone());
+        }
+    }
+    static FALLBACK: std::sync::OnceLock<crate::providers::ProviderRegistry> =
+        std::sync::OnceLock::new();
+    let reg = FALLBACK.get_or_init(crate::providers::ProviderRegistry::from_env);
+    reg.providers
+        .iter()
+        .find(|p| p.name == name)
+        .cloned()
+        .ok_or_else(|| format!("unknown embed provider: {}", name))
+}
+
+fn embed_query_impl(
+    text: &str,
+    provider: Option<&str>,
+    model: Option<&str>,
+    dimensions: i32,
+) -> Result<Vec<f32>, String> {
+    let provider_name: String = match provider {
+        Some(p) if !p.is_empty() => p.to_string(),
+        _ => Spi::get_one::<String>("SELECT stewards.config_get_text('embed_provider', NULL)")
+            .map_err(|e| format!("read config 'embed_provider': {}", e))?
+            .ok_or_else(|| {
+                "no embed provider: pass a provider arg or set stewards.config 'embed_provider'"
+                    .to_string()
+            })?,
+    };
+    let prov = resolve_embed_provider(&provider_name)?;
+    let model_name: String = match model {
+        Some(m) if !m.is_empty() => m.to_string(),
+        _ => prov.default_model.clone(),
+    };
+    let dims = if dimensions > 0 { dimensions } else { 768 };
+    crate::bgworker::embed_one(&prov, text, &model_name, dims)
+}
+
 // ---------------------------------------------------------------------------
 // Module-split breadcrumbs (Phase 3c.3.6, 2026-05-08):
 //   - Provider registry types + ResolverConfig → providers.rs

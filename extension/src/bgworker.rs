@@ -1637,17 +1637,48 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
         .and_then(|v| v.as_i64())
         .unwrap_or(768) as i32;
 
-    let url = format!(
-        "{}/embeddings",
-        provider.base_url.trim_end_matches('/')
-    );
+    // HTTP + parse + dim-check now lives in embed_one (shared with the
+    // synchronous stewards.embed_query() pg_extern). The async work path keeps
+    // its pgvector-text formatting + work-queue write below.
+    let embedding = embed_one(provider, text, model, expected_dim)?;
+
+    // Build pgvector's text format: "[v1,v2,...]". No spaces.
+    let mut s = String::with_capacity(embedding.len() * 12);
+    s.push('[');
+    for (i, v) in embedding.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        s.push_str(&format!("{}", v));
+    }
+    s.push(']');
+
+    Ok(WorkOutcome::Embedded {
+        target_table,
+        target_id,
+        model: model.to_string(),
+        embedding_text: s,
+        dimensions: expected_dim,
+    })
+}
+
+/// Embed one text and return the raw vector — no DB write, no target_table/id.
+/// The side-effect-free HTTP+parse core, shared by the async `embed()` work
+/// path and the synchronous `stewards.embed_query()` pg_extern (lib.rs). Reuses
+/// `send_with_retry` (#243 backoff) and the 120s blocking client (a cold local
+/// model's first request can take that long).
+pub(crate) fn embed_one(
+    provider: &crate::providers::Provider,
+    text: &str,
+    model: &str,
+    expected_dim: i32,
+) -> Result<Vec<f32>, String> {
+    let url = format!("{}/embeddings", provider.base_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "model": model,
         "input": text,
     });
 
-    // 120s timeout: LM Studio's first request after a cold start
-    // can take that long while it loads the model into memory.
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
         .build()
@@ -1655,8 +1686,6 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
 
     // Bearer minted once, reused across retries (same as chat).
     let bearer: Option<String> = provider.bearer_token()?;
-    // POST with transient retry/backoff (#243): an embed 429/5xx blip is
-    // absorbed here rather than failing the embed work row.
     let resp = send_with_retry(
         || {
             let mut req = client.post(&url).json(&body);
@@ -1678,12 +1707,7 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
         .and_then(|a| a.first())
         .and_then(|d| d.get("embedding"))
         .and_then(|e| e.as_array())
-        .ok_or_else(|| {
-            format!(
-                "unexpected embeddings response shape: {}",
-                parsed
-            )
-        })?;
+        .ok_or_else(|| format!("unexpected embeddings response shape: {}", parsed))?;
 
     if arr.len() as i32 != expected_dim {
         return Err(format!(
@@ -1693,29 +1717,15 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
         ));
     }
 
-    // Build pgvector's text format: "[v1,v2,...]". No spaces; floats
-    // formatted with full f32 precision.
-    let mut s = String::with_capacity(arr.len() * 12);
-    s.push('[');
+    let mut out = Vec::with_capacity(arr.len());
     for (i, v) in arr.iter().enumerate() {
-        if i > 0 {
-            s.push(',');
-        }
         let f = v
             .as_f64()
             .ok_or_else(|| format!("embedding[{}] not a number", i))?;
-        // f32 max precision is ~9 digits; pgvector stores f32 anyway.
-        s.push_str(&format!("{}", f));
+        // pgvector stores f32; cast now so embed_query returns float4[].
+        out.push(f as f32);
     }
-    s.push(']');
-
-    Ok(WorkOutcome::Embedded {
-        target_table,
-        target_id,
-        model: model.to_string(),
-        embedding_text: s,
-        dimensions: expected_dim,
-    })
+    Ok(out)
 }
 
 /// Call an OpenAI-compatible /v1/chat/completions endpoint.
