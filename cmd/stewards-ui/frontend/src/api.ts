@@ -225,7 +225,7 @@ export const api = {
     getJSON<AttachmentMeta>(`/api/chat/attachment/${id}?meta=1`),
   // Self-serve "Build a World": register the world + dispatch the world-build
   // agent over a canon source (a project pool, or inline canon text).
-  worldBuild: async (req: { name: string; slug?: string; project?: string; canon?: string; instructions?: string; file?: File }):
+  worldBuild: async (req: { name: string; slug?: string; project?: string; reference_projects?: string[]; canon?: string; instructions?: string; file?: File }):
     Promise<{ slug: string; session_id: string }> => {
     let r: Response
     if (req.file) {
@@ -234,6 +234,7 @@ export const api = {
       fd.set('name', req.name)
       if (req.slug) fd.set('slug', req.slug)
       if (req.project) fd.set('project', req.project)
+      if (req.reference_projects?.length) fd.set('reference_projects', req.reference_projects.join(','))
       if (req.instructions) fd.set('instructions', req.instructions)
       fd.set('file', req.file)
       r = await fetch('/api/world/build', { method: 'POST', body: fd })

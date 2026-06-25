@@ -30,11 +30,12 @@ func (d *Deps) registerWorld(mux *http.ServeMux) {
 // EXPANDS an existing world/project: pick its name + project and upload more — the
 // import adds docs and world_*_upsert merges (idempotent), so the graph grows.
 type worldBuildReq struct {
-	Name         string `json:"name"`
-	Slug         string `json:"slug,omitempty"`
-	Project      string `json:"project,omitempty"`
-	Canon        string `json:"canon,omitempty"`
-	Instructions string `json:"instructions,omitempty"`
+	Name              string   `json:"name"`
+	Slug              string   `json:"slug,omitempty"`
+	Project           string   `json:"project,omitempty"`
+	ReferenceProjects []string `json:"reference_projects,omitempty"` // other buckets to read + cross-link
+	Canon             string   `json:"canon,omitempty"`
+	Instructions      string   `json:"instructions,omitempty"`
 }
 
 type worldBuildResp struct {
@@ -80,6 +81,13 @@ func (d *Deps) worldBuildHandler(w http.ResponseWriter, r *http.Request) {
 		req.Project = r.FormValue("project")
 		req.Canon = r.FormValue("canon")
 		req.Instructions = r.FormValue("instructions")
+		if rp := strings.TrimSpace(r.FormValue("reference_projects")); rp != "" {
+			for _, p := range strings.Split(rp, ",") {
+				if p = strings.TrimSpace(p); p != "" {
+					req.ReferenceProjects = append(req.ReferenceProjects, p)
+				}
+			}
+		}
 		if f, hdr, err := r.FormFile("file"); err == nil {
 			defer f.Close()
 			b, e := io.ReadAll(f)
@@ -131,21 +139,42 @@ func (d *Deps) worldBuildHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// the canon clause — how the agent finds (or loads) the source material.
+	// referenced projects — other buckets to ALSO read + cross-link, deduped, minus the primary.
+	seenRef := map[string]bool{}
+	var refs []string
+	for _, rp := range req.ReferenceProjects {
+		rp = strings.TrimSpace(rp)
+		if rp != "" && rp != proj && !seenRef[rp] {
+			seenRef[rp] = true
+			refs = append(refs, rp)
+		}
+	}
+	refsClause := ""
+	if len(refs) > 0 {
+		refsClause = fmt.Sprintf(" This world ALSO spans these connected projects — doc_search EACH of "+
+			"them too and fold them into the SAME graph: %s. A shared entity is ONE node (merge it); a "+
+			"relationship that spans two projects is exactly the cross-project link to capture. Ground "+
+			"every cross-link in the canon.", strings.Join(refs, ", "))
+	}
+
+	// the canon clause — how the agent finds (or loads) the primary source material.
 	var canon string
 	switch {
 	case attID > 0:
-		canon = fmt.Sprintf("Your canon is an uploaded source. FIRST call doc_import_corpus(attachment_id=%d, "+
+		canon = fmt.Sprintf("Your primary canon is an uploaded source. FIRST call doc_import_corpus(attachment_id=%d, "+
 			"corpus_name=%q, project=%q) EXACTLY ONCE to load + chunk it into project %q, then build from "+
 			"that project with doc_search.", attID, req.Name, proj, proj)
 	case proj != "":
-		canon = fmt.Sprintf("The canon lives in the project %q — call doc_search (scoped to project %q) to read it thoroughly before extracting.", proj, proj)
+		canon = fmt.Sprintf("The primary canon lives in the project %q — call doc_search (scoped to project %q) to read it thoroughly before extracting.", proj, proj)
 	case canonText != "":
-		canon = "Canon (the full source to extract from):\n" + canonText
+		canon = "Primary canon (the full source to extract from):\n" + canonText
+	case len(refs) > 0:
+		canon = "" // referenced projects are the only source
 	default:
-		writeErr(w, http.StatusBadRequest, "provide a canon source: upload a file, name a project, or paste canon text")
+		writeErr(w, http.StatusBadRequest, "provide a canon source: upload a file, name a project, paste canon, or reference projects")
 		return
 	}
+	canon += refsClause
 
 	// register the world — private by default (purchased/world content stays local).
 	// Idempotent: re-running for an existing slug merges (expand-a-world).
@@ -163,6 +192,18 @@ func (d *Deps) worldBuildHandler(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		writeErr(w, http.StatusInternalServerError, "world_upsert: "+err.Error())
 		return
+	}
+
+	// record the referenced projects on the world (for the graph's per-project toggle).
+	if len(refs) > 0 {
+		refsJSON, _ := json.Marshal(refs)
+		if _, err := d.Pool.Exec(ctx,
+			`UPDATE stewards.worlds SET metadata = coalesce(metadata,'{}'::jsonb) || jsonb_build_object('reference_projects', $2::jsonb) WHERE slug = $1`,
+			slug, string(refsJSON),
+		); err != nil {
+			writeErr(w, http.StatusInternalServerError, "store reference projects: "+err.Error())
+			return
+		}
 	}
 
 	prompt := fmt.Sprintf(

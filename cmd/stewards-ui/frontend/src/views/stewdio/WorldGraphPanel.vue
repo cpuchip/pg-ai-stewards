@@ -67,11 +67,14 @@ const showBuild = ref(false)
 const projects = ref<{ name: string; doc_count?: number }[]>([])
 const buildName = ref('')
 const buildProject = ref('')
+const buildRefs = ref<string[]>([])   // other projects to reference + cross-link
 const buildCanon = ref('')
 const buildInstr = ref('')
 const buildFile = ref<File | null>(null)
 const building = ref(false)
 const buildErr = ref('')
+// projects available to reference (exclude the primary the user typed).
+const refCandidates = computed(() => projects.value.filter(p => p.name && p.name !== buildProject.value.trim()))
 function onBuildFile(e: Event) {
   buildFile.value = (e.target as HTMLInputElement).files?.[0] ?? null
 }
@@ -228,7 +231,7 @@ function resize() {
 function toggleBuild() {
   showBuild.value = !showBuild.value
   if (showBuild.value) {
-    buildName.value = ''; buildProject.value = ''; buildCanon.value = ''; buildInstr.value = ''; buildErr.value = ''; buildFile.value = null
+    buildName.value = ''; buildProject.value = ''; buildRefs.value = []; buildCanon.value = ''; buildInstr.value = ''; buildErr.value = ''; buildFile.value = null
     // selectable projects = formal + corpus tags (so an imported corpus shows up)
     api.worldProjects().then(r => { projects.value = r.items ?? [] }).catch(() => {})
   }
@@ -247,6 +250,7 @@ async function buildWorld() {
     const r = await api.worldBuild({
       name,
       project: buildProject.value.trim() || undefined,
+      reference_projects: buildRefs.value.length ? buildRefs.value : undefined,
       canon: buildCanon.value.trim() || undefined,
       instructions: buildInstr.value.trim() || undefined,
       file: buildFile.value || undefined,
@@ -443,6 +447,19 @@ onUnmounted(() => {
         <datalist id="world-projects">
           <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}<span v-if="p.doc_count"> · {{ p.doc_count }} docs</span></option>
         </datalist>
+      </div>
+
+      <!-- reference other projects — read them too + cross-link (merge into one graph) -->
+      <div v-if="refCandidates.length">
+        <label class="text-zinc-500 text-[11px]">Reference other projects (read + cross-link into this graph):</label>
+        <div class="mt-0.5 max-h-24 overflow-auto rounded border border-zinc-800 bg-zinc-950 p-1 space-y-0.5">
+          <label v-for="p in refCandidates" :key="p.name" class="flex items-center gap-1.5 px-1 py-0.5 rounded hover:bg-zinc-900 cursor-pointer">
+            <input type="checkbox" :value="p.name" v-model="buildRefs" class="accent-emerald-600" />
+            <span class="text-zinc-300">{{ p.name }}</span>
+            <span v-if="p.doc_count" class="text-zinc-600 ml-auto">{{ p.doc_count }} docs</span>
+          </label>
+        </div>
+        <div v-if="buildRefs.length" class="text-emerald-400 text-[10px] mt-0.5">+ {{ buildRefs.join(', ') }}</div>
       </div>
 
       <div class="text-zinc-600 text-[10px]">…or paste canon directly (for a small/quick world):</div>
