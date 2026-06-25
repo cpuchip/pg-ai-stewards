@@ -354,6 +354,27 @@ func (d *Deps) worldGraphHandler(w http.ResponseWriter, r *http.Request) {
 			refByID[id] = rr
 		}
 	}
+	// per-node project provenance (which bucket(s) each entity's source docs are
+	// tagged with) — drives the graph's per-project show/hide toggle + badges.
+	projByID := map[int64][]string{}
+	if prows, perr := d.Pool.Query(ctx,
+		`SELECT e.entity_id,
+		        array_agg(DISTINCT d.project_association) FILTER (WHERE d.project_association IS NOT NULL AND d.project_association <> '')
+		   FROM stewards.world_entities e
+		   JOIN stewards.worlds w ON w.world_id = e.world_id
+		   LEFT JOIN LATERAL jsonb_array_elements(e.source_refs) sr ON true
+		   LEFT JOIN stewards.docs d ON d.slug = sr->>'doc'
+		  WHERE w.slug = $1
+		  GROUP BY e.entity_id`, slug); perr == nil {
+		defer prows.Close()
+		for prows.Next() {
+			var id int64
+			var ps []string
+			if err := prows.Scan(&id, &ps); err == nil && len(ps) > 0 {
+				projByID[id] = ps
+			}
+		}
+	}
 	deg := map[int64]int{}
 	for _, lr := range g.Links {
 		var ll struct {
@@ -383,6 +404,9 @@ func (d *Deps) worldGraphHandler(w http.ResponseWriter, r *http.Request) {
 			if len(rr.Aliases) > 0 {
 				m["aliases"] = rr.Aliases
 			}
+		}
+		if ps, ok := projByID[id]; ok {
+			m["projects"] = ps
 		}
 		m["degree"] = deg[id]
 		b, _ := json.Marshal(m)

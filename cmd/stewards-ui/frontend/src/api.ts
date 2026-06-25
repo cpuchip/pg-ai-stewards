@@ -1037,6 +1037,7 @@ export type WorldRef = { doc?: string; chunk?: number; quote?: string; object?: 
 export type WorldNode = {
   id: number; kind: string; name: string; summary?: string
   aliases?: string[]; source_refs?: WorldRef[]; degree?: number
+  projects?: string[]   // bucket(s) this entity's source docs are tagged with (cross-project toggle)
   // 3d-force-graph mutates these in place during simulation — declare optional:
   x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number
 }

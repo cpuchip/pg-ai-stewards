@@ -54,6 +54,7 @@ const worlds = ref<WorldBrief[]>([])
 const selected = ref<WorldNodeDetail | WorldNode | null>(null)
 const detail = ref<WorldNodeDetail | null>(null) // lazily-loaded typed edges
 const active = ref(new Set<string>())            // kinds currently shown
+const activeProjects = ref(new Set<string>())    // source projects/buckets currently shown (cross-project toggle)
 const query = ref('')
 const err = ref('')
 const loading = ref(false)
@@ -87,6 +88,15 @@ let ro: ResizeObserver | null = null
 let resizeRaf = 0
 
 const kinds = computed(() => [...new Set([...nodeById.values()].map(n => n.kind))].sort())
+// the buckets present in this world's graph (a cross-project world has >1) — drive
+// the per-project show/hide toggle.
+const graphProjects = computed(() => [...new Set([...nodeById.values()].flatMap(n => n.projects ?? []))].sort())
+function toggleProject(p: string) {
+  const next = new Set(activeProjects.value)
+  if (next.has(p)) next.delete(p); else next.add(p)
+  activeProjects.value = next
+  applyVisibility()
+}
 const currentWorld = computed(() => worlds.value.find(w => w.slug === store.worldSlug) || null)
 
 // live name/alias matches for the search dropdown (cap ~8).
@@ -106,15 +116,24 @@ const matches = computed<WorldNode[]>(() => {
 function applyVisibility() {
   if (!graph) return
   const on = active.value
+  const onP = activeProjects.value
+  // a node shows if its KIND is on AND (it has no project, or at least one of its
+  // projects is on) — so toggling a referenced bucket off hides its nodes.
+  const nodeVisible = (n: WorldNode): boolean => {
+    if (!on.has(n.kind)) return false
+    const ps = n.projects ?? []
+    if (ps.length === 0) return true
+    return ps.some(p => onP.has(p))
+  }
   // After the first tick l.source/l.target are node objects; pre-tick they're ids
   // — resolve against nodeById so the predicate is correct on the very first frame.
-  const kindOf = (end: number | WorldNode): string => {
-    if (typeof end === 'object') return end.kind
-    return nodeById.get(end)?.kind ?? 'concept'
-  }
-  graph.nodeVisibility((n: WorldNode) => on.has(n.kind))
-  graph.linkVisibility((l: { source: number | WorldNode; target: number | WorldNode }) =>
-    on.has(kindOf(l.source)) && on.has(kindOf(l.target)))
+  const resolve = (end: number | WorldNode): WorldNode | undefined =>
+    typeof end === 'object' ? end : nodeById.get(end)
+  graph.nodeVisibility((n: WorldNode) => nodeVisible(n))
+  graph.linkVisibility((l: { source: number | WorldNode; target: number | WorldNode }) => {
+    const s = resolve(l.source), t = resolve(l.target)
+    return !!s && !!t && nodeVisible(s) && nodeVisible(t)
+  })
 }
 
 function toggleKind(k: string) {
@@ -211,6 +230,7 @@ async function loadWorld(slug: string) {
     const g: WorldGraphResp = await api.worldGraph(slug, true)
     nodeById = new Map(g.nodes.map(n => [n.id, n]))
     active.value = new Set(g.nodes.map(n => n.kind)) // all kinds on
+    activeProjects.value = new Set(g.nodes.flatMap(n => n.projects ?? [])) // all buckets on
     graph.graphData(g)
     applyVisibility()
   } catch (e) {
@@ -412,6 +432,19 @@ onUnmounted(() => {
         <span class="w-1.5 h-1.5 rounded-full" :style="{ background: kindColor(k) }"></span>
         <span class="text-zinc-300">{{ k }}</span>
       </button>
+
+      <!-- per-project (bucket) toggle — only for a cross-project world. Hide a
+           referenced bucket's nodes for performance / visual ease. -->
+      <template v-if="graphProjects.length > 1">
+        <span class="text-zinc-700 mx-0.5">|</span>
+        <button v-for="p in graphProjects" :key="'proj-'+p"
+                @click="toggleProject(p)"
+                class="rounded px-1.5 py-0.5 border border-zinc-700 flex items-center gap-1 transition-opacity"
+                :class="activeProjects.has(p) ? 'opacity-100 text-emerald-300 bg-emerald-900/20' : 'opacity-40 text-zinc-400'"
+                :title="activeProjects.has(p) ? `hide project ${p}` : `show project ${p}`">
+          <span>📁</span><span>{{ p }}</span>
+        </button>
+      </template>
 
       <button
         @click="toggleOrbit"
