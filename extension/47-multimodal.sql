@@ -116,6 +116,70 @@ COMMENT ON FUNCTION stewards.page_in_cap(jsonb, int, text) IS
 --       and tool_calls are preserved for tool/assistant rows. page_in_cap (§3)
 --       already skips array content, so a big base64 image is never truncated.
 -- Everything else is identical to 15b. THIS FILE NOW OWNS compose_messages.
+-- ─────────────────────────────────────────────────────────────────────────────
+-- gemini_normalize_tool_turns — repair function-call/response adjacency for Gemini.
+--
+-- OpenAI-compat providers match a tool result to its call by tool_call_id in ANY
+-- order, and tolerate a text turn interleaved among them. Gemini/Vertex does NOT:
+-- a model turn carrying functionCall part(s) MUST be immediately followed by a user
+-- turn carrying the matching functionResponse part(s), counts equal, nothing between
+-- ("number of function response parts is equal to the number of function call parts").
+--
+-- compose_messages orders history by created_at, so async/parallel tool results and a
+-- mid-turn injected notice (e.g. the soft-cap STEWARD NOTICE relabeled to 'user') can
+-- land BETWEEN a call and its response → Vertex 400. This pass re-emits each assistant
+-- tool-call turn immediately followed by its responses (a stub if one was dropped, so
+-- counts always match), drops orphan tool responses, and floats any interleaved
+-- non-tool turn to AFTER the call/response block. No-op for well-formed sequences.
+CREATE OR REPLACE FUNCTION stewards.gemini_normalize_tool_turns(p_messages jsonb)
+RETURNS jsonb LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+    v_out  jsonb := '[]'::jsonb;
+    v_msg  jsonb;
+    v_role text;
+    v_call jsonb;
+    v_cid  text;
+    v_resp jsonb;
+    v_i    int;
+    v_n    int := COALESCE(jsonb_array_length(p_messages), 0);
+BEGIN
+    IF v_n = 0 THEN RETURN p_messages; END IF;
+    FOR v_i IN 0 .. v_n - 1 LOOP
+        v_msg  := p_messages -> v_i;
+        v_role := v_msg ->> 'role';
+        IF v_role = 'assistant'
+           AND jsonb_typeof(v_msg -> 'tool_calls') = 'array'
+           AND jsonb_array_length(v_msg -> 'tool_calls') > 0 THEN
+            -- emit the call turn, then ITS responses immediately (matching count + order)
+            v_out := v_out || jsonb_build_array(v_msg);
+            FOR v_call IN SELECT jsonb_array_elements(v_msg -> 'tool_calls') LOOP
+                v_cid := v_call ->> 'id';
+                SELECT m INTO v_resp
+                  FROM jsonb_array_elements(p_messages) m
+                 WHERE m ->> 'role' = 'tool' AND m ->> 'tool_call_id' = v_cid
+                 LIMIT 1;
+                IF v_resp IS NOT NULL THEN
+                    v_out := v_out || jsonb_build_array(v_resp);
+                ELSE
+                    -- a dropped response would leave calls > responses → 400; stub it
+                    v_out := v_out || jsonb_build_array(jsonb_build_object(
+                        'role', 'tool', 'tool_call_id', v_cid,
+                        'content', '[no tool response was recorded for this call]'));
+                END IF;
+            END LOOP;
+        ELSIF v_role = 'tool' THEN
+            -- already emitted right after its call (above), or orphan (no matching
+            -- call) → drop: Gemini rejects a functionResponse with no functionCall.
+            CONTINUE;
+        ELSE
+            v_out := v_out || jsonb_build_array(v_msg);  -- system/user/plain-assistant in place
+        END IF;
+    END LOOP;
+    RETURN v_out;
+END $$;
+COMMENT ON FUNCTION stewards.gemini_normalize_tool_turns(jsonb) IS
+'Repair functionCall/functionResponse adjacency for Gemini/Vertex (each call turn immediately followed by its matching responses; stub dropped responses; drop orphans; float interleaved text turns out). No-op for well-formed sequences / OpenAI providers.';
+
 CREATE OR REPLACE FUNCTION stewards.compose_messages(
     p_agent_family text,
     p_model        text,
@@ -326,6 +390,14 @@ BEGIN
     ), '[]'::jsonb)
     INTO v_history
     FROM decided;
+
+    -- Gemini/Vertex strictly require functionCall turns to be immediately followed by
+    -- their functionResponse turns (counts equal, nothing between); OpenAI-compat does
+    -- not. created_at ordering above can interleave async tool results + the soft-cap
+    -- notice. Normalize the history for google-family providers (no-op otherwise).
+    IF v_provider IN ('google_vertex', 'google_gemini') THEN
+        v_history := stewards.gemini_normalize_tool_turns(v_history);
+    END IF;
 
     v_result := jsonb_build_array(jsonb_build_object('role', 'system', 'content', v_system)) || v_history;
 
