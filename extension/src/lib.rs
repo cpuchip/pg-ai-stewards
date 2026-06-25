@@ -586,6 +586,16 @@ extension_sql_file!(
     requires = ["create_loreworks"],
 );
 
+// 56: Glass-Box trajectory evaluation (Google SDLC) — assemble_trajectory + the
+// generic trajectory-critic judge + critique_trajectory; AND the Loreworks
+// application: world_edge_list/world_edge_prune tools + the world-critic agent
+// that grounds a world's edges against its canon and prunes misreads (B's fix).
+extension_sql_file!(
+    "../56-trajectory-critic.sql",
+    name = "create_trajectory_critic",
+    requires = ["create_loreworks_build"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

@@ -2002,4 +2002,45 @@ BEGIN
     RAISE NOTICE 'OK 45: loreworks build — world tools (sql_fn dispatch, kind-validation, auto-endpoint) + world-build agent allow-list';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→55) is sound =='
+-- ---------------------------------------------------------------------
+-- 46. Trajectory critic — Glass-Box eval + the world-build edge-grounding critic
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_traj jsonb; v_world bigint; v_e1 bigint; v_res jsonb;
+BEGIN
+    -- generic Glass-Box pieces
+    ASSERT EXISTS (SELECT 1 FROM stewards.agents WHERE family='trajectory-critic'
+                   AND response_format->>'type'='json_object'),
+        'trajectory-critic judge exists (json_object output)';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='assemble_trajectory'),
+        'assemble_trajectory exists';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='critique_trajectory'),
+        'critique_trajectory exists';
+    v_traj := stewards.assemble_trajectory('no-such-session');
+    ASSERT (v_traj->>'tool_call_count')::int = 0 AND jsonb_array_length(v_traj->'steps') = 0,
+        'assemble_trajectory returns the empty-run shape';
+
+    -- world-build edge-grounding tools + the world-critic agent
+    ASSERT (SELECT count(*) FROM stewards.tool_defs
+            WHERE name IN ('world_edge_list','world_edge_prune') AND active) = 2,
+        'edge-grounding tools registered';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agents WHERE family='world-critic' AND active),
+        'world-critic agent exists';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms WHERE agent_family='world-critic' AND tool_pattern='*' AND action='deny')
+       AND EXISTS (SELECT 1 FROM stewards.agent_tool_perms WHERE agent_family='world-critic' AND tool_pattern='world_edge_prune' AND action='allow'),
+        'world-critic is an allow-list that may prune';
+
+    -- prune removes an edge end-to-end
+    v_world := stewards.world_upsert('critic-smoke', 'Critic Smoke', NULL, NULL, true);
+    PERFORM stewards.world_edge_upsert('critic-smoke', 'A', 'B', 'located_in');
+    SELECT edge_id INTO v_e1 FROM stewards.world_edges WHERE world_id = v_world LIMIT 1;
+    v_res := stewards.world_edge_prune_tool(jsonb_build_object('world_slug','critic-smoke','edge_ids', jsonb_build_array(v_e1)));
+    ASSERT v_res->>'ok' = 'true' AND (v_res->>'pruned')::int = 1, format('world_edge_prune_tool (got %s)', v_res);
+    ASSERT (SELECT edge_count FROM stewards.world_show('critic-smoke')) = 0, 'edge pruned to 0';
+    DELETE FROM stewards.worlds WHERE slug = 'critic-smoke';
+    RAISE NOTICE 'OK 46: trajectory critic — assemble_trajectory + Glass-Box judge + world-critic edge-grounding (list/prune)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→56) is sound =='
