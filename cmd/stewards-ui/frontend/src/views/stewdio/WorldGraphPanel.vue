@@ -11,7 +11,6 @@
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
 import ForceGraph3D from '3d-force-graph'
 import SpriteText from 'three-spritetext'
-import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js'
 import { api, type WorldGraphResp, type WorldNode, type WorldNodeDetail, type WorldBrief } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
 
@@ -21,7 +20,7 @@ const store = useStewdioStore()
 // node colour by kind — the six world kinds + `concept` (the auto-created edge
 // endpoint fallback from world_edge_upsert).
 const KIND_COLOR: Record<string, string> = {
-  character: '#f472b6', // pink
+  character: '#f472b6', // pink   — the saturated sphere colour
   place:     '#34d399', // emerald
   faction:   '#f59e0b', // amber
   item:      '#38bdf8', // sky
@@ -29,7 +28,20 @@ const KIND_COLOR: Record<string, string> = {
   lore:      '#e879f9', // fuchsia
   concept:   '#71717a', // zinc (auto-created endpoints)
 }
+// label text uses a lightened (-200) tint of the kind colour: bright enough to
+// read crisply on a dark plate without the bloom that used to wash it out, while
+// the sphere keeps the vivid saturated colour so the kind coding still pops.
+const KIND_LABEL: Record<string, string> = {
+  character: '#fbcfe8', // pink-200
+  place:     '#a7f3d0', // emerald-200
+  faction:   '#fde68a', // amber-200
+  item:      '#bae6fd', // sky-200
+  event:     '#ddd6fe', // violet-200
+  lore:      '#f5d0fe', // fuchsia-200
+  concept:   '#e4e4e7', // zinc-200
+}
 const kindColor = (k: string) => KIND_COLOR[k] ?? '#71717a'
+const labelColor = (k: string) => KIND_LABEL[k] ?? '#e4e4e7'
 
 const el = ref<HTMLDivElement>()
 const worlds = ref<WorldBrief[]>([])
@@ -193,20 +205,31 @@ onMounted(async () => {
     .showNavInfo(false)
     .nodeColor((n: WorldNode) => kindColor(n.kind))
     .nodeVal((n: WorldNode) => 1 + (n.degree ?? 0))
+    .nodeOpacity(0.92)                   // a touch of translucency for depth
+    .nodeResolution(18)                  // smooth spheres (default 8 = faceted)
     .nodeLabel((n: WorldNode) => n.name)
     .nodeThreeObject((n: WorldNode) => {
+      // crisp, high-contrast plate label — legibility is the job now that the
+      // bloom is gone. Lightened kind tint + glyph stroke + near-solid plate.
       const s = new SpriteText(n.name)
-      s.color = kindColor(n.kind)
-      s.textHeight = 4 + Math.min(6, n.degree ?? 0) // hubs get bigger labels
-      s.backgroundColor = 'rgba(9,9,11,0.55)'       // zinc-950 wash for contrast
-      s.padding = 1.5
+      s.color = labelColor(n.kind)
+      s.textHeight = 5 + Math.min(7, n.degree ?? 0) // hubs get bigger labels
+      s.fontWeight = '600'
+      s.strokeWidth = 0.6                            // dark outline → reads over edges
+      s.strokeColor = 'rgba(9,9,11,0.95)'
+      s.backgroundColor = 'rgba(9,9,11,0.82)'        // near-solid zinc-950 plate
+      s.borderWidth = 0.5
+      s.borderColor = kindColor(n.kind) + 'aa'       // subtle kind-coloured frame
+      s.borderRadius = 3
+      s.padding = 2
       return s
     })
     .nodeThreeObjectExtend(true)        // keep the sphere AND the label
     .linkLabel((l: { rel: string }) => l.rel)
-    .linkColor(() => 'rgba(113,113,122,0.5)')
+    .linkColor(() => 'rgba(113,113,122,0.38)') // dimmer → labels win the hierarchy
+    .linkWidth(0.5)
     .linkDirectionalParticles(2)
-    .linkDirectionalParticleWidth(1.5)
+    .linkDirectionalParticleWidth(1.2)
     .linkDirectionalParticleSpeed(0.006)
     .linkDirectionalArrowLength(3)
     .linkDirectionalArrowRelPos(1)
@@ -220,12 +243,13 @@ onMounted(async () => {
   graph.d3Force('link')?.distance(40).strength(1)
   graph.d3AlphaDecay(0.0228)
 
-  // bloom — glowing nodes against near-black read beautifully on a recording.
-  try {
-    graph.postProcessingComposer().addPass(
-      new UnrealBloomPass(undefined as never, 1.2, 0.6, 0.2),
-    )
-  } catch { /* postprocessing unavailable — bloom is cosmetic, continue */ }
+  // No bloom: the UnrealBloomPass washed out the SpriteText labels (they're
+  // sprites, so the pass smeared them) and Michael couldn't read the nodes.
+  // Legibility wins over the "constellation glow" — the look now comes from the
+  // smooth coloured spheres + crisp plate labels + directional edge particles
+  // against near-black, not from post-processing. (If a subtle glow is ever
+  // wanted on a recording, add it with a HIGH threshold so it never touches the
+  // labels: new UnrealBloomPass(undefined, 0.3, 0.4, 0.9).)
 
   // start alive: idle orbit until first interaction.
   const ctrl = graph.controls() as { autoRotate?: boolean; autoRotateSpeed?: number }
