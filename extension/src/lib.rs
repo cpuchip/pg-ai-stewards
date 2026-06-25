@@ -606,6 +606,16 @@ extension_sql_file!(
     requires = ["create_trajectory_critic"],
 );
 
+// 58: the deterministic floor under the world-critic — a lore verb vocabulary
+// (world_rel_kinds, kind-typed endpoints + inverses) + world_edge_audit that
+// flags unknown-verb / endpoint-kind-violation (the "Dwarves home_of Shire"
+// misread) / no-evidence with perfect recall. The world-critic now leads with it.
+extension_sql_file!(
+    "../58-world-edge-audit.sql",
+    name = "create_world_edge_audit",
+    requires = ["create_loreworks_chat"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

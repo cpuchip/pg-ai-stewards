@@ -2087,4 +2087,35 @@ BEGIN
     RAISE NOTICE 'OK 47: loreworks chat — hybrid search (lexical fallback) + lore_entity/neighbors/inject + loremaster allow-list';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→57) is sound =='
+-- ---------------------------------------------------------------------
+-- 48. World-edge-audit — deterministic structural flags (the critic's floor)
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_world bigint; v_audit jsonb; v_res jsonb;
+BEGIN
+    ASSERT (SELECT count(*) FROM stewards.world_rel_kinds) >= 15, 'lore relation vocabulary seeded';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='world_edge_audit' AND active), 'world_edge_audit tool registered';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms WHERE agent_family='world-critic' AND tool_pattern='world_edge_audit' AND action='allow'),
+        'world-critic granted the audit';
+
+    -- the "Dwarves home_of Shire" structural catch (home_of expects src=place)
+    v_world := stewards.world_upsert('audit-smoke','Audit Smoke',NULL,NULL,true);
+    PERFORM stewards.world_entity_upsert('audit-smoke','character','Dwarves','a folk');
+    PERFORM stewards.world_entity_upsert('audit-smoke','place','Shire','a green land');
+    PERFORM stewards.world_edge_upsert('audit-smoke','Dwarves','Shire','home_of','they pass through');
+    v_audit := stewards.world_edge_audit('audit-smoke');
+    ASSERT jsonb_array_length(v_audit) >= 1, 'audit flags the misread edge';
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v_audit) e
+                   WHERE e->>'reading' = 'Dwarves --home_of--> Shire'
+                     AND (e->'flags') ? 'src_kind_violation'),
+        'audit catches Dwarves home_of Shire as a src_kind_violation (the reversed/misread direction)';
+
+    -- the vocabulary tool lists verbs with direction semantics
+    v_res := stewards.world_vocabulary_tool('{}'::jsonb);
+    ASSERT jsonb_array_length(v_res) >= 15, 'world_vocabulary lists the lore verbs';
+
+    DELETE FROM stewards.worlds WHERE slug='audit-smoke';
+    RAISE NOTICE 'OK 48: world-edge-audit — lore vocabulary + deterministic structural flags (Dwarves home_of Shire = src_kind_violation)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→58) is sound =='
