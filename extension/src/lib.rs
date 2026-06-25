@@ -616,6 +616,17 @@ extension_sql_file!(
     requires = ["create_loreworks_chat"],
 );
 
+// 59: the self-improvement loop (dominion_in_council, ratified 2026-06-25) — the
+// trajectory critic's verdicts → recurring failure patterns → the agent-improver
+// proposes ONE scoped guidance clause → a DETERMINISTIC GATE (eval-gaming guard:
+// judges/critics/gates/base-prompts escalate to the human; only short additive
+// guidance to a worker agent auto-applies, trailed + reversible).
+extension_sql_file!(
+    "../59-self-improvement.sql",
+    name = "create_self_improvement",
+    requires = ["create_world_edge_audit"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
