@@ -114,7 +114,8 @@ func registerHeavyweightTools(srv *mcp.Server, pool *pgxpool.Pool) {
 			"Delegates to a cheap sub-agent that greps/reads in a repo-mounted sandbox (no write/exec/git). " +
 			"EXPENSIVE agentic search — for an exact string match use grep; use this for " +
 			"'how does X work / where is Y handled' questions where curated, cited synthesis is worth the delegation. " +
-			"Repo must be on the coder allow-list.",
+			"PUBLIC repos on github/gitlab/bitbucket/codeberg are clonable anonymously — pass a full https URL " +
+			"(e.g. https://github.com/facebook/react) or owner/repo. Only PRIVATE/owned repos need the coder allow-list.",
 	}, makeResearchCodebase(pool))
 
 	// R14 — codewright self-awareness: what repos can I research?
@@ -560,7 +561,7 @@ func makeReadCorpusParents(pool *pgxpool.Pool) func(
 // ---------------------------------------------------------------------
 
 type ResearchCodebaseInput struct {
-	Repo         string `json:"repo" jsonschema:"repository to research: full clone URL, owner/name, or bare name (bare resolves to github.com/cpuchip/<name>); must be on the coder allow-list"`
+	Repo         string `json:"repo" jsonschema:"repository to research: a full https clone URL (https://github.com/owner/repo) or owner/repo. PUBLIC repos clone anonymously; private/owned repos must be on the coder allow-list. A bare name with no owner is rejected (ambiguous)."`
 	Question     string `json:"question" jsonschema:"the code question to answer (e.g. 'how does the gateway authenticate a persona?')"`
 	CostCapMicro int64  `json:"cost_cap_micro,omitempty" jsonschema:"max micro-dollars (default 500000=$0.50)"`
 }
@@ -596,6 +597,13 @@ func makeResearchCodebase(pool *pgxpool.Pool) func(
 		}
 		if in.Question == "" {
 			return toolError("research_codebase: 'question' is required"), SpawnSubagentOutput{}, nil
+		}
+		// A bare name with no owner can't be resolved to a real public repo — refuse
+		// clearly rather than silently guessing an org (e.g. "react" → cpuchip/react
+		// → 404 on the public lane). Owner/repo or a full https URL only.
+		if r := strings.TrimSpace(in.Repo); !strings.Contains(r, "://") && !strings.Contains(r, "/") {
+			return toolError("research_codebase: %q is ambiguous — give 'owner/repo' or a full https URL "+
+				"(e.g. https://github.com/facebook/react)", in.Repo), SpawnSubagentOutput{}, nil
 		}
 
 		repoURL := normalizeRepoURL(in.Repo)
@@ -663,11 +671,12 @@ func makeListRepos() func(
 		}
 		out := ListReposOutput{
 			AllowPatterns: splitEnvList(allow),
-			Note: "These are the repositories you MAY research (pass a matching repo name or " +
-				"clone URL to research_codebase). Some repositories are private and excluded — you " +
-				"cannot see which, and you must NEVER name, list, guess at, or hint at any repo you " +
-				"don't have access to. If asked to research a repo that isn't allowed, research_codebase " +
-				"will refuse it; just say it's not in your scope, without naming or speculating.",
+			Note: "These are the PRIVATE/owned repositories you may research by name. PUBLIC repos are " +
+				"ALSO reachable — pass a full https URL (e.g. https://github.com/facebook/react) and " +
+				"research_codebase clones them anonymously, even if they are not in this list. Some private " +
+				"repositories are excluded — you cannot see which, and you must NEVER name, list, guess at, " +
+				"or hint at any repo you don't have access to. If research_codebase refuses a repo, just say " +
+				"it's not in your scope, without naming or speculating.",
 		}
 		return nil, out, nil
 	}

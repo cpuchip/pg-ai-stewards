@@ -67,13 +67,27 @@ the keys:
   **deny-list beats the allow-list** — broad allow patterns can't accidentally
   expose a private repo you've denied.
 
-## Repo allow-list — deny by default
+## Repo allow-list + the public-repo lane
 
-`CODER_REPO_ALLOWLIST` is **empty by default, which denies everything**: the
-coder cannot clone any repo until you explicitly list it (comma-separated
-substrings of the clone URL). `CODER_REPO_DENYLIST` hard-excludes repos
-regardless of the allow pattern. The clone helper refuses anything not allowed,
-*before* the token is ever used.
+Two clone paths, both gated bridge-side in `cmd/coder-mcp/sandbox` (`cloneMode`):
+
+- **Credentialed (token) path — deny by default.** `CODER_REPO_ALLOWLIST` is
+  empty by default, so no repo is cloned *with the bridge's `GITHUB_TOKEN`*
+  until you list it (comma-separated `host/owner[/repo]` prefixes, matched
+  **anchored to the host** — a pattern can't be smuggled into another host's
+  path). This is the path that can reach **private/owned** repos.
+- **Public (anonymous) lane — ON by default.** A PUBLIC repo on a known host
+  (`CODER_PUBLIC_HOSTS`, default github/gitlab/bitbucket/codeberg/sr.ht/gitea)
+  is clonable **anonymously** — a hermetic git environment (no token, no
+  system/global git config, no `~/.netrc`) so it offers *no* credential to the
+  host it dials, and the approved host can't be transparently rewritten. A
+  private repo therefore simply fails to clone (auth required): the lane is
+  self-enforcing **"public only."** This is what lets the Stewdio chat *research
+  and build off public repos* (the `/explore` flow). Disable it with
+  `CODER_PUBLIC_REPOS=false` (back to allow-list-only).
+
+`CODER_REPO_DENYLIST` hard-excludes repos (substring match) regardless of either
+path — **deny beats both.**
 
 ## Protected branches + commit hygiene
 
@@ -90,15 +104,21 @@ What the review found, and the residual decisions:
 
 1. **Docker-socket trust (accepted, documented).** The fundamental boundary
    above. Mitigation is operational (dedicated host), not technical, in v1.
-2. **Network egress defaults to ON per build (residual risk).** Builds need to
-   pull dependencies, so the code-* pipelines run sandboxes with egress on. A
-   malicious/compromised build script in an allow-listed repo could exfiltrate
-   over the network. **Turn it off globally** with `CODER_SANDBOX_NETWORK=off`
-   (or `none`/`false`) — that forces every sandbox to `--network=none`
-   regardless of what the pipeline requested. The repo allow-list also bounds
-   *what* can be cloned. **Recommendation:** for untrusted repos, set
-   `CODER_SANDBOX_NETWORK=off` and vendor dependencies; an egress allow-list
-   (proxy) is a possible future hardening.
+2. **Network egress defaults to ON per build (residual risk) + the public-repo
+   lane widens *what* can be cloned.** Builds need to pull dependencies, so the
+   code-* pipelines run sandboxes with egress on. A malicious/compromised build
+   script could exfiltrate over the network. With the public-repo lane ON (the
+   default), the EXEC-capable code-* flows can clone an arbitrary **public** repo
+   (six default hosts) and run its build with egress — so this residual risk is
+   no longer bounded to repos you deliberately allow-listed. (The **explore**
+   path — `research_codebase`/`/explore` — is exec-DENIED at the permission layer,
+   so it reads but never runs a build script; the exposure is the build/`dev`
+   flows, which an operator/steward initiates.) **Mitigations:** set
+   `CODER_PUBLIC_REPOS=false` to close the public lane entirely; and/or
+   `CODER_SANDBOX_NETWORK=off` (or `none`/`false`) to force every sandbox to
+   `--network=none` so a build can't exfiltrate. **Recommendation:** for
+   untrusted repos, set `CODER_SANDBOX_NETWORK=off` and vendor dependencies; an
+   egress allow-list (proxy) is a possible future hardening.
 3. **Writable rootfs (low risk, by design).** The sandbox rootfs is writable
    (the coder builds in `/tmp` and `/work`). A read-only rootfs + tmpfs is a
    possible future tightening; it's low-value given the container is ephemeral.
@@ -113,7 +133,11 @@ What the review found, and the residual decisions:
 - [ ] You are on a host you trust the substrate with at the docker-daemon level.
 - [ ] `coder-runtime:latest` is built (`docker build -f
       extension/coder-runtime.Dockerfile -t coder-runtime:latest extension`).
-- [ ] `CODER_REPO_ALLOWLIST` lists only the repos the coder should touch.
+- [ ] `CODER_REPO_ALLOWLIST` lists only the **private/owned** repos the coder may
+      clone *with credentials* (host-anchored `host/owner/` prefixes).
+- [ ] You've decided on the **public-repo lane**: ON by default (anonymous clone
+      of public repos on `CODER_PUBLIC_HOSTS`, for research/build-off). Set
+      `CODER_PUBLIC_REPOS=false` to disable it, or narrow `CODER_PUBLIC_HOSTS`.
 - [ ] `CODER_REPO_DENYLIST` lists any private/sensitive repos to hard-exclude.
 - [ ] `GITHUB_TOKEN` (if pushing) is scoped to the minimum repos/permissions.
 - [ ] You bring the stack up with `-f docker-compose.coder.yaml` only when you

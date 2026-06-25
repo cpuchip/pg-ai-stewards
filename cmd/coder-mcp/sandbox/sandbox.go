@@ -137,58 +137,212 @@ const (
 	worktreeRoot = "/worktrees"      // the bridge's mount point of worktreeVol
 )
 
-// repoAllowed reports whether repo is clonable: it must match
-// CODER_REPO_ALLOWLIST (comma-separated substrings) AND must NOT match
-// CODER_REPO_DENYLIST. The tool-layer guard — even with a token, the coder
-// only touches allow-listed repos. With no CODER_REPO_ALLOWLIST set, NOTHING
-// is allowed (deny-by-default): the operator opts in explicitly to the repos
-// the coder may clone.
-//
-// DENY BEATS ALLOW: the bridge clones with a GITHUB_TOKEN that can reach
-// PRIVATE repos too, so a broad allow substring like "github.com/your-org/"
-// would otherwise expose private repos. The denylist hard-excludes them
-// regardless of the allow pattern; add any private repos there.
-func repoAllowed(repo string) bool {
-	if deny := os.Getenv("CODER_REPO_DENYLIST"); deny != "" {
-		for _, pat := range strings.Split(deny, ",") {
-			if pat = strings.TrimSpace(pat); pat != "" && strings.Contains(repo, pat) {
-				return false
+// defaultPublicHosts — the git hosts the anonymous public-repo lane accepts.
+// Overridable via CODER_PUBLIC_HOSTS (comma-separated). Kept to well-known
+// public forges so "explore/build off a public repo" can't be pointed at an
+// arbitrary internal host.
+var defaultPublicHosts = []string{
+	"github.com", "gitlab.com", "bitbucket.org", "codeberg.org", "git.sr.ht", "gitea.com",
+}
+
+func publicHosts() []string {
+	if v := strings.TrimSpace(os.Getenv("CODER_PUBLIC_HOSTS")); v != "" {
+		var out []string
+		for _, h := range strings.Split(v, ",") {
+			if h = strings.TrimSpace(h); h != "" {
+				out = append(out, h)
 			}
 		}
+		return out
 	}
-	list := os.Getenv("CODER_REPO_ALLOWLIST")
-	if list == "" {
-		// No allow-list configured: deny everything. The coder cannot clone
-		// any repo until the operator sets CODER_REPO_ALLOWLIST.
+	return defaultPublicHosts
+}
+
+// publicLaneEnabled — the anonymous public-repo lane is ON by default (clone a
+// PUBLIC repo to research or build off, no credentials). Set CODER_PUBLIC_REPOS
+// to false/off/0/no to disable it (back to allow-list-only).
+func publicLaneEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("CODER_PUBLIC_REPOS"))) {
+	case "false", "off", "0", "no":
 		return false
 	}
-	for _, pat := range strings.Split(list, ",") {
-		if pat = strings.TrimSpace(pat); pat != "" && strings.Contains(repo, pat) {
+	return true
+}
+
+// repoHost extracts the host from an https URL (lowercased). "" for anything
+// that isn't a plain https URL — ssh/git/http forms never take the public lane.
+func repoHost(repo string) string {
+	const p = "https://"
+	if !strings.HasPrefix(repo, p) {
+		return ""
+	}
+	rest := repo[len(p):]
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		rest = rest[:i]
+	}
+	if strings.Contains(rest, "@") { // user@ / user:pass@ — creds-in-URL not allowed on the public lane
+		return ""
+	}
+	return strings.ToLower(rest)
+}
+
+// publicHostAllowed reports whether repo is an https URL to an allowed public host.
+func publicHostAllowed(repo string) bool {
+	h := repoHost(repo)
+	if h == "" {
+		return false
+	}
+	for _, allowed := range publicHosts() {
+		if h == strings.ToLower(allowed) {
 			return true
 		}
 	}
 	return false
 }
 
-// CloneRepo clones an allow-listed repo into the per-work_item worktree
+// hostRootedPath parses repo into a canonical "host/path" form for ANCHORED
+// allow-list matching, so an allow pattern like "github.com/cpuchip/" can never
+// be smuggled into the PATH of a different host (e.g. https://evil.com/github.com/
+// cpuchip/x) and thereby route an attacker URL onto the credentialed clone path.
+// Accepts https://host/path and scp-style [user@]host:path. Returns "" for a
+// creds-bearing https URL or anything it can't confidently parse — those never
+// match the allow-list.
+func hostRootedPath(repo string) string {
+	r := strings.TrimSpace(repo)
+	if strings.HasPrefix(r, "https://") {
+		h := repoHost(r) // "" if creds-in-url / malformed
+		if h == "" {
+			return ""
+		}
+		rest := r[len("https://"):]
+		if i := strings.IndexByte(rest, '/'); i >= 0 {
+			return h + "/" + strings.TrimLeft(rest[i+1:], "/")
+		}
+		return h
+	}
+	if strings.Contains(r, "://") {
+		return "" // some other scheme (http/git/ssh://) — not on the credentialed-anchor path
+	}
+	// scp-style git@host:owner/repo (ssh; key-auth, no creds-in-url leak)
+	if at := strings.IndexByte(r, '@'); at >= 0 {
+		r = r[at+1:]
+	}
+	if c := strings.IndexByte(r, ':'); c > 0 {
+		host := strings.ToLower(r[:c])
+		if host == "" || strings.Contains(host, "/") {
+			return ""
+		}
+		return host + "/" + strings.TrimLeft(r[c+1:], "/")
+	}
+	return ""
+}
+
+// cloneMode decides whether + HOW repo may be cloned. DENY beats everything.
+//
+//	""      refused
+//	"token" allow-listed (CODER_REPO_ALLOWLIST) — the credentialed path; the
+//	        bridge's GITHUB_TOKEN can reach private/owned repos here. Matched
+//	        ANCHORED to the host-rooted path (no substring smuggling).
+//	"anon"  the public lane — anonymous clone, NO credentials, known host only.
+//	        A private repo therefore fails to clone (auth required), which is
+//	        exactly the "public-only" guarantee — no prior knowledge of repo
+//	        visibility is needed.
+//
+// The token path stays deny-by-default (empty CODER_REPO_ALLOWLIST → no
+// credentialed clones). The anon path is independent and on by default.
+func cloneMode(repo string) string {
+	if deny := os.Getenv("CODER_REPO_DENYLIST"); deny != "" {
+		for _, pat := range strings.Split(deny, ",") {
+			if pat = strings.TrimSpace(pat); pat != "" && strings.Contains(repo, pat) {
+				return "" // deny beats all; substring is fine here — it only ever REFUSES
+			}
+		}
+	}
+	// allow-list (credentialed) — anchored to the host-rooted form so a pattern
+	// can't match inside another host's path (the token-exfil hole).
+	if rooted := hostRootedPath(repo); rooted != "" {
+		if list := os.Getenv("CODER_REPO_ALLOWLIST"); list != "" {
+			for _, pat := range strings.Split(list, ",") {
+				if pat = strings.TrimSpace(pat); pat != "" && strings.HasPrefix(rooted, pat) {
+					return "token"
+				}
+			}
+		}
+	}
+	if publicLaneEnabled() && publicHostAllowed(repo) {
+		return "anon"
+	}
+	return ""
+}
+
+// anonGitEnv builds a HERMETIC environment for an anonymous public clone: it
+// drops GITHUB_TOKEN/GH_TOKEN from the process and disables every ambient git
+// credential + URL-rewrite source — the system config (GIT_CONFIG_NOSYSTEM=1),
+// the global config (GIT_CONFIG_GLOBAL=/dev/null → no credential.helper /
+// url.insteadOf / http.extraHeader), and ~/.netrc + ~/.git-credentials (a HOME
+// that has neither). So a public clone can offer NO ambient credential to the
+// host it dials, and an approved host can't be transparently rewritten to
+// another. This is the real enforcement of "anonymous = public-only" — an empty
+// `-c credential.helper=` alone does NOT clear a system/global helper.
+func anonGitEnv() []string {
+	out := make([]string, 0, len(os.Environ())+4)
+	for _, kv := range os.Environ() {
+		switch {
+		case strings.HasPrefix(kv, "GITHUB_TOKEN="), strings.HasPrefix(kv, "GH_TOKEN="),
+			strings.HasPrefix(kv, "HOME="), strings.HasPrefix(kv, "GIT_CONFIG_GLOBAL="),
+			strings.HasPrefix(kv, "GIT_CONFIG_NOSYSTEM="), strings.HasPrefix(kv, "GIT_TERMINAL_PROMPT="):
+			continue // replaced below (or stripped)
+		}
+		out = append(out, kv)
+	}
+	return append(out,
+		"GIT_TERMINAL_PROMPT=0",      // never prompt (a private repo fails fast)
+		"GIT_CONFIG_NOSYSTEM=1",      // ignore /etc/gitconfig (system helper / insteadOf)
+		"GIT_CONFIG_GLOBAL=/dev/null", // ignore ~/.gitconfig (global helper / insteadOf / extraHeader)
+		"HOME=/nonexistent-stewards-anon", // no ~/.netrc / ~/.git-credentials
+	)
+}
+
+// repoAllowed reports whether repo is clonable by either path (kept for callers
+// that just need a yes/no).
+func repoAllowed(repo string) bool { return cloneMode(repo) != "" }
+
+// CloneRepo clones a clonable repo into the per-work_item worktree
 // (/worktrees/<wi> on the shared volume) and chowns it to the sandbox's coder
-// uid (1000). Runs in the bridge — the GitHub token (CV2.2) lives here, never
-// in the sandbox.
+// uid (1000). Runs in the bridge. For the credentialed ("token") path the
+// GitHub token (CV2.2) lives here, never in the sandbox; for the public ("anon")
+// path NO credential helper is used, so only public repos clone.
 func (m *Manager) CloneRepo(ctx context.Context, wi, repo, branch string) error {
-	if !repoAllowed(repo) {
-		return fmt.Errorf("repo %q not in the coder allow-list (CODER_REPO_ALLOWLIST)", repo)
+	mode := cloneMode(repo)
+	if mode == "" {
+		return fmt.Errorf("repo %q not clonable: not in CODER_REPO_ALLOWLIST and not a public repo on an allowed host "+
+			"(CODER_PUBLIC_HOSTS=%s; set CODER_PUBLIC_REPOS=false to disable the public lane)", repo, strings.Join(publicHosts(), ","))
 	}
 	dir := worktreeRoot + "/" + sanitize(wi)
 	_ = exec.CommandContext(ctx, "rm", "-rf", dir).Run() // fresh clone
-	args := []string{"clone", "--depth", "50"}
+	args := []string{}
+	if mode == "anon" {
+		// Public lane: never offer a credential helper to a public host, so a
+		// token can't leak and a PRIVATE repo simply fails (auth required).
+		args = append(args, "-c", "credential.helper=")
+	}
+	args = append(args, "clone", "--depth", "50")
 	if branch != "" {
 		args = append(args, "--branch", branch)
 	}
 	args = append(args, repo, dir)
 	cmd := exec.CommandContext(ctx, "git", args...)
+	if mode == "anon" {
+		// Hermetic env: no token, no system/global git config, no ~/.netrc — so the
+		// public clone offers NO ambient credential and the host can't be rewritten.
+		cmd.Env = anonGitEnv()
+	}
 	var buf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &buf, &buf
 	if err := cmd.Run(); err != nil {
+		if mode == "anon" {
+			return fmt.Errorf("clone %s (public/anonymous): %w — is it a PUBLIC repo? (private repos need CODER_REPO_ALLOWLIST + a token)\n%s", repo, err, buf.String())
+		}
 		return fmt.Errorf("clone %s: %w\n%s", repo, err, buf.String())
 	}
 	if out, err := exec.CommandContext(ctx, "chown", "-R", "1000:1000", dir).CombinedOutput(); err != nil {

@@ -425,6 +425,7 @@ const SLASH: Slash[] = [
   { cmd: '/generate', label: 'Generate a document (pdf/xlsx/pptx/zip)', insert: 'Generate a document: ' },
   { cmd: '/extract',  label: 'Extract the attached document',          insert: 'Extract the attached document, then ' },
   { cmd: '/import',   label: 'Import an attached archive as a corpus',  insert: 'Import the attached archive as a project corpus named ' },
+  { cmd: '/explore',  label: 'Explore a public repo (read-only, no DB import)', insert: 'Explore this public repository read-only (use research_codebase) and answer my question. REPO: ' },
   { cmd: '/export',   label: 'Export this conversation (markdown)',     action: () => {
       if (activeSession.value) window.open(`/api/chat/export?session_id=${encodeURIComponent(activeSession.value)}&format=md`, '_blank') } },
 ]

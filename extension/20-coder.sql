@@ -104,7 +104,7 @@ Your tools (use ONLY these):
 - coder_sandbox_stop — stop the sandbox when you are done.
 
 Method (be efficient — you have a bounded number of steps):
-1. Call coder_sandbox_start with repo = the exact repository reference from the task (a full clone URL, e.g. https://github.com/your-org/your-repo). Use the returned sandbox id in every later call. If it reports the repo is not allow-listed, say so and stop — do NOT fall back to git clone.
+1. Call coder_sandbox_start with repo = the exact repository reference from the task (a full clone URL, e.g. https://github.com/your-org/your-repo). PUBLIC repos clone anonymously; private/owned repos need the allow-list. Use the returned sandbox id in every later call. If it reports the repo cannot be cloned (a private repo not on the allow-list, or not a public repo), say so and stop — do NOT fall back to git clone.
 2. grep/glob to locate the code that answers the question; read the precise regions.
 3. Stop when you can answer with evidence — do NOT read the whole repo. Curate.
 4. Stop the sandbox.
@@ -214,7 +214,7 @@ INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, 
 VALUES
 ('research_codebase',
  'Explore a code repository (read-only) and return curated findings + file:line citations. Delegates to a cheap deepseek-v4-flash sub-agent that greps/reads in a repo-mounted sandbox. EXPENSIVE agentic search — for an exact string match use grep; use this for "how does X work / where is Y handled" questions where curated, cited synthesis is worth the delegation.',
- '{"type":"object","required":["repo","question"],"additionalProperties":false,"properties":{"repo":{"type":"string","description":"The repository to research (must be on the coder repo allow-list, e.g. your-repo)."},"question":{"type":"string","description":"The code question to answer (e.g. how does the gateway authenticate a persona?)."}}}'::jsonb,
+ '{"type":"object","required":["repo","question"],"additionalProperties":false,"properties":{"repo":{"type":"string","description":"The repository to research: a full https URL (https://github.com/owner/repo) or owner/repo. PUBLIC repos clone anonymously; private/owned repos must be on the coder allow-list. A bare name with no owner is rejected."},"question":{"type":"string","description":"The code question to answer (e.g. how does the gateway authenticate a persona?)."}}}'::jsonb,
  jsonb_build_object('kind','mcp_proxy','server','pg-ai-stewards','tool','research_codebase'),
  true)
 ON CONFLICT (name) DO UPDATE

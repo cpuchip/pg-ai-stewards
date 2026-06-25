@@ -557,6 +557,15 @@ extension_sql_file!(
     requires = ["create_rich_chat_hardening"],
 );
 
+// 53: explore public repos (RC-1) — grant research_codebase to work-item-chat
+// so the chat can clone + read a PUBLIC repo in a read-only sandbox (no DB
+// embedding). Pairs with the public-repo clone lane in cmd/coder-mcp/sandbox.
+extension_sql_file!(
+    "../53-explore-repos.sql",
+    name = "create_explore_repos",
+    requires = ["create_session_scoped_tools"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

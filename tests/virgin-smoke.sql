@@ -1903,4 +1903,18 @@ BEGIN
   RAISE NOTICE 'OK 42: tool_def_inject_session trigger stamps session-scoped tools (dispatcher owns session_id)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→52) is sound =='
+-- ---------------------------------------------------------------------
+-- 53 — explore public repos (RC-1): research_codebase is granted to the
+-- work-item-chat agent so the chat can clone + read a PUBLIC repo in a
+-- read-only sandbox (no DB embedding). The public-repo CLONE lane is
+-- enforced bridge-side (cmd/coder-mcp/sandbox cloneMode, Go-tested).
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+  ASSERT (SELECT action FROM stewards.agent_tool_perms
+           WHERE agent_family='work-item-chat' AND tool_pattern='research_codebase')='allow',
+     '53: work-item-chat must be granted research_codebase (explore a public repo)';
+  RAISE NOTICE 'OK 43: explore-repos — research_codebase granted to work-item-chat (read-only repo exploration, no embed)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→53) is sound =='
