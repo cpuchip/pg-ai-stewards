@@ -19,6 +19,26 @@ type member struct {
 	data []byte
 }
 
+// Member is the exported view of an unpacked archive entry, for callers that
+// WRITE the vetted members to disk (the coder "explore a dropped archive" path,
+// RC-2). Name is already cleaned + zip-slip-vetted by safeArchiveName.
+type Member struct {
+	Name string
+	Data []byte
+}
+
+// Unpack safely unpacks an archive into memory under the caps — the exported
+// wrapper over unpackArchive (same hardened zip-slip / bomb / symlink guards).
+// Callers writing the result to disk MUST still re-verify containment per write.
+func Unpack(ctx context.Context, data []byte, filename string, caps ArchiveCaps) ([]Member, []string, error) {
+	ms, warnings, err := unpackArchive(ctx, data, filename, caps)
+	out := make([]Member, 0, len(ms))
+	for _, m := range ms {
+		out = append(out, Member{Name: m.name, Data: m.data})
+	}
+	return out, warnings, err
+}
+
 // IsArchive reports whether data looks like an archive or a compressed file we
 // can unpack (zip / 7z / tar / rar / gz / bz2 / xz / …). Used by the router to
 // decide between the single-file pipeline and the archive pipeline.

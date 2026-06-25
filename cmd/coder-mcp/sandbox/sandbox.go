@@ -22,8 +22,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/cpuchip/pg-ai-stewards/internal/docextract"
 )
 
 // Network controls the sandbox's egress. Default is On (D-CC5: open,
@@ -61,7 +64,11 @@ func containerName(wi string) string {
 	return "coder-sb-" + sanitize(wi)
 }
 
-// sanitize keeps the work_item id docker-name-safe ([a-zA-Z0-9_.-]).
+// sanitize keeps the work_item id docker-name-safe ([a-zA-Z0-9_.-]) AND
+// component-safe: it strips leading dots so a sandbox id can never resolve to
+// "." or ".." — which would otherwise make /worktrees/<id> escape to /worktrees
+// or / for the destructive rm -rf / chown in CloneRepo / UnpackArchiveToWorktree.
+// (No real work_item id — a UUID — starts with a dot.)
 func sanitize(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -73,7 +80,7 @@ func sanitize(s string) string {
 			b.WriteByte('-')
 		}
 	}
-	out := b.String()
+	out := strings.TrimLeft(b.String(), ".") // "." / ".." / "...x" → safe; UUIDs unaffected
 	if out == "" {
 		out = "wi"
 	}
@@ -319,6 +326,9 @@ func (m *Manager) CloneRepo(ctx context.Context, wi, repo, branch string) error 
 			"(CODER_PUBLIC_HOSTS=%s; set CODER_PUBLIC_REPOS=false to disable the public lane)", repo, strings.Join(publicHosts(), ","))
 	}
 	dir := worktreeRoot + "/" + sanitize(wi)
+	if !worktreeChildOK(dir) { // strict-parent guard (defense in depth — never rm -rf outside /worktrees/<id>)
+		return fmt.Errorf("refusing unsafe worktree root %q for sandbox id %q", dir, wi)
+	}
 	_ = exec.CommandContext(ctx, "rm", "-rf", dir).Run() // fresh clone
 	args := []string{}
 	if mode == "anon" {
@@ -349,6 +359,104 @@ func (m *Manager) CloneRepo(ctx context.Context, wi, repo, branch string) error 
 		return fmt.Errorf("chown worktree %s: %w\n%s", dir, err, out)
 	}
 	return nil
+}
+
+// UnpackArchiveToWorktree safely unpacks an archive's members into the per-
+// work_item worktree (/worktrees/<wi>) for READ-ONLY exploration — the dropped-
+// archive sibling of CloneRepo (RC-2: explore a dropped code repo without
+// embedding it). docextract.Unpack applies the hardened zip-slip / bomb /
+// symlink guards in memory; writeMembers re-verifies containment per write
+// (defense in depth) so a crafted member name can never escape the worktree.
+// Runs bridge-side; the content is never executed (research_codebase is
+// read-only — no shell/exec/git). Returns the number of files written.
+func (m *Manager) UnpackArchiveToWorktree(ctx context.Context, wi, filename string, data []byte) (int, error) {
+	root := worktreeRoot + "/" + sanitize(wi)
+	// Strict-parent guard: never rm -rf / chown anything that isn't a direct child
+	// of /worktrees (defense in depth under the sanitize "." / ".." fix — the
+	// destructive ops must not escape even if an id somehow slipped through).
+	if !worktreeChildOK(root) {
+		return 0, fmt.Errorf("refusing unsafe worktree root %q for sandbox id %q", root, wi)
+	}
+	// The dropped source is already bounded to 25MB by the chat upload cap; keep
+	// the on-disk expansion tighter than the generic 200MB default.
+	caps := docextract.DefaultArchiveCaps()
+	caps.MaxTotalUncompressed = 128 << 20
+	members, _, err := docextract.Unpack(ctx, data, filename, caps)
+	if err != nil {
+		return 0, fmt.Errorf("unpack archive %q: %w", filename, err)
+	}
+	// Structural malware scan per member (no ClamAV DB bridge-side → structural
+	// only), mirroring the doc_extract quarantine floor: a member flagged malicious
+	// is skipped, not written. The explore sandbox is read-only (no exec), so this
+	// is defense in depth, not the sole barrier.
+	safe := members[:0]
+	for _, mem := range members {
+		if docextract.Scan(ctx, mem.Data, mem.Name, "").Verdict == docextract.VerdictMalicious {
+			continue
+		}
+		safe = append(safe, mem)
+	}
+	members = safe
+	_ = exec.CommandContext(ctx, "rm", "-rf", root).Run() // fresh
+	n, werr := writeMembers(root, members)
+	if werr != nil {
+		return n, werr
+	}
+	if n == 0 {
+		return 0, fmt.Errorf("archive %q had no usable members to explore", filename)
+	}
+	// chown to the sandbox coder uid so the mounted sandbox can read the tree.
+	if out, err := exec.CommandContext(ctx, "chown", "-R", "1000:1000", root).CombinedOutput(); err != nil {
+		return n, fmt.Errorf("chown worktree %s: %w\n%s", root, err, out)
+	}
+	return n, nil
+}
+
+// worktreeChildOK reports whether root is a direct, single-component child of
+// worktreeRoot, so a destructive rm -rf / chown can never escape /worktrees even
+// if a sandbox id slipped past sanitize. Defense in depth under the sanitize fix.
+func worktreeChildOK(root string) bool {
+	rel, err := filepath.Rel(worktreeRoot, root)
+	if err != nil {
+		return false
+	}
+	return rel != "." && rel != ".." && !strings.HasPrefix(rel, "..") && rel == filepath.Base(rel)
+}
+
+// writeMembers writes vetted archive members under root, re-verifying that each
+// resolved path stays WITHIN root before writing (belt-and-suspenders over
+// safeArchiveName). Anything that would escape is skipped, not written. Pure +
+// root-parameterized so the zip-slip guard is unit-testable without /worktrees.
+func writeMembers(root string, members []docextract.Member) (int, error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return 0, fmt.Errorf("mkdir worktree %s: %w", root, err)
+	}
+	n := 0
+	for _, mem := range members {
+		dest := filepath.Join(root, filepath.FromSlash(mem.Name))
+		if !withinDir(root, dest) {
+			continue // would escape the worktree — refuse (never reached given safeArchiveName, but enforced anyway)
+		}
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			continue
+		}
+		if err := os.WriteFile(dest, mem.Data, 0o644); err != nil {
+			continue
+		}
+		n++
+	}
+	return n, nil
+}
+
+// withinDir reports whether p resolves to a path inside root (no escape).
+func withinDir(root, p string) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	return rel != ".." &&
+		!strings.HasPrefix(rel, ".."+string(filepath.Separator)) &&
+		!filepath.IsAbs(rel)
 }
 
 // WorktreePath is the bridge-side path of wi's repo worktree.

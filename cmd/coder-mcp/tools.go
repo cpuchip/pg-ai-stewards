@@ -39,8 +39,9 @@ func registerCoderTools(srv *mcp.Server, mgr *sandbox.Manager, pool *pgxpool.Poo
 		Description: "Start an isolated, hardened sandbox container for a work_item " +
 			"(Go + Node/TS + Python + LSP). Idempotent — replaces any existing sandbox " +
 			"of the same id. Network is on by default (for go mod / npm / pip); set " +
-			"offline=true to cut egress. Call coder_sandbox_stop when done.",
-	}, makeSandboxStart(mgr))
+			"offline=true to cut egress. Call coder_sandbox_stop when done. Pass attachment_id " +
+			"to unpack a dropped ARCHIVE into /work instead of cloning (read-only exploration).",
+	}, makeSandboxStart(mgr, pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name:        "coder_sandbox_stop",
@@ -160,6 +161,9 @@ type startInput struct {
 	Offline bool   `json:"offline,omitempty" jsonschema:"Cut network egress (default false = on, for package pulls)"`
 	Repo    string `json:"repo,omitempty" jsonschema:"Optional git repo URL to clone into the sandbox (repo-mode, CV2.1). Must be allow-listed. The repo lands at /work."`
 	Branch  string `json:"branch,omitempty" jsonschema:"Optional branch to clone (repo-mode)"`
+	// RC-2: explore a DROPPED archive (no URL). The bridge unpacks the attachment
+	// (hardened: zip-slip / bomb / symlink guards) into /work for read-only review.
+	AttachmentID int64 `json:"attachment_id,omitempty" jsonschema:"Optional chat attachment id of a dropped ARCHIVE (zip/tar/…) to unpack into /work for read-only exploration — the no-URL sibling of repo."`
 }
 type startOutput struct {
 	Sandbox string `json:"sandbox"`
@@ -167,21 +171,61 @@ type startOutput struct {
 	Repo    string `json:"repo,omitempty"`
 }
 
-func makeSandboxStart(mgr *sandbox.Manager) func(context.Context, *mcp.CallToolRequest, startInput) (*mcp.CallToolResult, startOutput, error) {
+func makeSandboxStart(mgr *sandbox.Manager, pool *pgxpool.Pool) func(context.Context, *mcp.CallToolRequest, startInput) (*mcp.CallToolResult, startOutput, error) {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in startInput) (*mcp.CallToolResult, startOutput, error) {
 		if strings.TrimSpace(in.Sandbox) == "" {
 			return errResult("sandbox is required"), startOutput{}, nil
 		}
+		// Boundary guard: the sandbox id becomes a filesystem path component
+		// (/worktrees/<id>) AND a docker name — reject anything path-ish so a
+		// model-supplied id can never drive a traversal (defense in depth under
+		// sanitize's "." / ".." fix; also prevents lossy-collision corruption).
+		if strings.ContainsAny(in.Sandbox, "/\\ \t\n\r") || in.Sandbox == "." || in.Sandbox == ".." || strings.Contains(in.Sandbox, "..") {
+			return errResult("invalid sandbox id %q: must not contain path separators, whitespace, or '..'", in.Sandbox), startOutput{}, nil
+		}
 		// Reuse an existing sandbox rather than wiping it — the revise loop
-		// (verify-fail → re-implement) must keep the in-progress work.
+		// (verify-fail → re-implement) must keep the in-progress work. EXCEPT an
+		// attachment_id call: it must (re)unpack THIS archive, never silently
+		// re-explore a stale /work, so fall through to the unpack branch.
 		if exists, err := mgr.Exists(ctx, in.Sandbox); err != nil {
 			return errResult("%v", err), startOutput{}, nil
-		} else if exists {
+		} else if exists && in.AttachmentID == 0 {
 			return nil, startOutput{Sandbox: in.Sandbox, Network: "reused"}, nil
 		}
 		net := sandbox.NetOn
 		if in.Offline {
 			net = sandbox.NetOff
+		}
+		// RC-2: explore a DROPPED archive — unpack the attachment into /work (the
+		// no-URL sibling of repo-mode). The bridge reads the bytes + unpacks them
+		// (hardened guards); the sandbox mounts the result for read-only review.
+		if in.AttachmentID > 0 {
+			// Untrusted dropped code → NO egress, regardless of in.Offline. The
+			// unpack is bridge-side and exploration only reads/greps; forcing
+			// offline means even an exec-capable caller can't exfil from it.
+			net = sandbox.NetOff
+			var (
+				data     []byte
+				filename string
+			)
+			if err := pool.QueryRow(ctx,
+				`SELECT bytes, coalesce(filename,'archive') FROM stewards.chat_attachments WHERE id=$1`,
+				in.AttachmentID,
+			).Scan(&data, &filename); err != nil {
+				return errResult("attachment %d not found: %v", in.AttachmentID, err), startOutput{}, nil
+			}
+			if len(data) == 0 {
+				return errResult("attachment %d has no bytes", in.AttachmentID), startOutput{}, nil
+			}
+			n, uerr := mgr.UnpackArchiveToWorktree(ctx, in.Sandbox, filename, data)
+			if uerr != nil {
+				return errResult("%v", uerr), startOutput{}, nil
+			}
+			if err := mgr.Provision(ctx, in.Sandbox, net, true); err != nil {
+				return errResult("%v", err), startOutput{}, nil
+			}
+			return nil, startOutput{Sandbox: in.Sandbox, Network: string(net),
+				Repo: fmt.Sprintf("archive:%s (%d files)", filename, n)}, nil
 		}
 		// Repo-mode (CV2.1): the bridge clones the allow-listed repo into the
 		// shared worktree first (token never in the sandbox), then the sandbox

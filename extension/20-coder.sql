@@ -97,14 +97,14 @@ INSERT INTO stewards.pipelines (family, description, stages, sabbath_enabled, at
 INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature, steps) VALUES ('subagent-research-codebase','*','Subagent for research_codebase. Explores a repo in a read-only coder sandbox and returns curated findings + file:line citations.','primary','You are a code-research subagent. Given a REPOSITORY and a QUESTION, explore the repository''s source and answer the question with curated findings and exact file:line citations. You are READ-ONLY — you never modify, run, commit, or deploy anything.
 
 Your tools (use ONLY these):
-- coder_sandbox_start  — clones + mounts the repo into a fresh sandbox FOR you. Pass repo as the EXACT repository reference given in the task — it will be a full clone URL such as https://github.com/your-org/your-repo. Pass it verbatim; do not shorten it to a bare name and do not change the org. The sandbox does the clone; you never run git yourself. Capture the returned sandbox id and pass it to every later tool call.
+- coder_sandbox_start  — clones + mounts the repo into a fresh sandbox FOR you. Pass repo as the EXACT repository reference given in the task — it will be a full clone URL such as https://github.com/your-org/your-repo. Pass it verbatim; do not shorten it to a bare name and do not change the org. (If the task gives an attachment_id instead of a URL, pass attachment_id to coder_sandbox_start — the bridge unpacks that dropped archive into /work; do NOT pass a repo.) The sandbox does the clone/unpack; you never run git yourself. Capture the returned sandbox id and pass it to every later tool call.
 - coder_grep / coder_glob — find files and matches inside that sandbox (start here to locate the relevant code).
 - coder_read — read the specific files/regions the grep surfaced.
 - coder_lsp — optional: symbol/definition lookup for navigation.
 - coder_sandbox_stop — stop the sandbox when you are done.
 
 Method (be efficient — you have a bounded number of steps):
-1. Call coder_sandbox_start with repo = the exact repository reference from the task (a full clone URL, e.g. https://github.com/your-org/your-repo). PUBLIC repos clone anonymously; private/owned repos need the allow-list. Use the returned sandbox id in every later call. If it reports the repo cannot be cloned (a private repo not on the allow-list, or not a public repo), say so and stop — do NOT fall back to git clone.
+1. Call coder_sandbox_start with repo = the exact repository reference from the task (a full clone URL, e.g. https://github.com/your-org/your-repo), OR with attachment_id when the task gives a dropped archive instead of a URL. PUBLIC repos clone anonymously; private/owned repos need the allow-list. Use the returned sandbox id in every later call. If it reports the repo cannot be cloned (a private repo not on the allow-list, or not a public repo), say so and stop — do NOT fall back to git clone.
 2. grep/glob to locate the code that answers the question; read the precise regions.
 3. Stop when you can answer with evidence — do NOT read the whole repo. Curate.
 4. Stop the sandbox.
@@ -213,8 +213,8 @@ ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
 INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, active)
 VALUES
 ('research_codebase',
- 'Explore a code repository (read-only) and return curated findings + file:line citations. Delegates to a cheap deepseek-v4-flash sub-agent that greps/reads in a repo-mounted sandbox. EXPENSIVE agentic search — for an exact string match use grep; use this for "how does X work / where is Y handled" questions where curated, cited synthesis is worth the delegation.',
- '{"type":"object","required":["repo","question"],"additionalProperties":false,"properties":{"repo":{"type":"string","description":"The repository to research: a full https URL (https://github.com/owner/repo) or owner/repo. PUBLIC repos clone anonymously; private/owned repos must be on the coder allow-list. A bare name with no owner is rejected."},"question":{"type":"string","description":"The code question to answer (e.g. how does the gateway authenticate a persona?)."}}}'::jsonb,
+ 'Explore a code repository OR a dropped code archive (read-only) and return curated findings + file:line citations. Delegates to a cheap sub-agent that greps/reads in a sandbox. EXPENSIVE agentic search — for an exact string match use grep; use this for "how does X work / where is Y handled" questions where curated, cited synthesis is worth the delegation.',
+ '{"type":"object","required":["question"],"additionalProperties":false,"properties":{"repo":{"type":"string","description":"The repository to research: a full https URL (https://github.com/owner/repo) or owner/repo. PUBLIC repos clone anonymously; private/owned repos must be on the coder allow-list. Omit when passing attachment_id."},"attachment_id":{"type":"integer","description":"Instead of repo, the chat attachment id of a DROPPED archive (a zipped code repo) to unpack + explore read-only — the no-URL path."},"question":{"type":"string","description":"The code question to answer (e.g. how does the gateway authenticate a persona?)."}}}'::jsonb,
  jsonb_build_object('kind','mcp_proxy','server','pg-ai-stewards','tool','research_codebase'),
  true)
 ON CONFLICT (name) DO UPDATE

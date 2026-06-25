@@ -1,6 +1,12 @@
 package sandbox
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/cpuchip/pg-ai-stewards/internal/docextract"
+)
 
 // Deterministic oracle for the repo clone-policy gate (RC-1: the public-repo
 // lane). cloneMode is the security-critical decision — what may be cloned and
@@ -140,5 +146,100 @@ func TestAnonGitEnv(t *testing.T) {
 	}
 	if has("HOME=/home/bridge") {
 		t.Error("anonGitEnv must override HOME away from the bridge's (no ~/.netrc / ~/.git-credentials)")
+	}
+}
+
+// Oracle for the dropped-archive unpack (RC-2): a crafted member name must NEVER
+// write outside the worktree root. writeMembers re-verifies containment per write
+// (defense in depth over safeArchiveName), so we feed it MALICIOUS names directly.
+func TestWriteMembers_NoEscape(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "wt")
+	members := []docextract.Member{
+		{Name: "src/main.go", Data: []byte("package main")},
+		{Name: "README.md", Data: []byte("# hi")},
+		{Name: "../escape.txt", Data: []byte("evil")},        // parent traversal
+		{Name: "a/../../escape2.txt", Data: []byte("evil")},  // sneaky traversal
+		{Name: "deep/../../../escape3", Data: []byte("evil")}, // multi-level
+	}
+	n, err := writeMembers(root, members)
+	if err != nil {
+		t.Fatalf("writeMembers: %v", err)
+	}
+	// the safe members landed inside root
+	for _, ok := range []string{"src/main.go", "README.md"} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(ok))); err != nil {
+			t.Errorf("safe member %q should be written: %v", ok, err)
+		}
+	}
+	// NOTHING escaped to the parent (the worktree's sibling space)
+	parent := filepath.Dir(root)
+	entries, _ := os.ReadDir(parent)
+	for _, e := range entries {
+		if e.Name() != "wt" {
+			t.Errorf("ESCAPE: %q was written outside the worktree root", e.Name())
+		}
+	}
+	if n != 2 {
+		t.Errorf("expected exactly 2 safe members written, got %d", n)
+	}
+}
+
+func TestWithinDir(t *testing.T) {
+	root := filepath.FromSlash("/work/wt")
+	cases := map[string]bool{
+		"/work/wt/src/main.go": true,
+		"/work/wt":             true,  // root itself
+		"/work/wt/../escape":   false, // parent traversal
+		"/work/escape":         false, // outside
+		"/work/wtsibling":      false, // prefix-but-not-subdir (the naive HasPrefix trap)
+	}
+	for p, want := range cases {
+		if got := withinDir(root, filepath.FromSlash(p)); got != want {
+			t.Errorf("withinDir(%q, %q) = %v, want %v", root, p, got, want)
+		}
+	}
+}
+
+// The BLOCKER the QA found: a sandbox id of "." / ".." must NOT survive sanitize,
+// else /worktrees/<id> resolves to /worktrees or / for the destructive rm -rf.
+func TestSanitize_ComponentSafe(t *testing.T) {
+	cases := map[string]string{
+		".":                                    "wi",
+		"..":                                   "wi",
+		"...":                                  "wi",
+		"....//....//":                         "--....--", // leading dots stripped, separators dashed (no "." / "..")
+		"":                                     "wi",
+		"a/b":                                  "a-b",
+		"victim x":                             "victim-x",
+		"3b497b0c-a06e-43bd-8231-f095fa775e51": "3b497b0c-a06e-43bd-8231-f095fa775e51", // a real UUID is unchanged
+	}
+	for in, want := range cases {
+		if got := sanitize(in); got != want {
+			t.Errorf("sanitize(%q) = %q, want %q", in, got, want)
+		}
+		// invariant: a sanitized id is never "." or ".." (the catastrophic tokens)
+		if got := sanitize(in); got == "." || got == ".." {
+			t.Errorf("sanitize(%q) = %q — must never be a dot token", in, got)
+		}
+	}
+}
+
+// worktreeChildOK is the strict-parent guard: only a direct single-component
+// child of /worktrees may be rm -rf'd / chown'd.
+func TestWorktreeChildOK(t *testing.T) {
+	cases := map[string]bool{
+		worktreeRoot + "/abc":   true,
+		worktreeRoot + "/a-b_c": true,
+		worktreeRoot:            false, // the root itself — never
+		worktreeRoot + "/.":     false,
+		worktreeRoot + "/..":    false,
+		worktreeRoot + "/a/b":   false, // multi-component
+		"/etc":                  false,
+		"/":                     false,
+	}
+	for p, want := range cases {
+		if got := worktreeChildOK(p); got != want {
+			t.Errorf("worktreeChildOK(%q) = %v, want %v", p, got, want)
+		}
 	}
 }

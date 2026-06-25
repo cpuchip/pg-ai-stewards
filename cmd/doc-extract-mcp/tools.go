@@ -162,7 +162,7 @@ func extractAttachment(ctx context.Context, pool *pgxpool.Pool, run *runner.Runn
 		out.Summary = fmt.Sprintf("archive %q: %d member(s) unpacked + scanned (verdict %s). Surfaced as a folder tree in the conversation; use doc_import_corpus to persist it as a searchable project.",
 			filename, len(res.Files), verdict)
 		if out.RepoKind == "code" {
-			out.Summary += fmt.Sprintf(" ⚙ This looks like a CODE repo (%s) — for code, EXPLORING it read-only in a sandbox beats embedding every file. If it's a PUBLIC repo, ask for the clone URL and use research_codebase (the /explore path); doc_import_corpus only makes it keyword-searchable.", out.RepoReason)
+			out.Summary += fmt.Sprintf(" ⚙ This looks like a CODE repo (%s) — for code, EXPLORING it read-only in a sandbox beats embedding every file. Call research_codebase with attachment_id=%d (+ a question) to explore THIS dropped repo directly — no URL needed; doc_import_corpus would only make it keyword-searchable.", out.RepoReason, in.AttachmentID)
 		}
 
 	default:

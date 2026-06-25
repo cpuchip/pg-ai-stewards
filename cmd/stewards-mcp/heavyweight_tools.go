@@ -561,7 +561,8 @@ func makeReadCorpusParents(pool *pgxpool.Pool) func(
 // ---------------------------------------------------------------------
 
 type ResearchCodebaseInput struct {
-	Repo         string `json:"repo" jsonschema:"repository to research: a full https clone URL (https://github.com/owner/repo) or owner/repo. PUBLIC repos clone anonymously; private/owned repos must be on the coder allow-list. A bare name with no owner is rejected (ambiguous)."`
+	Repo         string `json:"repo,omitempty" jsonschema:"repository to research: a full https clone URL (https://github.com/owner/repo) or owner/repo. PUBLIC repos clone anonymously; private/owned repos must be on the coder allow-list. A bare name with no owner is rejected (ambiguous). Omit when passing attachment_id."`
+	AttachmentID int64  `json:"attachment_id,omitempty" jsonschema:"instead of a repo URL, the chat attachment id of a DROPPED archive (a zipped code repo) to unpack + explore read-only — the no-URL path for 'a code repo was attached'."`
 	Question     string `json:"question" jsonschema:"the code question to answer (e.g. 'how does the gateway authenticate a persona?')"`
 	CostCapMicro int64  `json:"cost_cap_micro,omitempty" jsonschema:"max micro-dollars (default 500000=$0.50)"`
 }
@@ -592,29 +593,43 @@ func makeResearchCodebase(pool *pgxpool.Pool) func(
 	return func(
 		ctx context.Context, req *mcp.CallToolRequest, in ResearchCodebaseInput,
 	) (*mcp.CallToolResult, SpawnSubagentOutput, error) {
-		if in.Repo == "" {
-			return toolError("research_codebase: 'repo' is required"), SpawnSubagentOutput{}, nil
-		}
 		if in.Question == "" {
 			return toolError("research_codebase: 'question' is required"), SpawnSubagentOutput{}, nil
 		}
-		// A bare name with no owner can't be resolved to a real public repo — refuse
-		// clearly rather than silently guessing an org (e.g. "react" → cpuchip/react
-		// → 404 on the public lane). Owner/repo or a full https URL only.
-		if r := strings.TrimSpace(in.Repo); !strings.Contains(r, "://") && !strings.Contains(r, "/") {
-			return toolError("research_codebase: %q is ambiguous — give 'owner/repo' or a full https URL "+
-				"(e.g. https://github.com/facebook/react)", in.Repo), SpawnSubagentOutput{}, nil
+		var binding string
+		if in.AttachmentID > 0 {
+			// Dropped-archive mode (RC-2): no URL — the bridge unpacks the attachment
+			// into the sandbox. The subagent must call coder_sandbox_start with
+			// attachment_id (not repo).
+			binding = fmt.Sprintf(
+				"DROPPED ARCHIVE attachment_id: %d\n\nQUESTION: %s\n\n"+
+					"Research this archive read-only per your method: call coder_sandbox_start with "+
+					"attachment_id=%d (the bridge unpacks it into /work — do NOT pass a repo URL), then "+
+					"grep/glob to locate, read the precise regions, stop the sandbox. Answer in your "+
+					"required markdown format (Summary / Findings / Citations / Confidence / Caveats).",
+				in.AttachmentID, in.Question, in.AttachmentID,
+			)
+		} else {
+			if in.Repo == "" {
+				return toolError("research_codebase: provide 'repo' (a public URL or owner/repo) or 'attachment_id' (a dropped archive)"), SpawnSubagentOutput{}, nil
+			}
+			// A bare name with no owner can't be resolved to a real public repo — refuse
+			// clearly rather than silently guessing an org (e.g. "react" → cpuchip/react
+			// → 404 on the public lane). Owner/repo or a full https URL only.
+			if r := strings.TrimSpace(in.Repo); !strings.Contains(r, "://") && !strings.Contains(r, "/") {
+				return toolError("research_codebase: %q is ambiguous — give 'owner/repo' or a full https URL "+
+					"(e.g. https://github.com/facebook/react)", in.Repo), SpawnSubagentOutput{}, nil
+			}
+			repoURL := normalizeRepoURL(in.Repo)
+			binding = fmt.Sprintf(
+				"REPOSITORY: %s\n\nQUESTION: %s\n\n"+
+					"Research the repository read-only per your method (coder_sandbox_start with the exact "+
+					"REPOSITORY URL above, grep/glob to locate, read the precise regions, stop the sandbox) "+
+					"and answer in your required markdown format "+
+					"(Summary / Findings / Citations / Confidence / Caveats).",
+				repoURL, in.Question,
+			)
 		}
-
-		repoURL := normalizeRepoURL(in.Repo)
-		binding := fmt.Sprintf(
-			"REPOSITORY: %s\n\nQUESTION: %s\n\n"+
-				"Research the repository read-only per your method (coder_sandbox_start with the exact "+
-				"REPOSITORY URL above, grep/glob to locate, read the precise regions, stop the sandbox) "+
-				"and answer in your required markdown format "+
-				"(Summary / Findings / Citations / Confidence / Caveats).",
-			repoURL, in.Question,
-		)
 
 		costCap := in.CostCapMicro
 		if costCap == 0 {
