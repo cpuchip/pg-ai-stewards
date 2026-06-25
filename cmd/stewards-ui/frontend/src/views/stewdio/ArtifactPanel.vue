@@ -3,7 +3,7 @@
 // markdown; a work item shows its plan as a live checklist (Devin's "plan =
 // progress": stages light up as they complete), polled while it runs. (P1 doc +
 // P2 live plan=progress)
-import { ref, watch, onUnmounted } from 'vue'
+import { ref, computed, watch, onUnmounted } from 'vue'
 import MarkdownIt from 'markdown-it'
 import { api, type StudyDetail, type WorkItemDetail } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
@@ -12,8 +12,39 @@ import { makeLinkClick } from './useDocLinks'
 defineOptions({ inheritAttrs: false })
 const store = useStewdioStore()
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
+// O2: give headings stable ids so intra-doc `#anchor` links can scroll to them.
+const slugify = (s: string) =>
+  s.toLowerCase().trim().replace(/[^\w\s-]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-')
+md.renderer.rules.heading_open = (tokens, idx, options, _env, self) => {
+  const inline = tokens[idx + 1]
+  const text = inline && inline.type === 'inline' ? inline.content : ''
+  const id = slugify(text)
+  if (id) tokens[idx]?.attrSet('id', id)
+  return self.renderToken(tokens, idx, options)
+}
 // Arc A: clicking a link in the doc body navigates (internal) or opens (external).
 const onLink = makeLinkClick(store)
+
+// Object viewer — "paint the source back" (O1). A digested YouTube video gets its
+// player painted above the notes (the cpuchip.net move). The id is read from the
+// doc: explicit frontmatter wins, then a youtube URL in known fields, then the
+// slug itself (the digester encodes it: `yt-<id>-…` / `videoyt-<id>-…`).
+function ytId(d: StudyDetail): string | null {
+  const fm = (d.frontmatter || {}) as Record<string, unknown>
+  const explicit = String(fm.video_id ?? fm.youtube_id ?? '')
+  if (/^[A-Za-z0-9_-]{11}$/.test(explicit)) return explicit
+  const urlish = String(fm.url ?? fm.source_url ?? fm.source ?? '')
+  const m = urlish.match(/(?:youtu\.be\/|[?&]v=|embed\/)([A-Za-z0-9_-]{11})/)
+  if (m?.[1]) return m[1]
+  const sm = d.slug.match(/^(?:video)?yt-([A-Za-z0-9_-]{11})(?:-|$)/)
+  return sm?.[1] ?? null
+}
+const videoId = computed(() => {
+  const d = doc.value
+  if (!d) return null
+  if (d.kind === 'video' || /^(?:video)?yt-[A-Za-z0-9_-]{11}/.test(d.slug)) return ytId(d)
+  return null
+})
 
 const loading = ref(false)
 const err = ref('')
@@ -70,6 +101,24 @@ onUnmounted(stopPoll)
            title="download this document as markdown" download>⬇ .md</a>
       </div>
       <div class="text-zinc-600 text-xs mb-4">{{ doc.kind }} · {{ doc.slug }}</div>
+
+      <!-- O1: paint the source back. A digested YouTube video shows its player
+           above the notes — watch the source without leaving the cockpit. -->
+      <div v-if="videoId" class="mb-4">
+        <div class="relative w-full overflow-hidden rounded-lg border border-zinc-800 bg-black" style="aspect-ratio: 16 / 9;">
+          <iframe
+            class="absolute inset-0 h-full w-full"
+            :src="`https://www.youtube-nocookie.com/embed/${videoId}`"
+            title="source video"
+            frameborder="0"
+            allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen></iframe>
+        </div>
+        <a :href="`https://youtu.be/${videoId}`" target="_blank" rel="noopener noreferrer"
+           class="text-[11px] text-zinc-500 hover:text-sky-400">▶ open on YouTube</a>
+      </div>
+
       <div class="prose prose-invert prose-sm max-w-none" v-html="md.render(doc.body || '')" @click="onLink"></div>
     </div>
 
