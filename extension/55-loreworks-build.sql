@@ -116,6 +116,10 @@ Rules of the watch:
   from general knowledge — if it isn't in this canon, it isn't in this world.
 - Prefer a few well-grounded, well-connected entities over a sprawl of thin ones.
 - De-duplicate: the same character under two names is ONE entity with aliases, not two.
+- Record each entity and each relationship exactly ONCE. NEVER re-issue upserts you have already made
+  in a previous step — it wastes the run and adds nothing (the tools are idempotent). If you are unsure
+  what you have already recorded, call world_entity_search or world_edge_list to check.
+- When the canon's structure is captured, STOP and write your journal. Do not pad with repeat work.
 
 Your final chat reply is a SHORT journal: how many entities and edges you built, the spine of the
 world, and what a deeper pass should chase next. It is not the world itself — the world lives in the
