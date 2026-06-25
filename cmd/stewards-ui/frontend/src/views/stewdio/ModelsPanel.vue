@@ -113,8 +113,8 @@ function ago(ts?: string): string {
       <div class="text-[10px] uppercase tracking-wide text-zinc-600 mb-1">Live dispatches</div>
       <div v-if="!(activity?.recent || []).length" class="text-zinc-600 text-xs">no recent model calls</div>
       <div v-for="(d, i) in (activity?.recent || [])" :key="i" class="flex items-center gap-2 text-[11px] py-0.5">
-        <span class="text-zinc-300 font-mono truncate max-w-[42%]" :title="d.model">{{ d.model }}</span>
-        <span class="text-zinc-600 truncate" :title="d.slug || d.pipeline">{{ d.pipeline || d.slug || '—' }}</span>
+        <span class="text-zinc-300 font-mono truncate max-w-[38%]" :title="d.model">{{ d.model }}</span>
+        <span class="text-zinc-500 truncate" :title="d.label + (d.session ? '  ·  ' + d.session : '')">{{ d.label || '—' }}</span>
         <span class="ml-auto text-emerald-600/90 tabular-nums" title="input tokens">↑{{ k(d.in_tokens) }}</span>
         <span class="text-sky-500/90 tabular-nums" title="output tokens">↓{{ k(d.out_tokens) }}</span>
         <span class="text-zinc-700 tabular-nums w-8 text-right">{{ ago(d.at) }}</span>

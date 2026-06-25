@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -74,10 +75,39 @@ type recentDispatch struct {
 	Model     string     `json:"model"`
 	Pipeline  string     `json:"pipeline"`
 	Slug      string     `json:"slug"`
+	Session   string     `json:"session,omitempty"` // the chat/build session, when not a work-item
+	Label     string     `json:"label"`             // human "what was this call for"
 	InTokens  int64      `json:"in_tokens"`
 	OutTokens int64      `json:"out_tokens"`
 	MicroUSD  int64      `json:"micro_usd"`
 	At        *time.Time `json:"at,omitempty"`
+}
+
+// dispatchLabel turns a cost_event's work-item slug / session id into a short
+// human "what was this call for" — so the activity feed reads as work, not just
+// a model name. Work-item slug wins; otherwise the session id is decoded by its
+// prefix (the dispatcher's deterministic naming).
+func dispatchLabel(pipeline, slug, session string) string {
+	if slug != "" {
+		if pipeline != "" {
+			return pipeline + " · " + slug
+		}
+		return slug
+	}
+	s := strings.TrimSpace(session)
+	if s == "" {
+		return "—"
+	}
+	switch {
+	case strings.HasPrefix(s, "world-build-"):
+		return "🌍 world build: " + strings.TrimPrefix(s, "world-build-")
+	case strings.HasPrefix(s, "stewdio-"):
+		return "💬 chat: " + strings.TrimPrefix(s, "stewdio-")
+	case strings.HasPrefix(s, "watchman-"):
+		return "👁 watchman"
+	default:
+		return s
+	}
 }
 
 // providerRollup is a 24h provider+model usage summary.
@@ -168,6 +198,7 @@ func (d *Deps) activityHandler(w http.ResponseWriter, r *http.Request) {
 			        ce.model,
 			        coalesce(wi.pipeline_family, '') AS pipeline,
 			        coalesce(wi.slug, '')            AS slug,
+			        coalesce(ce.session_id, '')      AS session,
 			        coalesce(ce.input_tokens, 0),
 			        coalesce(ce.output_tokens, 0),
 			        coalesce(ce.micro_dollars, 0),
@@ -183,8 +214,9 @@ func (d *Deps) activityHandler(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var rd recentDispatch
-			if err := rows.Scan(&rd.Provider, &rd.Model, &rd.Pipeline, &rd.Slug,
+			if err := rows.Scan(&rd.Provider, &rd.Model, &rd.Pipeline, &rd.Slug, &rd.Session,
 				&rd.InTokens, &rd.OutTokens, &rd.MicroUSD, &rd.At); err == nil {
+				rd.Label = dispatchLabel(rd.Pipeline, rd.Slug, rd.Session)
 				resp.Recent = append(resp.Recent, rd)
 			}
 		}

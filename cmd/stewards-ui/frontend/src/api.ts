@@ -140,6 +140,8 @@ export type ActivityRecent = {
   model: string
   pipeline: string
   slug: string
+  session?: string
+  label: string
   in_tokens: number
   out_tokens: number
   micro_usd: number

@@ -39,6 +39,20 @@ const working = ref(false)    // authoritative — session-status says the engin
 const cancelling = ref(false) // user hit ■ stop — hold the badge OFF until the queue drains
 const err = ref('')
 const activeSession = ref('')
+// Details: a copyable session id (paste it back to ground a follow-up or debug a stall).
+const copiedSession = ref(false)
+const shortSession = computed(() => {
+  const s = activeSession.value || ''
+  return s.length > 20 ? '…' + s.slice(-18) : s
+})
+async function copySession() {
+  if (!activeSession.value) return
+  try {
+    await navigator.clipboard.writeText(activeSession.value)
+    copiedSession.value = true
+    setTimeout(() => { copiedSession.value = false }, 1200)
+  } catch { /* clipboard blocked — title still shows the full id to copy by hand */ }
+}
 const sessions = ref<ChatSessionRow[]>([])
 const showSessions = ref(false)
 const log = ref<HTMLElement | null>(null)
@@ -468,6 +482,12 @@ function onKey(e: KeyboardEvent) {
               @click="showSessions = !showSessions">💬<span class="text-zinc-600 ml-0.5">{{ sessions.length || '' }}</span></button>
       <a v-if="activeSession && messages.length" :href="`/api/chat/export?session_id=${encodeURIComponent(activeSession)}&format=md`"
          class="text-zinc-500 hover:text-sky-300" title="export this conversation as markdown" download>⬇</a>
+      <!-- Details: the session id, click to copy (paste it to ground a follow-up / debug a stall) -->
+      <button v-if="store.dev && activeSession" @click="copySession"
+              class="text-zinc-500 hover:text-sky-300 font-mono text-[10px] flex items-center gap-0.5 max-w-[28%]"
+              :title="`chat session id — click to copy:\n${activeSession}`">
+        🆔 <span class="truncate">{{ copiedSession ? 'copied ✓' : shortSession }}</span>
+      </button>
       <!-- b1: grounding selector, always available. The default ('') follows the
            doc/work item selected on the left; pick a project or Everything to
            override (so a new chat can be grounded in a project even with a doc open). -->
