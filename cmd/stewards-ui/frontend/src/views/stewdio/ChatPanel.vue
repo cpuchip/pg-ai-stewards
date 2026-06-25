@@ -34,7 +34,9 @@ const chatRef = computed(() => {
 type Msg = { id: number; role: string; content: string; finish_reason?: string; tool_calls: number; tools?: string[]; images?: string[] }
 const messages = ref<Msg[]>([])
 const input = ref('')
-const pending = ref(false)
+const pending = ref(false)    // optimistic — I just sent; resolved by the authority below
+const working = ref(false)    // authoritative — session-status says the engine is mid-work
+const cancelling = ref(false) // user hit ■ stop — hold the badge OFF until the queue drains
 const err = ref('')
 const activeSession = ref('')
 const sessions = ref<ChatSessionRow[]>([])
@@ -137,6 +139,9 @@ function fmtSize(n: number): string {
 // open; the cadence speeds up while anything is in flight.
 const workItems = ref<ChatWorkItemCard[]>([])
 let wiTimer: ReturnType<typeof setTimeout> | null = null
+let wiOnce: ReturnType<typeof setTimeout> | null = null // the one-shot post-send refresh
+let lastActive = 0  // ms timestamp of the last tick that saw in-flight work (drives the cool-down)
+let alive = true    // false once the panel unmounts — stops the recursive poller dead
 const wiInFlight = (w: ChatWorkItemCard) => w.status === 'pending' || w.status === 'running' || w.status === 'in_progress'
 function wiIcon(w: ChatWorkItemCard) { return w.status === 'completed' ? '✅' : w.status === 'failed' ? '⚠️' : '⏳' }
 function wiStatusCls(w: ChatWorkItemCard) {
@@ -159,35 +164,91 @@ function stagePillCls(w: ChatWorkItemCard, i: number): string {
 }
 async function pollWorkItems() {
   const sid = activeSession.value
-  if (!sid) { workItems.value = []; return }
-  try { workItems.value = (await api.chatWorkItems(sid)).work_items || [] } catch { /* keep last */ }
+  if (!alive || !sid) { if (!sid) { workItems.value = []; working.value = false } return }
+  // capture-session guard: a poll started for session A must NOT write its
+  // results into the refs after the user has switched to session B (the awaited
+  // fetch can't be cancelled, so we bail on resolve instead).
+  try {
+    const wi = (await api.chatWorkItems(sid)).work_items || []
+    if (!alive || activeSession.value !== sid) return
+    workItems.value = wi
+  } catch { /* keep last */ }
+  // authoritative "is the engine still working?" — self-heals the spinner. It
+  // RAISES whenever the session has an in-flight work_queue row (including a
+  // continuation that lands AFTER a reply has streamed) and CLEARS when the
+  // queue drains, independent of the fragile SSE terminal-message signal. This
+  // is the fix for "got a reply, then nothing happened and no thinking badge".
+  try {
+    const st = await api.chatSessionStatus(sid)
+    if (!alive || activeSession.value !== sid) return
+    if (cancelling.value) {
+      // user hit ■ stop: keep the badge OFF even while a running row drains; the
+      // authority would otherwise re-raise `working` on the very next tick.
+      working.value = false
+      if (!st.pending) cancelling.value = false
+      return
+    }
+    working.value = st.pending
+    if (!st.pending) pending.value = false // the authority resolved the optimistic flag
+  } catch { /* keep last */ }
 }
 function scheduleWorkItems() {
   if (wiTimer) { clearTimeout(wiTimer); wiTimer = null }
-  const active = pending.value || workItems.value.some(wiInFlight)
-  wiTimer = setTimeout(async () => { await pollWorkItems(); scheduleWorkItems() }, active ? 4000 : 20000)
+  if (!alive) return
+  const active = pending.value || working.value || workItems.value.some(wiInFlight)
+  if (active) lastActive = Date.now()
+  // Cool-down: keep polling briskly for ~45s after the last activity, so a
+  // continuation enqueued a few seconds after a reply is caught within ~3s
+  // instead of up to the idle interval (the "≤15s dead air" the QA found).
+  const warm = active || (Date.now() - lastActive) < 45000
+  wiTimer = setTimeout(async () => { await pollWorkItems(); scheduleWorkItems() }, warm ? 3000 : 15000)
 }
 function refreshWork() { pollWorkItems().then(scheduleWorkItems) }
+// force a near-immediate poll (after a send / a reply landing) so the badge picks
+// up a just-enqueued continuation without waiting for the next scheduled tick.
+function pollSoon() {
+  if (!alive) return
+  if (wiTimer) { clearTimeout(wiTimer); wiTimer = null }
+  lastActive = Date.now()
+  wiTimer = setTimeout(async () => { await pollWorkItems(); scheduleWorkItems() }, 400)
+}
 
-// Stale-spinner guard: while "thinking", poll whether the session still has any
-// in-flight work_queue row. A loop that stops on steps_exhausted/truncation
-// leaves its last assistant message at finish_reason='tool_calls' — the SSE
-// stream never delivers a terminal message, so the spinner would stick forever.
-let pendingPoll: ReturnType<typeof setInterval> | null = null
-watch(pending, (now) => {
-  if (pendingPoll) { clearInterval(pendingPoll); pendingPoll = null }
-  if (!now) return
-  pendingPoll = setInterval(async () => {
-    const sid = activeSession.value
-    if (!sid) return
-    try { if (!(await api.chatSessionStatus(sid)).pending) pending.value = false } catch { /* ignore */ }
-  }, 5000)
+// the live "is it doing something" surface. busy = optimistic send OR the
+// authority OR a spawned task still walking its pipeline. currentActivity reads
+// the most-recent assistant turn's tool calls so the badge names what it's doing
+// ("working · searching docs") instead of dead air.
+const busy = computed(() => pending.value || working.value || workItems.value.some(wiInFlight))
+const currentActivity = computed<string[]>(() => {
+  for (let i = messages.value.length - 1; i >= 0; i--) {
+    const m = messages.value[i]
+    if (m && m.role === 'assistant' && m.tools && m.tools.length) return m.tools
+  }
+  return []
 })
+// tool name → a human verb for the live badge (kept terse; falls back to the raw name).
+const ACTIVITY_VERB: Record<string, string> = {
+  doc_search: 'searching docs', doc_get: 'reading a doc', doc_similar: 'finding related docs',
+  doc_citations: 'pulling citations', book_search: 'searching the book',
+  read_corpus_parents: 'reading the corpus', result_search: 'searching results', result_read: 'reading a result',
+  investigate_session: 'reviewing the session', investigate_doc: 'investigating the doc',
+  context_search: 'searching context', expand_message: 'expanding context',
+  work_item_show: 'checking the work item', work_item_list: 'listing work items',
+  doc_extract: 'extracting the document', doc_import_corpus: 'importing the corpus',
+  generate_image: 'generating an image', start_task: 'delegating a task',
+}
+const activityVerb = (t: string) => ACTIVITY_VERB[t] || t
+
+// (The stale-spinner guard is now the unified poller above: pollWorkItems reads
+// session-status every tick and sets `working` authoritatively, so a loop that
+// stops on steps_exhausted/truncation — leaving its last assistant message at
+// finish_reason='tool_calls' with no terminal frame — still clears the badge.)
 
 function closeStream() {
   if (es) { es.close(); es = null }
   if (wiTimer) { clearTimeout(wiTimer); wiTimer = null }
-  if (pendingPoll) { clearInterval(pendingPoll); pendingPoll = null }
+  if (wiOnce) { clearTimeout(wiOnce); wiOnce = null }
+  working.value = false
+  cancelling.value = false
 }
 
 function openStream(sid: string) {
@@ -204,7 +265,10 @@ function openStream(sid: string) {
     if (m.role === 'user') messages.value = messages.value.filter(x => !(x.id < 0 && x.content === m.content))
     messages.value.push(m)
     if (m.role === 'assistant' && m.content) fetchArtifactMeta(artifactIds(m.content))
-    if (m.role === 'assistant' && m.finish_reason && m.finish_reason !== 'tool_calls') pending.value = false
+    if (m.role === 'assistant' && m.finish_reason && m.finish_reason !== 'tool_calls') {
+      pending.value = false
+      pollSoon() // a continuation may be enqueued right after this reply — start watching now
+    }
     nextTick(() => { if (log.value) log.value.scrollTop = log.value.scrollHeight })
   }
   es.onerror = () => { /* EventSource auto-reconnects; nothing to do */ }
@@ -263,7 +327,7 @@ watch(chatRef, async (ref_) => {
   openStream(activeSession.value)
 }, { immediate: true })
 
-onUnmounted(closeStream)
+onUnmounted(() => { alive = false; closeStream() })
 
 function switchSession(sid: string) {
   if (sid === activeSession.value) { showSessions.value = false; return }
@@ -291,7 +355,7 @@ async function send() {
   const ref_ = chatRef.value
   // allow a media-only turn (a question is optional when a file is attached)
   if ((!text && toUpload.length === 0) || !ref_) return
-  input.value = ''; err.value = ''; pending.value = true
+  input.value = ''; err.value = ''; pending.value = true; cancelling.value = false
   const tempId = -Date.now()
   // optimistic echo — show staged IMAGES instantly via their object URLs; a
   // document is extracted server-side (no inline preview) but note its name.
@@ -324,8 +388,9 @@ async function send() {
     // refresh the sidebar so a brand-new conversation shows up
     loadSessions(ref_)
     // b2: a turn may spawn a task (start_task / doc-build / brainstorm) — poll
-    // soon so its card appears, then the scheduler keeps it live.
-    setTimeout(refreshWork, 2000)
+    // soon so its card appears + the badge lights, then the scheduler keeps it
+    // live. pollSoon (vs an orphan setTimeout) is tracked + alive-guarded.
+    pollSoon()
   } catch (e) {
     err.value = String(e); pending.value = false
     messages.value = messages.value.filter(m => m.id !== tempId)
@@ -334,7 +399,8 @@ async function send() {
 
 // Arc A: stop a running turn — cancel the queued chat row + stop the spinner.
 async function stop() {
-  pending.value = false
+  cancelling.value = true // hold the badge OFF until the queue drains (poller honors this)
+  pending.value = false; working.value = false
   try { if (activeSession.value) await api.chatStop(activeSession.value) } catch { /* best effort */ }
 }
 
@@ -414,8 +480,8 @@ function onKey(e: KeyboardEvent) {
         </select>
       </div>
       <button v-if="chatRef" class="text-sky-400 hover:text-sky-300" title="new conversation" @click="newSession">＋ New chat</button>
-      <!-- model-role select is a developer surface (raw aliases) — ducked unless Developer is on -->
-      <select v-if="store.dev" v-model="store.chatModel" title="model role (developer)"
+      <!-- model-role select is a raw-alias surface — ducked unless Details is on -->
+      <select v-if="store.dev" v-model="store.chatModel" title="model role"
               class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] text-zinc-300">
         <option value="reason">reason</option>
         <option value="ingest">ingest</option>
@@ -511,9 +577,14 @@ function onKey(e: KeyboardEvent) {
         </template>
       </div>
 
-      <div v-if="pending" class="flex items-center gap-2 text-xs">
-        <span class="text-zinc-500 italic">thinking…</span>
-        <button class="text-rose-400 hover:text-rose-300 border border-zinc-800 rounded px-1.5 py-0.5" title="stop" @click="stop">■ stop</button>
+      <!-- live working pulse — always shown while the engine has in-flight work
+           (authoritative, self-healing). Names the current activity so it never
+           reads as dead air; the full token/dispatch stream is in the Activity pane. -->
+      <div v-if="busy" class="flex items-center gap-2 text-xs">
+        <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse shrink-0"></span>
+        <span class="text-zinc-400 italic shrink-0">{{ currentActivity.length ? 'working' : 'thinking' }}…</span>
+        <span v-if="currentActivity.length" class="text-zinc-600 truncate">· {{ currentActivity.map(activityVerb).join(', ') }}</span>
+        <button class="ml-auto text-rose-400 hover:text-rose-300 border border-zinc-800 rounded px-1.5 py-0.5 shrink-0" title="stop" @click="stop">■ stop</button>
       </div>
       <div v-if="!chatRef" class="text-zinc-600 text-sm">
         Select a work item or doc on the left to chat grounded in it — or pick a

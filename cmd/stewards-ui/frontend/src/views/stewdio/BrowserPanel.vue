@@ -139,8 +139,8 @@ watch(() => store.projectFilter, loadItems)
           <option v-for="p in pickedFamilies" :key="p.family" :value="p.family">{{ p.description || p.family }}</option>
         </select>
       </div>
-      <!-- escape hatch: the full raw family list — a Developer surface (the raw slugs
-           are the same jargon the everyday surface ducks; power users flip ⚙ Dev) -->
+      <!-- escape hatch: the full raw family list — a Details surface (the raw slugs
+           are the same jargon the everyday surface ducks; power users flip ⚙ Details) -->
       <button v-if="store.dev" class="text-[11px] text-zinc-600 hover:text-zinc-300" @click="showMore = !showMore">
         {{ showMore ? '− fewer' : '＋ more pipelines…' }}
       </button>

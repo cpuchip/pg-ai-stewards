@@ -17,7 +17,7 @@ import SessionsPanel from './stewdio/SessionsPanel.vue'
 import ModelsPanel from './stewdio/ModelsPanel.vue'
 
 // the shared cockpit store — panels coordinate through it; we read store.dev here
-// to drive the Developer toggle + gate the developer-only panes.
+// to drive the Details toggle (one surface, two depths) + gate the details-only panes.
 const store = useStewdioStore()
 
 const LAYOUT_KEY = 'stewdio.layout.v3' // v3: 'Library' rename + dev-pane pruning propagate to existing installs
@@ -97,9 +97,9 @@ const PANELS: { id: string; component: string; title: string; dev?: boolean }[] 
   { id: 'artifact', component: 'artifact', title: 'Artifact' },
   { id: 'chat', component: 'chat', title: 'Chat' },
   { id: 'sessions', component: 'sessions', title: 'Sessions' },
-  { id: 'models', component: 'models', title: 'Models', dev: true }, // ops introspection → Developer only
+  { id: 'models', component: 'models', title: 'Activity', dev: true }, // live models/tokens/dispatch stream → Details only
 ]
-// the Models pane is a developer surface; hide it from the launcher unless Developer is on.
+// the Activity pane is a details surface; hide it from the launcher unless Details is on.
 const visiblePanels = computed(() => PANELS.filter(p => store.dev || !p.dev))
 
 // open a panel by id — focus it if already open, else add it (reopens a closed pane).
@@ -137,7 +137,8 @@ function onReady(event: DockviewReadyEvent) {
     catch { try { api.clear() } catch { /* ignore */ } restored = false }
   }
   if (!restored) buildDefault(api)
-  closeDevPanes() // Dev OFF is authoritative: drop any dev-only pane a stale layout restored
+  applyCatalogTitles() // a restored layout persists OLD pane titles (dockview toJSON) — re-apply the catalog (e.g. 'Models'→'Activity') without churning saved layouts
+  closeDevPanes() // Details OFF is authoritative: drop any details-only pane a stale layout restored
 
   // persist on any layout change (lightly debounced) + keep the open-pane set fresh.
   const refreshOpen = () => { openPanelIds.value = api.panels.map(p => p.id) }
@@ -168,6 +169,14 @@ function resetLayout() {
 function closeDevPanes() {
   if (!dockApi || store.dev) return
   for (const p of PANELS.filter(x => x.dev)) dockApi.getPanel(p.id)?.api.close()
+}
+// dockview persists each pane's title in its saved layout and restores it verbatim,
+// so a rename in the PANELS catalog (e.g. 'Models'→'Activity') wouldn't reach a pane
+// an existing user already had open. Re-assert the catalog title on every restored
+// pane — cheaper + less disruptive than bumping LAYOUT_KEY (which resets arrangements).
+function applyCatalogTitles() {
+  if (!dockApi) return
+  for (const p of PANELS) dockApi.getPanel(p.id)?.api.setTitle(p.title)
 }
 watch(() => store.dev, () => closeDevPanes())
 </script>
@@ -202,16 +211,18 @@ watch(() => store.dev, () => closeDevPanes())
       <button
         class="text-[11px] text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
         title="reset the panel layout to the default" @click="resetLayout">⟲ layout</button>
-      <!-- the one surface, two depths switch — OFF keeps the everyday surface clean -->
+      <!-- the one surface, two depths switch — OFF keeps the everyday surface clean;
+           ON reveals the live Activity pane (models / tokens / dispatch stream),
+           inline tool-call detail, and the developer/raw surfaces. -->
       <button
         class="text-[11px] rounded px-1.5 py-0.5 border"
         :class="store.dev
           ? 'text-emerald-300 border-emerald-700/60 bg-emerald-900/30'
           : 'text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border-zinc-800'"
         :title="store.dev
-          ? 'Developer mode ON — power & ops surfaces shown. Click to return to the everyday surface.'
-          : 'Developer mode OFF — clean everyday surface. Click to reveal power & ops surfaces.'"
-        @click="store.dev = !store.dev">⚙ Dev</button>
+          ? 'Details mode ON — live activity, models, tokens & tool calls shown. Click to return to the clean surface.'
+          : 'Details mode OFF — clean everyday surface. Click to see what the engine is doing (models, tokens, tool calls).'"
+        @click="store.dev = !store.dev">⚙ Details</button>
     </div>
     <DockviewVue
       class="dockview-theme-abyss"

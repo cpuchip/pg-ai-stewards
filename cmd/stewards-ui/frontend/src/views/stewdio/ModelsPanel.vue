@@ -20,8 +20,15 @@ async function load() {
     activity.value = act
   } catch (e) { err.value = String(e) }
 }
-onMounted(() => { load(); timer = window.setInterval(load, 8000) })
-onUnmounted(() => { if (timer) window.clearInterval(timer) })
+// poll fast while anything is dispatched (so the live stream actually streams),
+// slow when idle. setTimeout-recursion so the cadence can change each tick.
+function reschedule() {
+  if (timer) window.clearTimeout(timer)
+  const live = (activity.value?.active || []).length > 0
+  timer = window.setTimeout(async () => { await load(); reschedule() }, live ? 2500 : 8000)
+}
+onMounted(() => { load().then(reschedule) })
+onUnmounted(() => { if (timer) window.clearTimeout(timer) })
 
 // aliases grouped: reason → [members…], lowest priority (preferred) first.
 const byAlias = computed(() => {
@@ -45,12 +52,22 @@ const liveByModel = computed<LiveModel[]>(() => {
 
 const usd = (micro: number) => micro > 0 ? `$${(micro / 1e6).toFixed(4)}` : '—'
 const k = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
+// relative "12s / 3m / 1h" for the live dispatch stream timestamps.
+function ago(ts?: string): string {
+  if (!ts) return ''
+  const t = Date.parse(ts)
+  if (isNaN(t)) return ''
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000))
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.round(s / 60)}m`
+  return `${Math.round(s / 3600)}h`
+}
 </script>
 
 <template>
   <div class="h-full flex flex-col bg-zinc-950 text-zinc-300 overflow-auto">
     <div class="border-b border-zinc-800 px-3 py-2 flex items-center gap-2 text-xs sticky top-0 bg-zinc-950 z-10">
-      <span class="text-zinc-300 font-medium">Models</span>
+      <span class="text-zinc-300 font-medium">Activity</span>
       <button class="ml-auto text-zinc-500 hover:text-zinc-200" title="refresh" @click="load">⟳</button>
     </div>
     <div v-if="err" class="px-3 py-2 text-rose-400 text-xs">{{ err }}</div>
@@ -65,6 +82,21 @@ const k = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n)
         <span class="text-zinc-600">{{ m.provider }}<span v-if="m.local && m.gpu" class="text-emerald-600"> · {{ m.gpu }}</span></span>
         <span class="ml-auto text-zinc-400">{{ m.count }} session{{ m.count === 1 ? '' : 's' }}</span>
         <span class="text-zinc-600">{{ k(m.tokens) }} tok</span>
+      </div>
+    </div>
+
+    <!-- LIVE stream: the last dispatches, newest first — model · work · ↑in/↓out
+         tokens · how long ago. The "stream of tokens" the details view promises;
+         it ticks every ~2.5s while anything is running. -->
+    <div class="px-3 py-2 border-b border-zinc-900">
+      <div class="text-[10px] uppercase tracking-wide text-zinc-600 mb-1">Live dispatches</div>
+      <div v-if="!(activity?.recent || []).length" class="text-zinc-600 text-xs">no recent model calls</div>
+      <div v-for="(d, i) in (activity?.recent || [])" :key="i" class="flex items-center gap-2 text-[11px] py-0.5">
+        <span class="text-zinc-300 font-mono truncate max-w-[42%]" :title="d.model">{{ d.model }}</span>
+        <span class="text-zinc-600 truncate" :title="d.slug || d.pipeline">{{ d.pipeline || d.slug || '—' }}</span>
+        <span class="ml-auto text-emerald-600/90 tabular-nums" title="input tokens">↑{{ k(d.in_tokens) }}</span>
+        <span class="text-sky-500/90 tabular-nums" title="output tokens">↓{{ k(d.out_tokens) }}</span>
+        <span class="text-zinc-700 tabular-nums w-8 text-right">{{ ago(d.at) }}</span>
       </div>
     </div>
 
