@@ -692,7 +692,10 @@ fn providers_loaded() -> TableIterator<
 ///
 /// Resolution: `provider` (else `stewards.config 'embed_provider'`), `model`
 /// (else the provider's default), `dimensions` (default 768 = nomic; pass 1536
-/// for Vertex gemini-embedding). The provider is resolved in THIS backend,
+/// for Vertex gemini-embedding). `dimensions` is REQUESTED of the provider (sent
+/// as the OpenAI-compat `dimensions` field, which MRL models honor) — not merely
+/// validated — so one MRL model can serve multiple widths. The provider is
+/// resolved in THIS backend,
 /// preferring the postmaster-inherited `PROVIDER_REGISTRY` and falling back to
 /// parsing env on demand (covers a not-preloaded backend).
 ///

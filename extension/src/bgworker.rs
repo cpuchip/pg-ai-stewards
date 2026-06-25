@@ -1674,10 +1674,22 @@ pub(crate) fn embed_one(
     expected_dim: i32,
 ) -> Result<Vec<f32>, String> {
     let url = format!("{}/embeddings", provider.base_url.trim_end_matches('/'));
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": model,
         "input": text,
     });
+    // Request the embedding width. For Matryoshka (MRL) models (Google
+    // gemini-embedding, OpenAI text-embedding-3) the default output is the FULL
+    // width; the truncated size is obtained only by asking for it via the
+    // OpenAI-compat `dimensions` field (Vertex maps it to output_dimensionality).
+    // Without this, embed_query(..., 768) gets the model default back and the
+    // length check below rejects it. Fixed-size providers (e.g. nomic@768) ignore
+    // the field and still return their native width — the check stays as the
+    // safety net if any provider honors neither. (Follow-up: a per-provider
+    // capability flag if a provider *rejects* rather than ignores the field.)
+    if expected_dim > 0 {
+        body["dimensions"] = serde_json::json!(expected_dim);
+    }
 
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(120))
