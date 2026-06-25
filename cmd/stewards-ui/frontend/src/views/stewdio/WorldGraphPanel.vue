@@ -167,6 +167,13 @@ function openDoc(doc?: string) {
   store.select(doc, 'doc', doc)
 }
 
+// O3: a ref can carry an `object` locator (att:<id>) → open the EXACT source
+// page/image in the artifact panel (the object viewer), not just the derived doc.
+function openObject(locator?: string) {
+  if (!locator) return
+  store.select(locator, 'object', locator)
+}
+
 function neighborNode(id: number): WorldNode | null {
   return nodeById.get(id) ?? null
 }
@@ -417,14 +424,20 @@ onUnmounted(() => {
                       class="border-l-2 border-zinc-700 pl-2 text-zinc-400 italic leading-relaxed">
             {{ s.quote }}
           </blockquote>
-          <div class="text-[11px] mt-0.5">
+          <div class="text-[11px] mt-0.5 flex items-center gap-2 flex-wrap">
             <button v-if="isDocSlug(s.doc)" class="text-sky-500 hover:text-sky-400"
                     :title="`open ${s.doc} in the artifact panel`" @click="openDoc(s.doc)">
               {{ s.doc }}<span v-if="s.chunk != null"> · chunk {{ s.chunk }}</span>
             </button>
-            <span v-else class="text-zinc-600">
+            <span v-else-if="s.doc || s.chunk != null" class="text-zinc-600">
               {{ s.doc || 'source' }}<span v-if="s.chunk != null"> · chunk {{ s.chunk }}</span>
             </span>
+            <!-- O3: jump to the EXACT original page/image this was pulled from -->
+            <button v-if="s.object" class="text-emerald-400 hover:text-emerald-300"
+                    :title="`open the source ${s.page != null ? 'page ' + s.page : 'file'}`"
+                    @click="openObject(s.object)">
+              🖼 source<span v-if="s.page != null"> · p{{ s.page }}</span>
+            </button>
           </div>
         </div>
       </div>

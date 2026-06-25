@@ -46,6 +46,16 @@ const videoId = computed(() => {
   return null
 })
 
+// O3: a doc that knows the original it was extracted from carries an `att:<id>`
+// locator in its frontmatter → offer to open the source page/image.
+const sourceObject = computed(() => {
+  const v = (doc.value?.frontmatter as Record<string, unknown> | undefined)?.source_object
+  return typeof v === 'string' && /^att:\d+$/.test(v) ? v : null
+})
+function openSourceObject() {
+  if (sourceObject.value) store.select(sourceObject.value, 'object', doc.value?.title || sourceObject.value)
+}
+
 const loading = ref(false)
 const err = ref('')
 const doc = ref<StudyDetail | null>(null)
@@ -122,7 +132,12 @@ onUnmounted(stopPoll)
            class="shrink-0 text-[11px] text-sky-400 hover:text-sky-300 border border-zinc-800 rounded px-1.5 py-0.5"
            title="download this document as markdown" download>⬇ .md</a>
       </div>
-      <div class="text-zinc-600 text-xs mb-4">{{ doc.kind }} · {{ doc.slug }}</div>
+      <div class="text-zinc-600 text-xs mb-4 flex items-center gap-2">
+        <span>{{ doc.kind }} · {{ doc.slug }}</span>
+        <button v-if="sourceObject" class="text-emerald-400 hover:text-emerald-300 border border-emerald-800/50 rounded px-1.5 py-0.5"
+                title="open the original source document (PDF / image) this was extracted from"
+                @click="openSourceObject">🖼 view source</button>
+      </div>
 
       <!-- O1: paint the source back. A digested YouTube video shows its player
            above the notes — watch the source without leaving the cockpit. -->

@@ -1005,7 +1005,9 @@ export type GraphResp = { nodes: GraphNode[]; edges: GraphEdge[] }
 // Loreworks World knowledge-graph (Stewdio 3D World panel). world_graph(slug)
 // returns {nodes,links}; include_refs=1 enriches each node with source_refs,
 // aliases, and degree so the click-detail drawer is one round-trip.
-export type WorldRef = { doc?: string; chunk?: number; quote?: string }
+// `object` (an `att:<id>` locator) lets a ref point at the EXACT source page/
+// image it was pulled from, not just the derived doc — O3 "open the original".
+export type WorldRef = { doc?: string; chunk?: number; quote?: string; object?: string; page?: number }
 export type WorldNode = {
   id: number; kind: string; name: string; summary?: string
   aliases?: string[]; source_refs?: WorldRef[]; degree?: number
