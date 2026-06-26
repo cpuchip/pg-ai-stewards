@@ -2383,4 +2383,24 @@ BEGIN
     RAISE NOTICE 'OK 54: rigor mode — research-rigor contract ships + a dispatcher-loaded session skill renders unconditionally (the toggle reaches the skill-denied chat) while the catalog stays gated';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→65) is sound =='
+-- ---------------------------------------------------------------------
+-- 55. Rigor mode v2 (66) — the verify pass: the contract requires verify-before-
+-- ship, the trajectory-critic's grounding dimension is sharpened into a FIDELITY
+-- rubric (catches a resolved-but-unsupporting citation), and the chat family joins
+-- the auto_critique set. Defense in depth; the master gate stays as configured.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_skill bool; v_critic bool; v_fam text;
+BEGIN
+    SELECT (body LIKE '%VERIFY BEFORE YOU SHIP%') INTO v_skill
+      FROM stewards.skills WHERE family='research-rigor' AND model_match='*';
+    ASSERT v_skill, '66: research-rigor v2 — the contract requires verify-before-ship (re-read the cited source; never generalize a single record / state a subset as a population stat)';
+    SELECT (prompt LIKE '%FIDELITY%' AND prompt LIKE '%generalized to a state%') INTO v_critic
+      FROM stewards.agents WHERE family='trajectory-critic';
+    ASSERT v_critic, '66: the trajectory-critic grounding dimension is sharpened into a fidelity rubric — fails over-generalization / subset-as-population / over-confident tags / wrong-source even when a citation resolves';
+    v_fam := stewards.config_get_text('auto_critique_families','');
+    ASSERT v_fam LIKE '%work-item-chat%', '66: work-item-chat joins auto_critique_families so a rigor chat is graded when the gate is on';
+    RAISE NOTICE 'OK 55: rigor mode v2 — verify-before-ship contract + trajectory-critic fidelity rubric + chat family in the critique set (the verify pass; defense in depth, master gate unchanged)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→66) is sound =='
