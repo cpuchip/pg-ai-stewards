@@ -803,11 +803,14 @@ function onKey(e: KeyboardEvent) {
         <input ref="fileInput" type="file" multiple class="hidden" @change="onFiles"
                accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.epub,.html,.htm,.txt,.md,.csv,.json,.rtf,.zip,.7z,.tar,.gz,.tgz,.bz2,.xz,.rar" />
         <!-- rigor mode (65): a traceable, source-cited answer over the bucket -->
-        <button class="pb-2 text-lg leading-none disabled:opacity-40 transition"
-                :class="rigor ? 'text-amber-300' : 'text-zinc-500 hover:text-amber-300'"
+        <button class="mb-1 flex items-center gap-1 text-xs font-medium rounded-md border px-2 py-1.5 transition disabled:opacity-40 shrink-0"
+                :class="rigor ? 'border-amber-500/70 bg-amber-500/20 text-amber-200' : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-amber-300 hover:border-amber-700/60'"
                 :disabled="!chatRef"
-                :title="rigor ? 'Rigor mode ON — every claim grounded in a source or flagged, calibrated by evidence, observation kept separate from recommendation. Click to turn off.' : 'Rigor mode — a defensible, source-cited answer where every line traces to the bucket (slower). Click to turn on.'"
-                @click="rigor = !rigor">🔬</button>
+                :title="rigor ? 'Rigor mode is ON — every claim is grounded in a source or flagged, calibrated by evidence, with observation kept separate from recommendation. Click to turn it off.' : 'Turn on Rigor mode — a slower, defensible answer where every line traces to the bucket (ground-or-flag, calibrated, observation vs recommendation).'"
+                @click="rigor = !rigor">
+          <span>🔬</span><span>Rigor</span>
+          <span class="text-[10px] uppercase tracking-wide" :class="rigor ? 'text-amber-300' : 'text-zinc-600'">{{ rigor ? 'on' : 'off' }}</span>
+        </button>
         <textarea
           v-model="input"
           :disabled="!chatRef"
