@@ -114,6 +114,10 @@ CREATE OR REPLACE FUNCTION stewards.trigger_enforce_subagent_depth()
 RETURNS trigger LANGUAGE plpgsql AS $FN$
 DECLARE
     v_parent_depth int;
+    v_max_depth    int;
+    v_max_children int;
+    v_sibs         int;
+    v_pf           text;
 BEGIN
     IF NEW.parent_work_item_id IS NULL THEN RETURN NEW; END IF;
 
@@ -123,12 +127,33 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    -- DEPTH cap — config-driven (default 2). See docs/delegation-limits.md.
+    v_max_depth := coalesce((SELECT value::int FROM stewards.config WHERE key = 'subagent_max_depth'), 2);
     v_parent_depth := stewards.subagent_depth_of(NEW.parent_work_item_id);
-
-    IF v_parent_depth + 1 > 2 THEN
+    IF v_parent_depth + 1 > v_max_depth THEN
         RAISE EXCEPTION
-            'subagent depth cap exceeded: parent % is at depth %, child would be %, max 2',
-            NEW.parent_work_item_id, v_parent_depth, v_parent_depth + 1;
+            'subagent depth cap exceeded: parent % is at depth %, child would be %, max %',
+            NEW.parent_work_item_id, v_parent_depth, v_parent_depth + 1, v_max_depth;
+    END IF;
+
+    -- WIDTH cap (the runaway fix) — a node may have at most N children, where N is
+    -- the parent pipeline's override, else the global default (8). Bounds a recursive
+    -- fan-out the depth cap alone misses (a $50 incident). Runs on INSERT-with-parent
+    -- AND on an UPDATE that sets/changes parent (the unchanged-parent UPDATE was already
+    -- skipped above) — NOT INSERT-only, because spawns commonly create the child then
+    -- UPDATE its parent (e.g. chat_start_task_tool). A wide-by-design pipeline
+    -- (decompose-fanout) raises its own ceiling via config (default-bounded, opt-out-loud).
+    SELECT pipeline_family INTO v_pf FROM stewards.work_items WHERE id = NEW.parent_work_item_id;
+    v_max_children := coalesce(
+        (SELECT value::int FROM stewards.config WHERE key = 'subagent_max_children.' || coalesce(v_pf, '')),
+        (SELECT value::int FROM stewards.config WHERE key = 'subagent_max_children'),
+        8);
+    SELECT count(*) INTO v_sibs FROM stewards.work_items
+     WHERE parent_work_item_id = NEW.parent_work_item_id AND id <> NEW.id;
+    IF v_sibs >= v_max_children THEN
+        RAISE EXCEPTION
+            'subagent width cap exceeded: parent % already has % children (max % for pipeline %)',
+            NEW.parent_work_item_id, v_sibs, v_max_children, coalesce(v_pf, '(none)');
     END IF;
 
     RETURN NEW;
@@ -143,7 +168,24 @@ FOR EACH ROW
 EXECUTE FUNCTION stewards.trigger_enforce_subagent_depth();
 
 COMMENT ON FUNCTION stewards.trigger_enforce_subagent_depth() IS
-'L.9: BEFORE INSERT/UPDATE OF parent_work_item_id on work_items. Walks the parent chain and raises if a child would exceed depth 2. Skips UPDATEs that do not change parent linkage. Spawning at root (NULL parent) is always allowed.';
+'L.9: BEFORE INSERT/UPDATE OF parent_work_item_id on work_items. Enforces two structural bounds on the delegation tree: DEPTH (config subagent_max_depth, default 2) and WIDTH (config subagent_max_children[.<pipeline>], default 8) — raises on breach. Skips UPDATEs that do not change parent linkage; root (NULL parent) always allowed. The runaway backstop; see docs/delegation-limits.md.';
+
+-- ── spawn-bound knobs (tunable as models improve — docs/delegation-limits.md) ──
+INSERT INTO stewards.config (key, value, description) VALUES
+  ('subagent_max_depth', '2', 'Max delegation depth (root=0, 2=grandchild). Hard backstop in trigger_enforce_subagent_depth.'),
+  ('subagent_max_children', '8', 'Default max children per work_item (width cap). Per-pipeline override: subagent_max_children.<pipeline_family>.'),
+  ('subagent_max_children.decompose-fanout', '16', 'decompose-fanout legitimately fans wide (observed up to 13).')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, description = EXCLUDED.description;
+
+-- ── spawn is a narrow privilege: leaf subagent-* worker families do their own
+-- local research and do NOT re-delegate. Removing consult_subagent from them IS
+-- the tool-removal (the grant is the tool). Re-grant explicitly to make a family
+-- an orchestrator (docs/delegation-limits.md). ──
+UPDATE stewards.agent_tool_perms SET action = 'deny'
+ WHERE tool_pattern = 'consult_subagent' AND action = 'allow'
+   AND agent_family IN ('subagent-doc-investigate','subagent-docs-audit','subagent-doc-summary',
+                        'subagent-files-audit','subagent-session-investigate','subagent-url-summary',
+                        'stewards-explore');
 
 
 -- =====================================================================
