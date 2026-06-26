@@ -2250,4 +2250,38 @@ BEGIN
     RAISE NOTICE 'OK 50: world-build worklist — coverage seeds from the project, the walk drains every chunk exactly once, reset is pure, and complete:true is a deterministic done-signal (the scratch-file fix)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→61) is sound =='
+-- ---------------------------------------------------------------------
+-- 51. Orientation autoload (62) — lend a skill to an agent UNCONDITIONALLY.
+-- The activation layer that makes "fill the shelf" real: a skill in
+-- skill_autoload renders as standing orientation even for a skill-DENIED agent
+-- (the dormancy fix), while the skill-denied + no-autoload invariant (OK 9)
+-- still holds. Core seeds NO autoload config (operator content, like skills).
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_blk text;
+BEGIN
+    ASSERT to_regclass('stewards.skill_autoload') IS NOT NULL, '62: skill_autoload table exists';
+    -- a skill autoloaded to a family is injected as STANDING orientation even when
+    -- that family is skill-tool-DENIED (orientation is lent, not opted into).
+    INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action) VALUES ('orient-smoke-fam','skill','deny');
+    INSERT INTO stewards.skills (family, model_match, description, body, active)
+      VALUES ('orient-smoke','*','smoke orientation fixture','BODY: ORIENT SMOKE STANDING.', true);
+    INSERT INTO stewards.skill_autoload (agent_family, skill_family) VALUES ('orient-smoke-fam','orient-smoke');
+    v_blk := stewards.render_skills_block('orient-smoke-fam','test-model','os-sess');
+    ASSERT v_blk LIKE '%BODY: ORIENT SMOKE STANDING.%' AND v_blk LIKE '%standing="true"%',
+        '62: an autoloaded skill renders as STANDING orientation even for a skill-denied agent';
+    -- a different skill-denied family with NO autoload still renders empty (OK 9 invariant)
+    INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action) VALUES ('orient-smoke-none','skill','deny');
+    ASSERT stewards.render_skills_block('orient-smoke-none','test-model','os-sess') IS NULL,
+        '62: a skill-denied family with no autoload still renders empty (the OK 9 invariant is preserved)';
+    -- a skill-CAPABLE family not in autoload still gets the normal catalog (no regression)
+    ASSERT stewards.render_skills_block('orient-smoke-cap','test-model','os-sess') LIKE '%<available_skills>%',
+        '62: a skill-capable agent still gets the normal catalog (autoload does not suppress it)';
+
+    DELETE FROM stewards.skill_autoload WHERE skill_family='orient-smoke';
+    DELETE FROM stewards.skills WHERE family='orient-smoke';
+    DELETE FROM stewards.agent_tool_perms WHERE agent_family IN ('orient-smoke-fam','orient-smoke-none');
+    RAISE NOTICE 'OK 51: orientation autoload — a skill lent via skill_autoload renders as STANDING orientation even for a skill-denied agent; the skill-denied + no-autoload invariant is preserved';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→62) is sound =='

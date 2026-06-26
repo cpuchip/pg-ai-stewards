@@ -639,6 +639,12 @@ extension_sql_file!(
     requires = ["create_chat_model_pin"],
 );
 
+extension_sql_file!(
+    "../62-orientation.sql",
+    name = "create_orientation",
+    requires = ["create_world_build_worklist"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

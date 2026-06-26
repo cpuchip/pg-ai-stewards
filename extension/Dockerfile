@@ -72,7 +72,8 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      54-loreworks.sql 55-loreworks-build.sql \
      56-trajectory-critic.sql 57-loreworks-chat.sql \
      58-world-edge-audit.sql 59-self-improvement.sql \
-     60-chat-model-pin.sql 61-world-build-worklist.sql ./
+     60-chat-model-pin.sql 61-world-build-worklist.sql \
+     62-orientation.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
