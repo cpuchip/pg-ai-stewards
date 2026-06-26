@@ -158,6 +158,79 @@ $fn$;
 COMMENT ON FUNCTION stewards.render_skills_block(text, text, text) IS
 '62 (re-authors 24): the SKILLS section for compose_system_prompt. Autoloaded (standing) orientation bodies render for EVERY agent whose family matches skill_autoload — unconditionally, even when the agent is skill-tool-denied (orientation is lent, not opted into). The management catalog (tiers 0/1) + session-loaded bodies still render only for skill-capable agents, and exclude any autoloaded family so nothing double-renders. NULL when an agent has neither autoloaded orientation nor (if skill-capable) a catalog.';
 
+-- ── §3 — the engine's baseline ORIENTATION skills ───────────────────
+-- The core already ships two baseline skills (source-verification, reference-
+-- linking, seeded in schema.rs). These join them: the two disciplines every
+-- gathering agent benefits from, ported from the workspace's most battle-tested
+-- orientation (study/ai/harness/lending-the-substrate-our-orientation.md).
+-- Ratified 2026-06-26 (core-baseline, "no operator left orientation-poor").
+INSERT INTO stewards.skills (family, model_match, description, body, active) VALUES
+( 'orient-first', '*',
+  'Orient before you act — one quick scan before building/extracting/researching over a corpus: what already exists (don''t duplicate), what the real intent is (the literal task is the floor), and what you''d wish you''d checked (the tension/blind spot). The council moment (Abraham 4:26), as a standing habit.',
+  $BODY$# Orient before you act — the council moment
+
+Before you build, extract, research, or answer over a corpus, take ONE moment to ORIENT — the
+way a council takes counsel before acting. It is three quick questions, not a phase:
+
+1. **What already exists?** Survey before you add. Has this entity / answer / document already
+   been produced? Search the project, world, or corpus for prior work so you EXTEND it rather
+   than duplicate it. If you have a survey or coverage tool, call it FIRST.
+
+2. **What is the real intent?** The literal task is the floor; the goal is the target. Name what
+   success looks like and who it is for before you start producing — so when the instructions run
+   out, you still know where you are going.
+
+3. **What would I wish I'd checked?** Scan for the tension, the blind spot, the adjacent thing the
+   asker assumed you would handle. Surface it rather than only building toward the obvious answer.
+
+One scan, then act. Orienting first is not slower — it stops the duplicate, the wrong-target
+build, and the blind spot before any of them costs a whole run.
+$BODY$, true ),
+( 'bounded-gather', '*',
+  'Methodical gathering — how to search/extract over a large or open-ended source WITHOUT looping: commit when you have enough, treat an empty search as "absent", walk a finite set instead of re-deriving what is left, and stop on a fact not a feeling. For any agent gathering, surveying, or extracting broadly.',
+  $BODY$# Methodical gathering — don't search until you fall off the edge
+
+You are gathering over a large or open-ended source. The failure to avoid: searching feels like
+progress, so you keep searching when you should be producing — and burn your whole tool budget
+looping, often with nothing to show. Four rules:
+
+1. **COMMIT.** The moment what you have retrieved answers the question, STOP searching and produce.
+   Verify at most once. Producing from what you hold beats one more search.
+
+2. **EMPTY MEANS ABSENT.** A search that returns nothing means that content is not in this source —
+   move on. NEVER re-issue the same search reworded; that rephrase-and-retry is exactly the loop
+   that wastes the run.
+
+3. **KNOW YOUR FRONTIER.** If you can enumerate what you must cover — every chunk, every doc, every
+   item — work THROUGH that list and track what is done, rather than re-deriving "what's left" from
+   memory each turn. When the list is empty, you are finished. (If a tool gives you a coverage walk,
+   use it: it is your worklist and your done-signal.)
+
+4. **A DONE-SIGNAL IS A FACT, NOT A FEELING.** "I think I've searched enough" is not done. "I have
+   answered the question" / "0 items remain" is done.
+
+If you notice you have searched several times with little new, that IS the signal: stop and write
+your result with what you have.
+$BODY$, true )
+ON CONFLICT (family, model_match) DO UPDATE
+  SET description = EXCLUDED.description, body = EXCLUDED.body, active = true;
+
+-- ── §4 — baseline autoload wiring: the corpus-builders carry orientation ──
+-- orient-first → every agent that builds/extracts over a corpus; bounded-gather →
+-- the open-ended searchers (world-build already has the WALK, so orient-first only).
+-- Operators extend or override this with their own skill_autoload rows.
+INSERT INTO stewards.skill_autoload (agent_family, skill_family, note) VALUES
+  ('world-build',              'orient-first',   'survey existing entities before extracting (the walk already bounds coverage)'),
+  ('research',                 'orient-first',   'survey existing studies before researching'),
+  ('research',                 'bounded-gather', 'open-ended search — commit, do not loop'),
+  ('subagent-doc-investigate', 'orient-first',   NULL),
+  ('subagent-doc-investigate', 'bounded-gather', NULL),
+  ('subagent-docs-audit',      'orient-first',   NULL),
+  ('subagent-docs-audit',      'bounded-gather', 'audits a set — walk it, do not free-search'),
+  ('loremaster',               'orient-first',   NULL),
+  ('compactor',                'bounded-gather', NULL)
+ON CONFLICT (agent_family, skill_family) DO UPDATE SET note = EXCLUDED.note;
+
 -- =====================================================================
 -- End of 62-orientation.sql
 -- =====================================================================

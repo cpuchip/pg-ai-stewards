@@ -346,8 +346,9 @@ BEGIN
         'group_applies must match any family in the comma list and reject others';
 
     -- an agent explicitly DENIED the 'skill' permission gets no catalog and no levers
-    -- (core ships 2 ungrouped skills — reference-linking, source-verification — so
-    -- the deny gate, not emptiness, is what hides the surface).
+    -- (core ships 4 ungrouped skills — reference-linking, source-verification, and the
+    -- orientation baseline orient-first + bounded-gather (62) — so the deny gate, not
+    -- emptiness, is what hides the surface).
     INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action)
       VALUES ('smoke-skilldeny','skill','deny');
     v_tools := stewards.compose_tools('smoke-skilldeny');
@@ -2277,6 +2278,17 @@ BEGIN
     -- a skill-CAPABLE family not in autoload still gets the normal catalog (no regression)
     ASSERT stewards.render_skills_block('orient-smoke-cap','test-model','os-sess') LIKE '%<available_skills>%',
         '62: a skill-capable agent still gets the normal catalog (autoload does not suppress it)';
+
+    -- the BASELINE: orientation ships in core (§3) and is autoloaded onto the
+    -- corpus-builders (§4) — every operator's substrate carries orientation.
+    ASSERT EXISTS (SELECT 1 FROM stewards.skills WHERE family='orient-first' AND active)
+       AND EXISTS (SELECT 1 FROM stewards.skills WHERE family='bounded-gather' AND active),
+        '62: the baseline orientation skills (orient-first, bounded-gather) must ship in core';
+    ASSERT EXISTS (SELECT 1 FROM stewards.skill_autoload
+                    WHERE agent_family='world-build' AND skill_family='orient-first'),
+        '62: world-build must autoload orient-first (baseline wiring)';
+    ASSERT stewards.render_skills_block('world-build','test-model','os-sess') LIKE '%Orient before you act%',
+        '62: a skill-denied corpus-builder (world-build) carries orient-first as STANDING orientation on a virgin boot';
 
     DELETE FROM stewards.skill_autoload WHERE skill_family='orient-smoke';
     DELETE FROM stewards.skills WHERE family='orient-smoke';

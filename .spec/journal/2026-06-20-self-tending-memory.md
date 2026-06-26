@@ -105,3 +105,31 @@ intent), whose K4 cutover is Michael's Hinge — a focused next arc on the now-p
 day's earlier work (the quote oracle, the gate, doc-construction, transcript persistence) were
 the first organs; this run gave them a nervous system. "AI entering the loop that builds AI,"
 at the substrate's own scale — watched.
+
+## 2026-06-21 — watched it breathe, then closed the loop + built the daemon
+
+**Watched the full RTE loop live (Michael: "lets do 1 and watch it work").** Populated
+`quote_flags` from 3 real books (44 flagged quotes). The local qwen diagnoser proposed a
+plausible-but-flawed rule ("no ellipses in quotes"). The `claude -p` Hinge — given real scope
+(read-only DB via `hinge/query.sh` + an `architecture.md` brief) — INVESTIGATED (10 turns,
+$0.55), caught the grounding was a **spurious correlation** (ellipsis flags interleaved with
+non-ellipsis flags at the same low scores) and that the rule would push digesters toward
+**silent splicing = closer to fabrication**, and returned **revise** with the better direction.
+The gate held (rule not applied). The thesis, live: weak proposer + investigating Claude critic
++ human over the top; neither layer alone gets there.
+
+**Closed the revise loop (Michael: "it should take the hinge feedback").** `rte_quote_contrast`
+now surfaces `prior_hinge_feedback` (revised rules + why); the digest-tuning prompt reads it.
+Re-dispatched → turn 2 proposed "every quoted segment verbatim; mark omissions visibly with
+ellipsis" (it even adopted the Hinge's spurious-correlation reasoning in its grounding) → Hinge
+**approved** (fresh investigation found flag 40's dropped 'not' from the Ross source) → APPLIED.
+The RTE learns from its own judge.
+
+**Built the Hinge daemon (Michael: "yes build it … drive the schedule from pg-ai-stewards …
+obey emergency stops").** `hinge_gate_status()` (39) is the substrate-driven contract:
+should_run = pending>0 AND NOT autonomy_paused; interval from config. `hinge-daemon.ps1` polls
+it and OBEYS — proven it holds while paused (the global emergency stop halts the gate with the
+source + digesters). **Grant ratified (dominion_in_council):** `hinge_auto_approve_kinds` =
+digest-skill-rule + graph-link + pipeline-adjust (overlay `hinge-grant.sql`); structural still
+escalates. The reviewer also got logs (`hinge-review.log`). virgin-smoke OK 30; chain 00→41.
+Parked: the "let digesters read our repos" council item (inbox, awaiting Michael).
