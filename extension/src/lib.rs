@@ -633,6 +633,12 @@ extension_sql_file!(
     requires = ["create_self_improvement"],
 );
 
+extension_sql_file!(
+    "../61-world-build-worklist.sql",
+    name = "create_world_build_worklist",
+    requires = ["create_chat_model_pin"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

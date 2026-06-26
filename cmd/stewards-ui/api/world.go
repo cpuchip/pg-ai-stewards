@@ -165,7 +165,7 @@ func (d *Deps) worldBuildHandler(w http.ResponseWriter, r *http.Request) {
 			"corpus_name=%q, project=%q) EXACTLY ONCE to load + chunk it into project %q, then build from "+
 			"that project with doc_search.", attID, req.Name, proj, proj)
 	case proj != "":
-		canon = fmt.Sprintf("The primary canon lives in the project %q — call doc_search (scoped to project %q) to read it thoroughly before extracting.", proj, proj)
+		canon = fmt.Sprintf("The primary canon lives in the project %q — WALK it chunk-by-chunk with world_build_walk (your worklist + done-signal), extracting as you go, until it returns complete:true. Use doc_search only to enrich the relationship pass afterwards.", proj)
 	case canonText != "":
 		canon = "Primary canon (the full source to extract from):\n" + canonText
 	case len(refs) > 0:

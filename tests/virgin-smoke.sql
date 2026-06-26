@@ -2190,4 +2190,64 @@ BEGIN
     RAISE NOTICE 'OK 49: self-improvement — GATE escalates judges/critics/self/constraint-language/over-long; in-bounds worker guidance auto-applies + is reversible (eval-gaming guard holds); agent_failure_patterns executes';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→59) is sound =='
+-- ---------------------------------------------------------------------
+-- 50. World-build worklist — the scratch file + deterministic done-signal
+-- (the harness that turns "search until you feel done" into "walk the canon
+-- chunk-by-chunk", fixing the over-search-never-commit failure both a weak
+-- local model AND a strong cloud model fell into).
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_res jsonb; v_served int := 0; v_calls int := 0;
+BEGIN
+    -- machinery exists
+    ASSERT to_regclass('stewards.world_build_coverage') IS NOT NULL, '50: world_build_coverage table exists';
+    ASSERT to_regprocedure('stewards.world_build_walk_tool(jsonb)') IS NOT NULL, '50: world_build_walk_tool exists';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='world_build_walk' AND active), '50: world_build_walk tool registered';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                    WHERE agent_family='world-build' AND tool_pattern='world_build_walk' AND action='allow'),
+        '50: world-build is granted world_build_walk';
+    ASSERT (SELECT prompt LIKE '%world_build_walk%' FROM stewards.agents WHERE family='world-build' AND model_match='*'),
+        '50: the world-build prompt drives the walk';
+
+    -- a world with no project corpus completes immediately (inline-canon path)
+    PERFORM stewards.world_upsert('ws-smoke-empty','WS Empty', NULL, NULL, true);
+    v_res := stewards.world_build_walk_tool('{"world_slug":"ws-smoke-empty"}'::jsonb);
+    ASSERT (v_res->>'complete')::bool AND jsonb_array_length(v_res->'chunks')=0,
+        '50: a world with no project corpus returns complete immediately';
+
+    -- a 5-chunk synthetic corpus: walk drains it exactly once and signals done
+    PERFORM stewards.world_upsert('ws-smoke','WS Smoke', NULL, 'ws-smoke-proj', true);
+    INSERT INTO stewards.docs (slug, title, body, project_association) VALUES
+      ('ws-smoke-1','c1','Alpha the hero lives in Beacon.','ws-smoke-proj'),
+      ('ws-smoke-2','c2','Beacon is a city ruled by the Order.','ws-smoke-proj'),
+      ('ws-smoke-3','c3','The Order opposes the Shade.','ws-smoke-proj'),
+      ('ws-smoke-4','c4','Shade is a faction of the deep.','ws-smoke-proj'),
+      ('ws-smoke-5','c5','Alpha wields the Sun-blade.','ws-smoke-proj');
+
+    -- reset is pure (seeds, serves nothing)
+    v_res := stewards.world_build_walk_tool('{"world_slug":"ws-smoke","reset":true}'::jsonb);
+    ASSERT (v_res->>'reset')::bool AND jsonb_array_length(v_res->'chunks')=0
+           AND (v_res->'progress'->>'total')='5' AND (v_res->'progress'->>'pending')='5',
+        '50: reset seeds 5 chunks and serves nothing';
+
+    -- drain in batches of 2; coverage strictly decreases; ends complete; serves each chunk once
+    LOOP
+        v_res := stewards.world_build_walk_tool('{"world_slug":"ws-smoke","batch":2}'::jsonb);
+        v_served := v_served + jsonb_array_length(v_res->'chunks');
+        v_calls := v_calls + 1;
+        EXIT WHEN (v_res->>'complete')::bool OR v_calls > 8;
+    END LOOP;
+    ASSERT v_served = 5, format('50: the walk serves all 5 chunks exactly once (got %s)', v_served);
+    ASSERT (v_res->>'complete')::bool, '50: the walk terminates with complete:true (the done-signal)';
+    -- stable after complete
+    v_res := stewards.world_build_walk_tool('{"world_slug":"ws-smoke","batch":2}'::jsonb);
+    ASSERT (v_res->>'complete')::bool AND jsonb_array_length(v_res->'chunks')=0,
+        '50: a post-complete call stays complete and serves nothing';
+
+    DELETE FROM stewards.world_build_coverage WHERE world_slug IN ('ws-smoke','ws-smoke-empty');
+    DELETE FROM stewards.docs WHERE project_association='ws-smoke-proj';
+    DELETE FROM stewards.worlds WHERE slug IN ('ws-smoke','ws-smoke-empty');
+    RAISE NOTICE 'OK 50: world-build worklist — coverage seeds from the project, the walk drains every chunk exactly once, reset is pure, and complete:true is a deterministic done-signal (the scratch-file fix)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→61) is sound =='
