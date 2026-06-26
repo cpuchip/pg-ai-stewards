@@ -219,7 +219,7 @@ func (d *Deps) gatherSession(ctx context.Context, sid, wid string) sessFindings 
 		rows, err := d.Pool.Query(ctx,
 			`SELECT coalesce(slug, left(id::text,8)), status,
 			        (SELECT count(*) FROM stewards.chat_attachments a
-			          WHERE a.session_id LIKE 'wi--'||left(wi.id::text,8)||'--%' AND a.kind IN ('document','image'))
+			          WHERE a.sandbox = wi.input->>'sandbox' AND a.kind IN ('document','image'))
 			   FROM stewards.work_items wi
 			  WHERE input->>'spawned_from_chat'=$1 AND status IN ('failed','completed')
 			  ORDER BY created_at DESC LIMIT 20`, sid)
@@ -245,10 +245,10 @@ func (d *Deps) gatherSession(ctx context.Context, sid, wid string) sessFindings 
 		var st, stage, errMsg string
 		var arts int
 		if err := d.Pool.QueryRow(ctx,
-			`SELECT status, coalesce(current_stage,''), coalesce(error,last_failure_reason,''),
+			`SELECT wi.status, coalesce(wi.current_stage,''), coalesce(wi.error,wi.last_failure_reason,''),
 			        (SELECT count(*) FROM stewards.chat_attachments a
-			          WHERE a.session_id LIKE 'wi--'||left($1::uuid::text,8)||'--%' AND a.kind IN ('document','image'))
-			   FROM stewards.work_items WHERE id=$1::uuid`, wid).Scan(&st, &stage, &errMsg, &arts); err == nil {
+			          WHERE a.sandbox = wi.input->>'sandbox' AND a.kind IN ('document','image'))
+			   FROM stewards.work_items wi WHERE wi.id=$1::uuid`, wid).Scan(&st, &stage, &errMsg, &arts); err == nil {
 			out.facts = append(out.facts, fmt.Sprintf("Work item is status=%s stage=%s, %d file(s) produced.", st, stage, arts))
 			if errMsg != "" {
 				out.facts = append(out.facts, "Last error: "+errMsg)

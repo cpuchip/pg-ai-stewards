@@ -724,10 +724,14 @@ func makeExportArtifact(mgr *sandbox.Manager, pool *pgxpool.Pool) func(context.C
 			session = "artifact-" + sandboxSafe(in.Sandbox)
 		}
 		var id int64
+		// Stamp the sandbox id so the artifact is ATTRIBUTABLE to the work item
+		// that produced it (a doc-build's sandbox == its input.sandbox). The
+		// doc-build artifact gate (51) keys on this, so an unrelated artifact in
+		// the same chat session can't pose as the build's output.
 		if err := pool.QueryRow(ctx,
-			`INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size)
-			 VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-			session, filename, mime, kind, data, len(data),
+			`INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size, sandbox)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+			session, filename, mime, kind, data, len(data), strings.TrimSpace(in.Sandbox),
 		).Scan(&id); err != nil {
 			return errResult("store artifact: %v", err), exportArtifactOutput{}, nil
 		}

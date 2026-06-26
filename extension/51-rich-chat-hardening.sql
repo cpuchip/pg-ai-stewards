@@ -22,6 +22,17 @@
 -- =====================================================================
 
 -- ── §1 — doc-build artifact-exists gate ─────────────────────────────
+-- Attribution key: coder_export_artifact stamps the SANDBOX id on the
+-- chat_attachment, and a doc-build's sandbox == its input.sandbox. We gate on
+-- THAT, not "any attachment in the spawning chat session" — that session also
+-- holds unrelated artifacts (e.g. generate_image PNGs), which false-passed the
+-- old check (a build that exported nothing still "completed" because an unrelated
+-- image happened to land in the same chat). 2026-06-26: that's exactly how a
+-- looped build with no PDF posed as success.
+ALTER TABLE stewards.chat_attachments ADD COLUMN IF NOT EXISTS sandbox text;
+CREATE INDEX IF NOT EXISTS chat_attachments_sandbox_idx
+    ON stewards.chat_attachments (sandbox) WHERE sandbox IS NOT NULL;
+
 CREATE OR REPLACE FUNCTION stewards.doc_build_verify_artifact()
 RETURNS trigger LANGUAGE plpgsql AS $fn$
 BEGIN
@@ -29,17 +40,18 @@ BEGIN
     IF NEW.pipeline_family = 'doc-build'
        AND NEW.status = 'completed'
        AND coalesce(OLD.status, '') <> 'completed' THEN
-        -- The build must have exported a downloadable artifact (a chat_attachment
-        -- under the spawning chat session, created during this run). If not, the
-        -- "completion" is empty — mark it failed so it can't pose as success.
-        IF NOT EXISTS (
+        -- The build must have exported a downloadable artifact ATTRIBUTED to this
+        -- build's sandbox (coder_export_artifact stamps chat_attachments.sandbox).
+        -- If not, the "completion" is empty — mark it failed so it can't pose as
+        -- success (and so ↻ Retry / 🩺 Diagnose surface it).
+        IF NEW.input ->> 'sandbox' IS NULL OR NOT EXISTS (
             SELECT 1 FROM stewards.chat_attachments a
-             WHERE a.session_id = NEW.input ->> 'spawned_from_chat'
-               AND a.created_at >= NEW.created_at
+             WHERE a.sandbox = NEW.input ->> 'sandbox'
+               AND a.kind IN ('document', 'image')
         ) THEN
             NEW.status := 'failed';
             NEW.last_failure_reason :=
-                'doc-build exported no artifact — the build produced no downloadable document (failing instead of reporting a false success)';
+                'doc-build exported no artifact — the build produced no downloadable document (often a stuck edit/generate loop in the build step). Retry (↻ on the card), ideally with a stronger model.';
         END IF;
     END IF;
     RETURN NEW;
@@ -47,7 +59,7 @@ END;
 $fn$;
 
 COMMENT ON FUNCTION stewards.doc_build_verify_artifact() IS
-'51: deterministic gate — a doc-build that completes without exporting an artifact (chat_attachment for its spawned_from_chat session) is flipped to failed, so an empty build never poses as a successful document.';
+'51: deterministic gate — a doc-build that completes without exporting an artifact ATTRIBUTED to its sandbox (chat_attachments.sandbox, stamped by coder_export_artifact) is flipped to failed, so an empty build never poses as a successful document. Sandbox attribution avoids the false-pass where an unrelated artifact (e.g. generate_image) in the same chat session satisfied a looser session-scoped check.';
 
 CREATE OR REPLACE TRIGGER doc_build_verify_artifact_trg
     BEFORE UPDATE ON stewards.work_items
