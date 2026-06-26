@@ -669,6 +669,12 @@ extension_sql_file!(
     requires = ["create_rigor_mode"],
 );
 
+extension_sql_file!(
+    "../67-rigor-force-final.sql",
+    name = "create_rigor_force_final",
+    requires = ["create_rigor_verify"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

@@ -2403,4 +2403,42 @@ BEGIN
     RAISE NOTICE 'OK 55: rigor mode v2 — verify-before-ship contract + trajectory-critic fidelity rubric + chat family in the critique set (the verify pass; defense in depth, master gate unchanged)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→66) is sound =='
+-- ---------------------------------------------------------------------
+-- 56. Force-final-at-cap (67) — an INTERACTIVE chat (no pipeline stage) that
+-- reaches its tool-loop budget is FORCED to synthesize (tools_disabled +
+-- tool_choice=none) two rounds before the bridge's steps cap, instead of dying
+-- silently. Below the budget, tools stay. (Deterministic; no bridge involved —
+-- chat_post_internal builds the dispatch payload, which we inspect then delete.)
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_steps int; v_id1 bigint; v_id2 bigint; v_forced text; v_tc text;
+BEGIN
+    SELECT a.steps INTO v_steps FROM stewards.agents a
+     WHERE a.family='work-item-chat' ORDER BY length(a.model_match) DESC LIMIT 1;
+    ASSERT COALESCE(v_steps,0) >= 6, '67: work-item-chat has a real tool budget (>=6) for force-final to apply';
+
+    -- at the hard cap (steps-2 assistant rounds already done) → forced to answer
+    INSERT INTO stewards.sessions(id,kind) VALUES('ff-smoke-hi','agent');
+    INSERT INTO stewards.messages(session_id,role,content,finish_reason)
+      SELECT 'ff-smoke-hi','assistant','s'||g,'tool_calls' FROM generate_series(1, v_steps-2) g;
+    v_id1 := stewards.chat_post_internal('work-item-chat','reason','ff-smoke-hi','flexllama');
+    SELECT payload->>'tools_disabled', payload->'body'->>'tool_choice'
+      INTO v_forced, v_tc FROM stewards.work_queue WHERE id=v_id1;
+    ASSERT v_forced='true' AND v_tc='none',
+        '67: an interactive chat at its tool-budget ceiling is forced to synthesize (tools_disabled+tool_choice=none)';
+
+    -- well below the cap → tools stay (no premature force-final)
+    INSERT INTO stewards.sessions(id,kind) VALUES('ff-smoke-lo','agent');
+    INSERT INTO stewards.messages(session_id,role,content,finish_reason)
+      SELECT 'ff-smoke-lo','assistant','s'||g,'tool_calls' FROM generate_series(1,3) g;
+    v_id2 := stewards.chat_post_internal('work-item-chat','reason','ff-smoke-lo','flexllama');
+    SELECT payload->>'tools_disabled' INTO v_forced FROM stewards.work_queue WHERE id=v_id2;
+    ASSERT v_forced IS NULL, '67: a chat well below its budget keeps its tools';
+
+    DELETE FROM stewards.work_queue WHERE id IN (v_id1, v_id2);
+    DELETE FROM stewards.messages WHERE session_id IN ('ff-smoke-hi','ff-smoke-lo');
+    DELETE FROM stewards.sessions WHERE id IN ('ff-smoke-hi','ff-smoke-lo');
+    RAISE NOTICE 'OK 56: force-final-at-cap — an interactive chat at its tool-budget ceiling is forced to synthesize instead of dying silently; below the ceiling tools stay (the durable fix behind the rigor cap raise)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→67) is sound =='
