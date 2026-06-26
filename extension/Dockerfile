@@ -75,7 +75,7 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      60-chat-model-pin.sql 61-world-build-worklist.sql \
      62-orientation.sql 63-orient-survey.sql \
      64-auto-critique.sql 65-rigor-mode.sql 66-rigor-verify.sql \
-     67-rigor-force-final.sql ./
+     67-rigor-force-final.sql 68-model-fallback-hardening.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
