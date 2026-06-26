@@ -76,6 +76,15 @@ func makeGenerateImage(pool *pgxpool.Pool) func(context.Context, *mcp.CallToolRe
 		})
 		cctx, cancel := context.WithTimeout(ctx, 90*time.Second)
 		defer cancel()
+		// Cost ceiling: image gen bypasses the chat dispatch gate (compose_messages
+		// Layer-1), so honor the provider spend cap here too — otherwise it's an uncapped
+		// spend path. provider = google_gemini (the provider this tool dials). On an
+		// install with no enforced cap, provider_cap_exceeded is false → no-op.
+		const imgProvider = "google_gemini"
+		var capExceeded bool
+		if err := pool.QueryRow(cctx, `SELECT stewards.provider_cap_exceeded($1)`, imgProvider).Scan(&capExceeded); err == nil && capExceeded {
+			return toolError("generate_image: %s spend cap reached — image generation blocked (provider_spend_caps); refill or raise the cap to resume", imgProvider), GenerateImageOutput{}, nil
+		}
 		url := fmt.Sprintf("%s/models/%s:generateContent?key=%s", base, model, key)
 		httpReq, _ := http.NewRequestWithContext(cctx, http.MethodPost, url, bytes.NewReader(reqBody))
 		httpReq.Header.Set("Content-Type", "application/json")
@@ -146,6 +155,19 @@ func makeGenerateImage(pool *pgxpool.Pool) func(context.Context, *mcp.CallToolRe
 			return toolError("generate_image: store attachment: %v", err), GenerateImageOutput{}, nil
 		}
 		serveURL := fmt.Sprintf("/api/chat/attachment/%d", id)
+		// Record the spend so image generation shows up in provider_spend_caps + cost
+		// reporting (it doesn't go through the chat cost path, so it was invisible). Nano
+		// Banana is billed per image; flat default, override via config image_cost_micro_dollars.
+		var costMicro int64 = 39000 // ~$0.039 / image
+		_ = pool.QueryRow(cctx,
+			`SELECT coalesce((value #>> '{}')::bigint, 39000) FROM stewards.config WHERE key = 'image_cost_micro_dollars'`,
+		).Scan(&costMicro)
+		if _, cerr := pool.Exec(cctx,
+			`INSERT INTO stewards.cost_events (session_id, attempt_seq, provider, model, output_tokens, micro_dollars, pricing_effective_at, notes)
+			 VALUES ($1, 1, $2, $3, 0, $4, now(), 'generate_image (Nano Banana) per-image cost')`,
+			sess, imgProvider, model, costMicro); cerr != nil {
+			fmt.Fprintf(os.Stderr, "generate_image: cost_event insert failed (image still served): %v\n", cerr)
+		}
 		out := GenerateImageOutput{URL: serveURL, ID: id, MimeType: mime, Bytes: len(img)}
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{
 			Text: fmt.Sprintf("Generated image (%s, %d bytes). View / download: %s", mime, len(img), serveURL),
