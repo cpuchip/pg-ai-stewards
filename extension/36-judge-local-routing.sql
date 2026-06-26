@@ -66,6 +66,46 @@ CREATE TRIGGER work_queue_reroute_judge_to_local
     BEFORE INSERT ON stewards.work_queue
     FOR EACH ROW EXECUTE FUNCTION stewards.reroute_judge_to_local();
 
+-- ── research fail-closed: research-write MUST stay on free local ──────
+-- The research-write pipeline stages are pinned to research-local (free flexllama).
+-- A recursive research fan-out on a PAID provider cost ~$50 (spawn-bounds bounds the
+-- delegation TREE; this bounds the COST). If a research chat is ever enqueued on a
+-- paid provider — a stale snapshot from before a stage repoint, or a misconfigured
+-- alias/escalation — reroute it to free local rather than dispatch a paid call. Fail
+-- CLOSED: better to run free (or error if local is down) than burn. Unlike the judge
+-- reroute this is NOT gated by a config flag — research on a paid provider is never
+-- intended, so the guard is always on.
+CREATE OR REPLACE FUNCTION stewards.reroute_research_to_local()
+RETURNS trigger LANGUAGE plpgsql AS $fn$
+DECLARE
+    v_family text := NEW.payload ->> 'agent_family';
+    v_model  text;
+BEGIN
+    IF NEW.kind <> 'chat'
+       OR v_family IS NULL
+       OR NOT (v_family = 'research' OR v_family LIKE 'subagent-research%')
+       OR NEW.provider NOT IN ('google_vertex','google_gemini') THEN
+        RETURN NEW;
+    END IF;
+    v_model := coalesce((SELECT provider_model FROM stewards.model_aliases
+                          WHERE alias = 'research-local' ORDER BY priority LIMIT 1), 'gemma-4-26b-a4b');
+    NEW.provider := 'flexllama';
+    NEW.payload  := jsonb_set(NEW.payload, '{requested_model}', to_jsonb(v_model));
+    IF NEW.payload ? 'body' THEN
+        NEW.payload := jsonb_set(NEW.payload, '{body,model}', to_jsonb(v_model));
+    END IF;
+    RAISE NOTICE 'research fail-closed: rerouted % from paid provider -> flexllama/%', v_family, v_model;
+    RETURN NEW;
+END;
+$fn$;
+COMMENT ON FUNCTION stewards.reroute_research_to_local() IS
+'36: BEFORE-INSERT on work_queue — fail-closed cost guard. research-write must never dispatch on a paid provider (its stages are pinned to free research-local); any research/* chat enqueued on google_vertex/google_gemini is rerouted to flexllama. Bounds COST the way spawn-bounds bounds the tree. Always on (no config flag).';
+
+DROP TRIGGER IF EXISTS work_queue_reroute_research_to_local ON stewards.work_queue;
+CREATE TRIGGER work_queue_reroute_research_to_local
+    BEFORE INSERT ON stewards.work_queue
+    FOR EACH ROW EXECUTE FUNCTION stewards.reroute_research_to_local();
+
 -- =====================================================================
 -- End of 36-judge-local-routing.sql
 -- =====================================================================
