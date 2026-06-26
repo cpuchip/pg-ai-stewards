@@ -651,6 +651,12 @@ extension_sql_file!(
     requires = ["create_orientation"],
 );
 
+extension_sql_file!(
+    "../64-auto-critique.sql",
+    name = "create_auto_critique",
+    requires = ["create_orient_survey"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

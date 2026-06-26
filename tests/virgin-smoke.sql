@@ -2321,4 +2321,37 @@ BEGIN
     RAISE NOTICE 'OK 52: orient_survey — the universal "what already exists for this project" survey (docs + worlds + work), granted to the corpus-builders';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→63) is sound =='
+-- ---------------------------------------------------------------------
+-- 53. Standing trajectory critique (64) — the verify HALF, made standing.
+-- A worker run finishing auto-dispatches the trajectory-critic (56); the
+-- verdict is harvested (59) and feeds the self-improvement loop. Config-gated
+-- (default OFF, cost), worker-only, graders excluded (no recursion).
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+    ASSERT to_regprocedure('stewards.should_auto_critique(text,text)') IS NOT NULL, '64: predicate exists';
+    ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='work_queue_auto_critique'), '64: standing-critique trigger exists';
+    ASSERT coalesce((stewards.config_get('auto_critique_on_complete','false'::jsonb))::text::boolean, false) IS FALSE,
+        '64: auto-critique ships OFF by default (cost-safe)';
+    -- fixture: a worker run that used tools and committed (finish=stop)
+    INSERT INTO stewards.sessions (id,kind) VALUES ('ac-smoke','agent') ON CONFLICT DO NOTHING;
+    INSERT INTO stewards.messages (session_id,role,content,tool_calls,finish_reason) VALUES
+      ('ac-smoke','assistant','', '[{"function":{"name":"doc_search","arguments":"{}"}}]'::jsonb, 'tool_calls'),
+      ('ac-smoke','assistant','grounded answer', NULL, 'stop');
+    ASSERT NOT stewards.should_auto_critique('ac-smoke','research'), '64: OFF by default -> no critique';
+    PERFORM stewards.config_set('auto_critique_on_complete','true'::jsonb, NULL);
+    ASSERT stewards.should_auto_critique('ac-smoke','research'),
+        '64: ON + a worker run that used tools and committed -> critique fires';
+    ASSERT NOT stewards.should_auto_critique('ac-smoke','trajectory-critic'),
+        '64: a grader is NEVER auto-critiqued (no recursion / do not grade the graders)';
+    ASSERT NOT stewards.should_auto_critique('ac-smoke','persona'), '64: a non-worker family is not critiqued';
+    INSERT INTO stewards.trajectory_verdicts(target_session,agent_family,verdict) VALUES ('ac-smoke','research','pass');
+    ASSERT NOT stewards.should_auto_critique('ac-smoke','research'), '64: an already-judged run is not re-critiqued (dedup)';
+    PERFORM stewards.config_set('auto_critique_on_complete','false'::jsonb, NULL);
+    DELETE FROM stewards.trajectory_verdicts WHERE target_session='ac-smoke';
+    DELETE FROM stewards.messages WHERE session_id='ac-smoke';
+    DELETE FROM stewards.sessions WHERE id='ac-smoke';
+    RAISE NOTICE 'OK 53: standing trajectory critique — config-gated (default OFF), worker-only, graders excluded, fires once at a committed tool-using run that has no verdict (the verify half, made standing)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→64) is sound =='
