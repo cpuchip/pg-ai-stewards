@@ -7,7 +7,7 @@
 // per-message provenance chips (which facet each retrieval tool hit).
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import MarkdownIt from 'markdown-it'
-import { api, type ChatSessionRow, type ChatWorkItemCard, type ChatModelOpt } from '@/api'
+import { api, type ChatSessionRow, type ChatWorkItemCard, type ChatModelOpt, type ChatDiagnoseResp } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
 import { makeLinkClick } from './useDocLinks'
 
@@ -484,6 +484,21 @@ const lastTruncated = computed(() => {
 function continueReply() { if (busy.value) return; input.value = 'Please continue from where you left off.'; send() }
 // ease-of-life D: edit & resend — drop the message text back into the composer.
 function editMsg(m: Msg) { input.value = m.content; nextTick(() => { /* focus handled by the textarea */ }) }
+
+// ease-of-life E: 🩺 Diagnose — gather rig/session/build trouble, auto-fix the safe
+// things (cancel duplicate builds, cycle a wedged slot), narrate on the strongest
+// model. Renders a dismissible card with what it saw / did / recommends.
+const diag = ref<ChatDiagnoseResp | null>(null)
+const diagnosing = ref(false)
+const showDiagFacts = ref(false)
+async function runDiagnose() {
+  if (!activeSession.value || diagnosing.value) return
+  diagnosing.value = true; diag.value = null; err.value = ''
+  try {
+    diag.value = await api.chatDiagnose({ session_id: activeSession.value })
+    refreshWork() // any auto-fix (cancelled dupes) shows on the cards
+  } catch (e) { err.value = String(e) } finally { diagnosing.value = false }
+}
 // ease-of-life B: re-run a failed/cancelled artifact build (optionally on a
 // stronger model). The card re-walks its pipeline instead of dead-ending at ⚠️.
 const wiRetryable = (w: ChatWorkItemCard) => w.status === 'failed' || w.status === 'cancelled'
@@ -569,6 +584,10 @@ function onKey(e: KeyboardEvent) {
         </select>
       </div>
       <button v-if="chatRef" class="text-sky-400 hover:text-sky-300" title="new conversation" @click="newSession">＋ New chat</button>
+      <!-- ease-of-life E: 🩺 Diagnose this chat (find + auto-fix trouble) -->
+      <button v-if="activeSession" class="text-zinc-400 hover:text-amber-300 disabled:opacity-40" :disabled="diagnosing"
+              title="diagnose this chat — find + auto-fix trouble (stuck/duplicate builds, a wedged rig slot)" @click="runDiagnose">
+        🩺<span v-if="diagnosing" class="text-zinc-600">…</span></button>
       <!-- ease-of-life C: always-visible model switch — ⚡ Fast (local) / 🧠 Smart
            (cloud). Picking a model lets it "take over" the conversation. Cloud
            models that train on inputs are flagged ⚠ so a private corpus isn't
@@ -715,6 +734,28 @@ function onKey(e: KeyboardEvent) {
         <span class="text-zinc-400">project lens</span> above to chat over a whole corpus.
         Attach a PDF, Office doc, or a zipped folder with 📎 and it becomes safe,
         searchable subject material.
+      </div>
+      <!-- ease-of-life E: 🩺 Diagnose result — what it saw, auto-fixed, recommends -->
+      <div v-if="diag" class="rounded-lg border border-amber-800/50 bg-amber-950/20 px-3 py-2 text-xs space-y-1.5">
+        <div class="flex items-center gap-2">
+          <span>🩺</span><span class="text-amber-200 font-medium">Diagnosis</span>
+          <button class="ml-auto text-zinc-500 hover:text-zinc-300" title="dismiss" @click="diag = null">✕</button>
+        </div>
+        <div v-if="diag.diagnosis" class="text-zinc-200 whitespace-pre-wrap">{{ diag.diagnosis }}</div>
+        <div v-if="diag.actions_taken.length">
+          <div class="text-emerald-400">✓ Fixed automatically:</div>
+          <ul class="list-disc ml-4 text-emerald-300/90"><li v-for="(a, i) in diag.actions_taken" :key="i">{{ a }}</li></ul>
+        </div>
+        <div v-if="diag.recommendations.length">
+          <div class="text-amber-300">→ Recommended:</div>
+          <ul class="list-disc ml-4 text-amber-200/90"><li v-for="(r, i) in diag.recommendations" :key="i">{{ r }}</li></ul>
+        </div>
+        <div v-if="!diag.diagnosis && !diag.actions_taken.length && !diag.recommendations.length" class="text-zinc-400">
+          No trouble found — everything looks healthy.
+        </div>
+        <button v-if="diag.facts.length" class="text-zinc-600 hover:text-zinc-400 text-[10px]"
+                @click="showDiagFacts = !showDiagFacts">{{ showDiagFacts ? 'hide' : 'show' }} raw signals ({{ diag.facts.length }})</button>
+        <ul v-if="showDiagFacts" class="list-disc ml-4 text-zinc-500 text-[10px]"><li v-for="(f, i) in diag.facts" :key="i">{{ f }}</li></ul>
       </div>
       <!-- ease-of-life D: the reply was cut off (finish_reason='length') → continue it -->
       <div v-if="lastTruncated && !busy" class="text-xs">

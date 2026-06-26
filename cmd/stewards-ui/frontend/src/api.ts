@@ -637,6 +637,11 @@ export const api = {
   // reply is replaced rather than the question duplicated.
   chatRegenerate: (session_id: string, opts?: { model?: string; provider?: string }) =>
     postJSON<{ session_id: string; work_queue_id: number }>('/api/chat/regenerate', { session_id, ...(opts || {}) }),
+  // ease-of-life E: 🩺 Diagnose — gather rig/session/build trouble, auto-fix the
+  // safe things (cancel duplicate builds, cycle a wedged slot), and narrate on the
+  // strongest model. Returns what it saw, what it did, and what it recommends.
+  chatDiagnose: (opts: { session_id?: string; work_item_id?: string }) =>
+    postJSON<ChatDiagnoseResp>('/api/chat/diagnose', opts),
   // is the chat loop still doing work? clears a stale "thinking" spinner when a
   // loop stops on steps_exhausted/truncation (no terminal message ever streams).
   chatSessionStatus: (session: string) =>
@@ -1327,6 +1332,15 @@ export type ChatWorkItemCard = {
   created_at?: string
   completed_at?: string
   artifacts?: WiCardArtifact[]
+}
+
+// ease-of-life E: the 🩺 Diagnose result — narrative + what it auto-fixed + what
+// it recommends (recommend-only items), plus the raw facts for a Details view.
+export type ChatDiagnoseResp = {
+  diagnosis: string
+  actions_taken: string[]
+  recommendations: string[]
+  facts: string[]
 }
 
 // ease-of-life A/C: a pickable chat model. tier = local(⚡)/cloud(🧠);
