@@ -43,6 +43,24 @@ const KIND_LABEL: Record<string, string> = {
 const kindColor = (k: string) => KIND_COLOR[k] ?? '#71717a'
 const labelColor = (k: string) => KIND_LABEL[k] ?? '#e4e4e7'
 
+// edge colour by RELATIONSHIP type, so the connecting lines actually read as a
+// graph. Before, links were a near-invisible dim gray at the lib's default 0.2
+// opacity — all you saw was the directional particles. Now each `rel` gets a
+// stable bright colour from a categorical palette (deterministic hash → palette),
+// surfaced in a legend so the colours mean something.
+const REL_PALETTE = [
+  '#f87171', '#fb923c', '#fbbf24', '#a3e635', '#34d399', '#22d3ee',
+  '#60a5fa', '#a78bfa', '#f472b6', '#e879f9', '#fca5a5', '#5eead4',
+]
+function relColor(rel: string): string {
+  let h = 0
+  const s = rel || ''
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
+  return REL_PALETTE[h % REL_PALETTE.length] ?? '#94a3b8'
+}
+const relsPresent = ref<string[]>([]) // distinct relationship types in view → the legend
+const showLegend = ref(true)
+
 // the default sphere radius in 3d-force-graph is cbrt(nodeVal) · nodeRelSize.
 // We pin nodeRelSize so the label offset (below) uses the same constant and a
 // name always clears its circle, hub or leaf.
@@ -231,6 +249,7 @@ async function loadWorld(slug: string) {
     nodeById = new Map(g.nodes.map(n => [n.id, n]))
     active.value = new Set(g.nodes.map(n => n.kind)) // all kinds on
     activeProjects.value = new Set(g.nodes.flatMap(n => n.projects ?? [])) // all buckets on
+    relsPresent.value = [...new Set(g.links.map(l => l.rel).filter(Boolean))].sort() // legend
     graph.graphData(g)
     applyVisibility()
   } catch (e) {
@@ -320,12 +339,15 @@ onMounted(async () => {
     })
     .nodeThreeObjectExtend(true)        // keep the sphere AND the label
     .linkLabel((l: { rel: string }) => l.rel)
-    .linkColor(() => 'rgba(113,113,122,0.38)') // dimmer → labels win the hierarchy
-    .linkWidth(0.5)
+    .linkColor((l: { rel: string }) => relColor(l.rel)) // colour-coded by relationship
+    .linkWidth(1.4)                                      // visible lines (was 0.5)
+    .linkOpacity(0.7)                                    // the lib defaults to 0.2 → near-invisible
     .linkDirectionalParticles(2)
-    .linkDirectionalParticleWidth(1.2)
+    .linkDirectionalParticleWidth(1.6)
+    .linkDirectionalParticleColor((l: { rel: string }) => relColor(l.rel)) // particles match the line
     .linkDirectionalParticleSpeed(0.006)
-    .linkDirectionalArrowLength(3)
+    .linkDirectionalArrowLength(3.2)
+    .linkDirectionalArrowColor((l: { rel: string }) => relColor(l.rel))
     .linkDirectionalArrowRelPos(1)
     .onNodeClick((n: WorldNode) => { selectNode(n) })
     .onNodeDrag(() => stopOrbit())
@@ -512,6 +534,18 @@ onUnmounted(() => {
 
     <!-- the 3D canvas -->
     <div ref="el" class="flex-1 min-h-0"></div>
+
+    <!-- edge colour legend — what the connecting lines mean (relationship types) -->
+    <div v-if="relsPresent.length" class="absolute left-3 bottom-3 z-10 max-w-[55%]">
+      <button class="text-[10px] text-zinc-300 hover:text-white bg-zinc-900/80 border border-zinc-800 rounded px-1.5 py-0.5"
+              :title="`${relsPresent.length} relationship type(s) — the edge colours`"
+              @click="showLegend = !showLegend">{{ showLegend ? '▾' : '▸' }} edges ({{ relsPresent.length }})</button>
+      <div v-if="showLegend" class="mt-1 bg-zinc-900/85 border border-zinc-800 rounded p-2 max-h-44 overflow-auto flex flex-wrap gap-x-3 gap-y-1">
+        <span v-for="r in relsPresent" :key="r" class="inline-flex items-center gap-1 text-[10px] text-zinc-300">
+          <span class="inline-block w-3.5 h-1 rounded-sm shrink-0" :style="{ backgroundColor: relColor(r) }"></span>{{ r }}
+        </span>
+      </div>
+    </div>
 
     <!-- loading / empty overlays -->
     <div v-if="loading" class="absolute inset-0 flex items-center justify-center pointer-events-none">
