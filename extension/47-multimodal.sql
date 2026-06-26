@@ -221,6 +221,18 @@ BEGIN
     v_system := v_system || stewards.render_self_notes(p_agent_family, p_session_id);
 
     v_provider := stewards.provider_for_session(p_session_id);
+
+    -- LAYER-1 COST CEILING (send-time): provider_cap_exceeded is checked at ENQUEUE, but
+    -- already-queued / snapshotted work (e.g. a runaway fan-out) ignores that gate and keeps
+    -- sending. compose_messages runs before EVERY chat send, so raising here is the universal
+    -- send-time ceiling — the bgworker errors the work instead of dispatching, so no provider
+    -- call (no spend) happens once the enforced cap is reached. (provider_spend_caps:
+    -- enforced=true + cap_micro; refill/raise via provider_cap_refill to resume.)
+    IF stewards.provider_cap_exceeded(v_provider) THEN
+        RAISE EXCEPTION 'provider % spend cap reached — dispatch blocked (provider_spend_caps); refill or raise the cap to resume', v_provider
+            USING ERRCODE = 'insufficient_resources';
+    END IF;
+
     v_rule_reasoning_content := stewards.provider_field_rule(v_provider, 'assistant', 'reasoning_content');
 
     -- L.1.1.3: resolve stage + strategy.

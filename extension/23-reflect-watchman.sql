@@ -69,7 +69,7 @@ DECLARE
 BEGIN
     -- in flight: the whole autonomous surface (not just the drain's accounting).
     SELECT count(*) INTO v_in_flight FROM stewards.work_items
-     WHERE actor IN ('scheduler','reflect-steward')
+     WHERE actor IN ('scheduler','reflect-steward','subagent','persona-request')
        AND status IN ('in_progress','awaiting_review');
 
     -- un-triaged proposals (mirrors reflect_status.proposals_pending).
@@ -82,11 +82,11 @@ BEGIN
         (SELECT min(rn) - 1
            FROM (SELECT status, row_number() OVER (ORDER BY updated_at DESC) rn
                    FROM stewards.work_items
-                  WHERE actor IN ('scheduler','reflect-steward')
+                  WHERE actor IN ('scheduler','reflect-steward','subagent','persona-request')
                     AND status IN ('completed','failed','cancelled')) t
           WHERE status <> 'failed'),
         (SELECT count(*) FROM stewards.work_items
-           WHERE actor IN ('scheduler','reflect-steward')
+           WHERE actor IN ('scheduler','reflect-steward','subagent','persona-request')
              AND status IN ('completed','failed','cancelled'))
     ) INTO v_consec;
 
@@ -95,7 +95,7 @@ BEGIN
       FROM stewards.cost_events ce
       JOIN stewards.work_items w ON w.id = ce.work_item_id
      WHERE ce.at > now() - make_interval(hours => greatest(v_win_hours,1))
-       AND w.actor IN ('scheduler','reflect-steward');
+       AND w.actor IN ('scheduler','reflect-steward','subagent','persona-request');
 
     -- first breach wins (the reason handed to reflect_pause).
     IF v_in_flight >= v_max_inf THEN
@@ -191,7 +191,7 @@ RETURNS jsonb LANGUAGE sql STABLE AS $$
                               FROM stewards.reflect_guard_log ORDER BY tripped_at DESC LIMIT 1),
         'recent_reflect_runs', (SELECT COALESCE(jsonb_agg(jsonb_build_object('slug',slug,'status',status,'maturity',maturity,'at',to_char(updated_at,'MM-DD HH24:MI')) ORDER BY updated_at DESC), '[]'::jsonb)
                                  FROM (SELECT slug,status,maturity,updated_at FROM stewards.work_items
-                                        WHERE pipeline_family='planning' AND actor IN ('scheduler','reflect-steward')
+                                        WHERE pipeline_family='planning' AND actor IN ('scheduler','reflect-steward','subagent','persona-request')
                                         ORDER BY updated_at DESC LIMIT 5) r)
     );
 $$;
