@@ -43,7 +43,14 @@ KEEP IT TO THE CHAT WINDOW. A few short paragraphs, max. When the user wants mor
 Only answer inline when the content fits the chat window and the user wants it IN the chat, not as a file or report.
 
 Your tools are read-only (you do not modify anything) EXCEPT start_task, which delegates a larger piece of work.$PROMPT$,
-  0.3, 12
+  -- tool-loop cap. Rigor mode re-reads every cited source, and a corpus with large
+  -- documents paginates each read (page_in_tool_result_cap_chars), so a grounded
+  -- chat over a big bucket legitimately needs many rounds — observed ~20 for a
+  -- thorough rigor query. 12 was too low (it died mid-pagination with no answer);
+  -- 40 gives real headroom. NOTE: this only raises the ceiling — the durable fix
+  -- for hitting it is force-final-at-cap on the interactive chat loop (today only
+  -- pipeline stages get the soft/hard-cap force-final in chat_post_internal).
+  0.3, 40
 )
 ON CONFLICT (family, model_match) DO UPDATE
   SET description = EXCLUDED.description,
