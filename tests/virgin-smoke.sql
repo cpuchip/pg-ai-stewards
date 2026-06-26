@@ -2441,4 +2441,25 @@ BEGIN
     RAISE NOTICE 'OK 56: force-final-at-cap — an interactive chat at its tool-budget ceiling is forced to synthesize instead of dying silently; below the ceiling tools stay (the durable fix behind the rigor cap raise)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→67) is sound =='
+-- ---------------------------------------------------------------------
+-- 57. Model-fallback hardening (68) — a pulled/unloaded model is classified
+-- TRANSIENT so alias failover walks to a live member instead of hard-failing,
+-- and the local MoE pair are mutual fallback members (gemma↔qwen).
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+    ASSERT stewards.diagnose_failure('chat HTTP 404 Not Found: no local slot or reachable peer serves model gemma-4-26b-a4b') = 'transient',
+        '68: the rig 404 "no slot serves model" must classify transient (so failover engages, not hard-fail)';
+    ASSERT stewards.diagnose_failure('400: model not found / no such model') = 'transient',
+        '68: cloud model-not-found must classify transient';
+    ASSERT stewards.diagnose_failure('tool schema validation failed') = 'tool_error',
+        '68: a genuine tool error must NOT be miscaught as transient';
+    ASSERT stewards.diagnose_failure('HTTP 529 overloaded') = 'transient',
+        '68: existing 5xx/overload transient classification preserved';
+    ASSERT EXISTS (SELECT 1 FROM stewards.model_aliases WHERE alias='ingest' AND provider_model='qwen3.6-35b-a3b')
+       AND EXISTS (SELECT 1 FROM stewards.model_aliases WHERE alias='reason' AND provider_model='gemma-4-26b-a4b'),
+        '68: the local MoE pair are mutual fallback members (gemma pulled→qwen, qwen pulled→gemma)';
+    RAISE NOTICE 'OK 57: model-fallback hardening — a pulled local model classifies transient (failover walks to a live member) + the local MoE pair are mutual fallbacks';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→68) is sound =='

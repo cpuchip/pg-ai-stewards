@@ -675,6 +675,12 @@ extension_sql_file!(
     requires = ["create_rigor_verify"],
 );
 
+extension_sql_file!(
+    "../68-model-fallback-hardening.sql",
+    name = "create_model_fallback_hardening",
+    requires = ["create_rigor_force_final"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
