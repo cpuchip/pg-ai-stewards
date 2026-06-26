@@ -2296,4 +2296,29 @@ BEGIN
     RAISE NOTICE 'OK 51: orientation autoload — a skill lent via skill_autoload renders as STANDING orientation even for a skill-denied agent; the skill-denied + no-autoload invariant is preserved';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→62) is sound =='
+-- ---------------------------------------------------------------------
+-- 52. orient_survey (63) — the universal "what already exists here?" move,
+-- generalizing intent_work_survey (22) from intent->project for any builder.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_res jsonb;
+BEGIN
+    ASSERT to_regprocedure('stewards.orient_survey_tool(jsonb)') IS NOT NULL, '63: orient_survey_tool exists';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='orient_survey' AND active), '63: orient_survey tool registered';
+    ASSERT (SELECT count(*) FROM stewards.agent_tool_perms WHERE tool_pattern='orient_survey' AND action='allow') >= 4,
+        '63: orient_survey granted to the corpus-builders';
+    -- functional: a project with a doc + a world surfaces both
+    INSERT INTO stewards.docs (slug,title,body,project_association) VALUES ('os-fix-doc','OS Fix','alpha beta gamma','os-fix-proj');
+    PERFORM stewards.world_upsert('os-fix-world','OS Fix World', NULL, 'os-fix-proj', true);
+    v_res := (stewards.orient_survey_tool('{"project":"os-fix-proj"}'::jsonb))::jsonb;
+    ASSERT (v_res->>'doc_count')::int = 1, '63: orient_survey counts the project docs';
+    ASSERT v_res->'existing_worlds' @> '[{"slug":"os-fix-world"}]'::jsonb,
+        '63: orient_survey surfaces worlds built over the project';
+    ASSERT (stewards.orient_survey_tool('{}'::jsonb))::jsonb ? 'error',
+        '63: orient_survey with no project and no project-scoped session errors clearly';
+    DELETE FROM stewards.worlds WHERE slug='os-fix-world';
+    DELETE FROM stewards.docs WHERE project_association='os-fix-proj';
+    RAISE NOTICE 'OK 52: orient_survey — the universal "what already exists for this project" survey (docs + worlds + work), granted to the corpus-builders';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→63) is sound =='

@@ -645,6 +645,12 @@ extension_sql_file!(
     requires = ["create_world_build_worklist"],
 );
 
+extension_sql_file!(
+    "../63-orient-survey.sql",
+    name = "create_orient_survey",
+    requires = ["create_orientation"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
