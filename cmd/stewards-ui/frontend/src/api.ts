@@ -612,8 +612,13 @@ export const api = {
   // Stewdio chat-with-a-work-item (P1). chatSend appends a turn + dispatches it;
   // the reply is streamed separately via EventSource('/api/chat/stream?session_id=').
   // rich-docs P2: attachment_ids inject uploaded media as subject material.
-  chatSend: (req: { session_id?: string; target_ref?: string; message: string; model?: string; attachment_ids?: number[] }) =>
+  chatSend: (req: { session_id?: string; target_ref?: string; message: string; model?: string; provider?: string; attachment_ids?: number[] }) =>
     postJSON<{ session_id: string; work_queue_id: number }>('/api/chat/send', req),
+  // ease-of-life A/C: the pickable chat models — ⚡Fast(local)/🧠Smart(cloud), each
+  // flagged private_safe (provider does NOT train on inputs). Send {model,provider}
+  // on chatSend to let that model take over (dispatch_chat_pinned).
+  chatModels: () =>
+    getJSON<{ models: ChatModelOpt[] }>('/api/chat/models'),
   // Stewdio P4: the conversation-history sidebar — all chat sessions for a target.
   chatSessions: (targetRef: string) =>
     getJSON<ChatSessionsResp>(`/api/chat/sessions?target_ref=${encodeURIComponent(targetRef)}`),
@@ -623,6 +628,15 @@ export const api = {
   // b2: work items this chat spawned — live status cards that walk the pipeline.
   chatWorkItems: (session: string) =>
     getJSON<{ work_items: ChatWorkItemCard[] }>(`/api/chat/work-items?session=${encodeURIComponent(session)}`),
+  // ease-of-life B: re-run a failed/cancelled artifact build (optionally pinning a
+  // stronger model). The card walks its pipeline again instead of dead-ending at ⚠️.
+  chatWorkItemRetry: (work_item_id: string, opts?: { model?: string; provider?: string }) =>
+    postJSON<{ work_queue_id: number; status: string }>('/api/chat/work-item/retry', { work_item_id, ...(opts || {}) }),
+  // ease-of-life D: regenerate the last reply IN PLACE — rewinds the last user
+  // turn + its replies and re-runs it (optionally on a stronger model), so the
+  // reply is replaced rather than the question duplicated.
+  chatRegenerate: (session_id: string, opts?: { model?: string; provider?: string }) =>
+    postJSON<{ session_id: string; work_queue_id: number }>('/api/chat/regenerate', { session_id, ...(opts || {}) }),
   // is the chat loop still doing work? clears a stale "thinking" spinner when a
   // loop stops on steps_exhausted/truncation (no terminal message ever streams).
   chatSessionStatus: (session: string) =>
@@ -1313,6 +1327,18 @@ export type ChatWorkItemCard = {
   created_at?: string
   completed_at?: string
   artifacts?: WiCardArtifact[]
+}
+
+// ease-of-life A/C: a pickable chat model. tier = local(⚡)/cloud(🧠);
+// private_safe = the provider does NOT train on inputs (so a private corpus is
+// never silently escalated to a training cloud model).
+export type ChatModelOpt = {
+  id: string
+  provider: string
+  tier: 'local' | 'cloud'
+  private_safe: boolean
+  vision: boolean
+  context_window?: number
 }
 
 // rich-docs P2: a stored chat attachment (image/document as subject material).

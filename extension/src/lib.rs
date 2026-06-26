@@ -627,6 +627,12 @@ extension_sql_file!(
     requires = ["create_world_edge_audit"],
 );
 
+extension_sql_file!(
+    "../60-chat-model-pin.sql",
+    name = "create_chat_model_pin",
+    requires = ["create_self_improvement"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

@@ -7,7 +7,7 @@
 // per-message provenance chips (which facet each retrieval tool hit).
 import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import MarkdownIt from 'markdown-it'
-import { api, type ChatSessionRow, type ChatWorkItemCard } from '@/api'
+import { api, type ChatSessionRow, type ChatWorkItemCard, type ChatModelOpt } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
 import { makeLinkClick } from './useDocLinks'
 
@@ -23,7 +23,34 @@ const onLink = makeLinkClick(store)
 // while a doc is open on the left — the selector is always available in the header.
 const lens = ref('')
 const projects = ref<{ name: string; doc_count: number }[]>([])
-onMounted(async () => { try { projects.value = (await api.chatProjects()).projects } catch { /* none */ } })
+
+// ease-of-life A/C: the pickable model surface. `pinned` = an explicit (model,
+// provider) that takes over from the default `reason` role alias (⚡ local).
+// null = the default. Cloud picks that train on data are flagged ⚠ so a private
+// corpus is never silently escalated to a training provider.
+const models = ref<ChatModelOpt[]>([])
+const pinned = ref<ChatModelOpt | null>(null)
+onMounted(async () => {
+  try { projects.value = (await api.chatProjects()).projects } catch { /* none */ }
+  try { models.value = (await api.chatModels()).models } catch { /* keep default-only */ }
+})
+const modelKey = (m: ChatModelOpt) => `${m.provider}|${m.id}`
+const localModels = computed(() => models.value.filter(m => m.tier === 'local'))
+const cloudSafe = computed(() => models.value.filter(m => m.tier === 'cloud' && m.private_safe))
+const cloudTrains = computed(() => models.value.filter(m => m.tier === 'cloud' && !m.private_safe))
+// the curated one-click "go stronger" shortlist: PRIVATE-SAFE cloud models only,
+// so the ⤴ stronger button never auto-routes a (possibly private) chat to a
+// training provider. If none are marked safe, the button hides and the header
+// picker — which shows every model with a ⚠ on training ones — is the conscious
+// escalation path. (An operator marks a provider safe via model_capability.trains_on_data=false.)
+const smartPicks = computed(() => cloudSafe.value.slice(0, 5))
+// header model switch (native select): '' = default reason; else provider|id.
+function onHeaderModel(e: Event) {
+  const v = (e.target as HTMLSelectElement).value
+  pinned.value = v ? (models.value.find(m => modelKey(m) === v) || null) : null
+}
+// the single best one-click escalation target (null when no private-safe cloud exists).
+const escalateTarget = computed<ChatModelOpt | null>(() => smartPicks.value[0] ?? null)
 // the effective conversation ref: an explicit lens wins; else the selected item.
 const chatRef = computed(() => {
   if (lens.value === '__all__') return 'all'
@@ -31,7 +58,7 @@ const chatRef = computed(() => {
   return store.selectedRef || ''
 })
 
-type Msg = { id: number; role: string; content: string; finish_reason?: string; tool_calls: number; tools?: string[]; images?: string[] }
+type Msg = { id: number; role: string; content: string; finish_reason?: string; tool_calls: number; tools?: string[]; images?: string[]; model?: string }
 const messages = ref<Msg[]>([])
 const input = ref('')
 const pending = ref(false)    // optimistic — I just sent; resolved by the authority below
@@ -363,10 +390,16 @@ function newSession() {
   openStream(sid) // empty until the first turn lands
 }
 
-async function send() {
+async function send(override?: ChatModelOpt) {
   const text = input.value.trim()
   const toUpload = staged.value.slice()
   const ref_ = chatRef.value
+  // resolve which model answers: a one-off override (retry/escalate) > the pinned
+  // header model > the default `reason` role alias. A pinned/override carries its
+  // provider so a cloud model routes correctly (dispatch_chat_pinned).
+  const pick = override || pinned.value
+  const sendModel = pick ? pick.id : store.chatModel
+  const sendProvider = pick ? pick.provider : undefined
   // allow a media-only turn (a question is optional when a file is attached)
   if ((!text && toUpload.length === 0) || !ref_) return
   input.value = ''; err.value = ''; pending.value = true; cancelling.value = false
@@ -391,7 +424,8 @@ async function send() {
       session_id: activeSession.value || undefined,
       target_ref: ref_,
       message: text,
-      model: store.chatModel,
+      model: sendModel,
+      provider: sendProvider,
       attachment_ids: attachmentIds,
     })
     if (r.session_id && r.session_id !== activeSession.value) {
@@ -420,12 +454,46 @@ async function stop() {
 
 // Arc A: message actions.
 async function copyMsg(m: Msg) { try { await navigator.clipboard.writeText(m.content) } catch { /* clipboard blocked */ } }
-function regenerateLast() {
-  // re-ask the most recent user turn
+// ease-of-life D: regenerate the last reply IN PLACE — the backend rewinds the
+// last user turn + its replies and re-runs it, so the reply is replaced (not the
+// question duplicated). Optionally on a stronger model (override > pinned).
+async function regenerate(override?: ChatModelOpt) {
+  const sid = activeSession.value
+  if (!sid || busy.value) return
+  const pick = override || pinned.value
+  const opts = pick ? { model: pick.id, provider: pick.provider } : undefined
+  pending.value = true; err.value = ''
+  try {
+    await api.chatRegenerate(sid, opts)
+    openStream(sid) // re-stream: the rewound transcript + the fresh reply
+    pollSoon()
+  } catch (e) { err.value = String(e); pending.value = false }
+}
+// ease-of-life A: escalate — re-run the last turn on a stronger model, and let it
+// take over going forward (pin it) so the conversation continues on the better model.
+function escalateWith(m: ChatModelOpt | null) { if (!m) return; pinned.value = m; regenerate(m) }
+
+// ease-of-life D: Continue a reply the model cut off (finish_reason='length').
+const lastTruncated = computed(() => {
   for (let i = messages.value.length - 1; i >= 0; i--) {
     const m = messages.value[i]
-    if (m && m.role === 'user' && visible(m)) { input.value = m.content; send(); return }
+    if (m && m.role === 'assistant' && m.content.trim()) return m.finish_reason === 'length'
   }
+  return false
+})
+function continueReply() { if (busy.value) return; input.value = 'Please continue from where you left off.'; send() }
+// ease-of-life D: edit & resend — drop the message text back into the composer.
+function editMsg(m: Msg) { input.value = m.content; nextTick(() => { /* focus handled by the textarea */ }) }
+// ease-of-life B: re-run a failed/cancelled artifact build (optionally on a
+// stronger model). The card re-walks its pipeline instead of dead-ending at ⚠️.
+const wiRetryable = (w: ChatWorkItemCard) => w.status === 'failed' || w.status === 'cancelled'
+async function retryBuild(w: ChatWorkItemCard, escalate = false) {
+  try {
+    const opts = escalate && escalateTarget.value
+      ? { model: escalateTarget.value.id, provider: escalateTarget.value.provider } : undefined
+    await api.chatWorkItemRetry(w.id, opts)
+    pollSoon() // surface the re-dispatched card promptly
+  } catch (e) { err.value = String(e) }
 }
 function startTaskFrom(m: Msg) {
   // prefill the composer with a delegate framing; the agent's start_task does the rest
@@ -501,8 +569,27 @@ function onKey(e: KeyboardEvent) {
         </select>
       </div>
       <button v-if="chatRef" class="text-sky-400 hover:text-sky-300" title="new conversation" @click="newSession">＋ New chat</button>
+      <!-- ease-of-life C: always-visible model switch — ⚡ Fast (local) / 🧠 Smart
+           (cloud). Picking a model lets it "take over" the conversation. Cloud
+           models that train on inputs are flagged ⚠ so a private corpus isn't
+           silently escalated to a training provider. -->
+      <select :value="pinned ? modelKey(pinned) : ''" @change="onHeaderModel"
+              :title="pinned ? `chatting on ${pinned.id} (${pinned.provider})` : 'default model (reason → local rig). Pick a stronger model to let it take over.'"
+              class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] max-w-[40%] truncate"
+              :class="pinned ? (pinned.private_safe ? 'text-emerald-300 border-emerald-800/60' : 'text-amber-300 border-amber-700/60') : 'text-zinc-300'">
+        <option value="">⚡ reason (local default)</option>
+        <optgroup v-if="localModels.length" label="local">
+          <option v-for="m in localModels" :key="modelKey(m)" :value="modelKey(m)">⚡ {{ m.id }}</option>
+        </optgroup>
+        <optgroup v-if="cloudSafe.length" label="cloud · private-safe">
+          <option v-for="m in cloudSafe" :key="modelKey(m)" :value="modelKey(m)">🧠 {{ m.id }}</option>
+        </optgroup>
+        <optgroup v-if="cloudTrains.length" label="cloud · ⚠ trains on data">
+          <option v-for="m in cloudTrains" :key="modelKey(m)" :value="modelKey(m)">⚠ {{ m.id }}</option>
+        </optgroup>
+      </select>
       <!-- model-role select is a raw-alias surface — ducked unless Details is on -->
-      <select v-if="store.dev" v-model="store.chatModel" title="model role"
+      <select v-if="store.dev && !pinned" v-model="store.chatModel" title="model role (default path)"
               class="bg-zinc-900 border border-zinc-800 rounded px-1.5 py-0.5 text-[11px] text-zinc-300">
         <option value="reason">reason</option>
         <option value="ingest">ingest</option>
@@ -533,8 +620,10 @@ function onKey(e: KeyboardEvent) {
             </div>
             <div v-if="m.content" class="whitespace-pre-wrap">{{ m.content }}</div>
           </div>
-          <button class="mt-0.5 mr-1 text-[10px] text-zinc-600 hover:text-zinc-300 opacity-0 group-hover:opacity-100 transition"
-                  title="copy" @click="copyMsg(m)">⧉ copy</button>
+          <div class="mt-0.5 mr-1 flex gap-2 text-[10px] text-zinc-600 opacity-0 group-hover:opacity-100 transition">
+            <button class="hover:text-zinc-300" title="copy" @click="copyMsg(m)">⧉ copy</button>
+            <button class="hover:text-zinc-300" title="edit & resend" @click="editMsg(m)">✎ edit</button>
+          </div>
         </div>
         <div v-else-if="m.role === 'assistant' && m.content.trim()" class="flex flex-col items-start group">
           <div class="max-w-[90%] bg-zinc-900 border border-zinc-800 rounded-lg px-3 py-2 text-sm prose prose-invert prose-sm max-w-none" v-html="md.render(m.content)" @click="onLink"></div>
@@ -552,10 +641,17 @@ function onKey(e: KeyboardEvent) {
               <span class="text-zinc-500 group-hover/card:text-sky-300 text-lg">⬇</span>
             </a>
           </div>
-          <div class="flex gap-2 mt-0.5 ml-1 text-[10px] text-zinc-600 opacity-0 group-hover:opacity-100 transition">
-            <button class="hover:text-zinc-300" title="copy" @click="copyMsg(m)">⧉ copy</button>
-            <button class="hover:text-zinc-300" title="re-ask the last question" @click="regenerateLast()">↻ retry</button>
-            <button class="hover:text-zinc-300" title="start a task from this" @click="startTaskFrom(m)">⊕ task</button>
+          <div class="flex gap-2 mt-0.5 ml-1 text-[10px] text-zinc-600 items-center">
+            <!-- D: which model answered (always visible) -->
+            <span v-if="m.model" class="text-zinc-700" :title="`answered by ${m.model}`">⟐ {{ m.model }}</span>
+            <span class="flex gap-2 opacity-0 group-hover:opacity-100 transition">
+              <button class="hover:text-zinc-300" title="copy" @click="copyMsg(m)">⧉ copy</button>
+              <button class="hover:text-zinc-300" title="regenerate this reply in place (same model)" @click="regenerate()">↻ retry</button>
+              <button v-if="escalateTarget" class="hover:text-sky-300"
+                      :title="`retry with a stronger model (${escalateTarget.id}) — it takes over going forward`"
+                      @click="escalateWith(escalateTarget)">⤴ stronger</button>
+              <button class="hover:text-zinc-300" title="start a task from this" @click="startTaskFrom(m)">⊕ task</button>
+            </span>
           </div>
         </div>
         <!-- provenance / tool-call introspection — a developer surface (ducked unless Developer is on) -->
@@ -584,6 +680,13 @@ function onKey(e: KeyboardEvent) {
           </template>
         </div>
         <div v-if="w.error" class="text-rose-400/80 mt-1 text-[10px] line-clamp-2" :title="w.error">{{ w.error }}</div>
+        <!-- ease-of-life B: a failed/cancelled build re-runs instead of dead-ending -->
+        <div v-if="wiRetryable(w)" class="mt-1.5 flex gap-2 text-[11px]">
+          <button class="text-sky-400 hover:text-sky-300 border border-zinc-800 rounded px-1.5 py-0.5"
+                  title="re-run this build" @click="retryBuild(w)">↻ Retry build</button>
+          <button v-if="escalateTarget" class="text-sky-400 hover:text-sky-300 border border-zinc-800 rounded px-1.5 py-0.5"
+                  :title="`re-run on ${escalateTarget.id}`" @click="retryBuild(w, true)">⤴ Retry stronger</button>
+        </div>
         <template v-for="a in (w.artifacts || [])" :key="a.id">
           <img v-if="isImageArt(a)" :src="a.url" :alt="a.filename" class="mt-1.5 max-h-44 rounded-lg border border-zinc-800" />
           <a v-else :href="`${a.url}?download=1`" download
@@ -613,7 +716,17 @@ function onKey(e: KeyboardEvent) {
         Attach a PDF, Office doc, or a zipped folder with 📎 and it becomes safe,
         searchable subject material.
       </div>
-      <div v-if="err" class="text-rose-400 text-xs">{{ err }}</div>
+      <!-- ease-of-life D: the reply was cut off (finish_reason='length') → continue it -->
+      <div v-if="lastTruncated && !busy" class="text-xs">
+        <button class="text-amber-300 hover:text-amber-200 border border-zinc-800 rounded px-1.5 py-0.5"
+                title="the reply hit its length limit — continue it" @click="continueReply()">⏩ Continue the reply</button>
+      </div>
+      <div v-if="err" class="text-xs space-y-1">
+        <div class="text-rose-400">{{ err }}</div>
+        <button v-if="escalateTarget" class="text-sky-300 hover:text-sky-200 border border-zinc-800 rounded px-1.5 py-0.5"
+                :title="`re-run the last turn on ${escalateTarget.id} (${escalateTarget.provider})`"
+                @click="escalateWith(escalateTarget)">⤴ retry with a stronger model</button>
+      </div>
     </div>
 
     <div class="border-t border-zinc-800 p-2">

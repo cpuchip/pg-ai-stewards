@@ -36,6 +36,9 @@ func (d *Deps) registerChat(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/chat/projects", d.chatProjectsHandler)        // rich-docs P3d: the empty-chat lens picker
 	mux.HandleFunc("GET /api/chat/export", d.chatExportHandler)            // Arc A: export a session transcript (md/json)
 	mux.HandleFunc("POST /api/chat/stop", d.chatStopHandler)              // Arc A: cancel a session's not-yet-started chat turn(s)
+	mux.HandleFunc("GET /api/chat/models", d.chatModelsHandler)           // ease-of-life A/C: pickable chat models (Fast local / Smart cloud + privacy)
+	mux.HandleFunc("POST /api/chat/work-item/retry", d.chatWorkItemRetryHandler) // ease-of-life B: re-run a failed/cancelled artifact build (optional stronger model)
+	mux.HandleFunc("POST /api/chat/regenerate", d.chatRegenerateHandler)        // ease-of-life D: regenerate the last reply IN PLACE (rewind the last user turn, re-run)
 }
 
 // maxAttachmentBytes caps an uploaded file. Images fit comfortably; the :8090
@@ -52,6 +55,7 @@ type chatSendReq struct {
 	TargetRef     string  `json:"target_ref,omitempty"` // the doc slug / work_item id the chat is grounded in
 	Message       string  `json:"message"`
 	Model         string  `json:"model,omitempty"`         // role alias / model id; default 'reason' (→ local rig via overlay)
+	Provider      string  `json:"provider,omitempty"`      // ease-of-life A: pin an EXPLICIT provider (with Model = a concrete model id) so a stronger model can take over; empty = resolve Model as a role alias
 	AttachmentIDs []int64 `json:"attachment_ids,omitempty"` // rich-docs P2: chat_attachments to inject as subject material
 }
 
@@ -127,11 +131,29 @@ func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
 		grounding = &g
 	}
 
+	// ease-of-life A: a pinned (provider, model) lets a stronger model "take over"
+	// a text turn — escalation off the local rig to a chosen cloud model. We use
+	// the pinned path only for TEXT turns; a turn carrying attachments keeps the
+	// alias path (which auto-selects the vision model) and ignores the pin.
+	provider := strings.TrimSpace(req.Provider)
+	var wqID int64
+	if provider != "" && len(req.AttachmentIDs) == 0 {
+		if err := d.Pool.QueryRow(ctx,
+			`SELECT stewards.dispatch_chat_pinned($1, $2, 'work-item-chat', $3, $4, $5)`,
+			sid, req.Message, model, provider, grounding,
+		).Scan(&wqID); err != nil {
+			log.Printf("api: chat dispatch pinned (session=%s, model=%s, provider=%s): %v", sid, model, provider, err)
+			writeErr(w, http.StatusInternalServerError, "dispatch: "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, chatSendResp{SessionID: sid, WorkQueueID: wqID})
+		return
+	}
+
 	// rich-docs P2: when the turn carries attachments, the substrate assembles
 	// them into the multimodal content array (chat_attachment_parts, session-
 	// scoped, base64 built server-side) and dispatch_chat_turn auto-selects the
 	// `vision` alias. No attachments → NULL → the text-only path (unchanged).
-	var wqID int64
 	if err := d.Pool.QueryRow(ctx,
 		`SELECT stewards.dispatch_chat_turn($1, $2, 'work-item-chat', $3, $4,
 		          CASE WHEN $5::bigint[] IS NULL OR cardinality($5::bigint[]) = 0 THEN NULL
@@ -153,6 +175,7 @@ type chatStreamMsg struct {
 	ToolCalls    int      `json:"tool_calls"`
 	Tools        []string `json:"tools,omitempty"`  // tool names called this turn → provenance chips (P4)
 	Images       []string `json:"images,omitempty"` // rich-docs P2: image_url data URLs on a multimodal turn → render inline
+	Model        string   `json:"model,omitempty"`  // ease-of-life D: which model answered (the per-reply badge)
 	CreatedAt    string   `json:"created_at,omitempty"`
 }
 
@@ -198,6 +221,7 @@ func (d *Deps) chatStreamHandler(w http.ResponseWriter, r *http.Request) {
 			                          FROM jsonb_array_elements(content_parts) p
 			                         WHERE p->>'type'='image_url' AND p->'image_url'->>'url' IS NOT NULL)
 			             ELSE ARRAY[]::text[] END,
+			        coalesce(model,''),
 			        to_char(created_at,'HH24:MI:SS')
 			   FROM stewards.messages
 			  WHERE session_id=$1 AND id > $2
@@ -208,7 +232,7 @@ func (d *Deps) chatStreamHandler(w http.ResponseWriter, r *http.Request) {
 		defer rows.Close()
 		for rows.Next() {
 			var m chatStreamMsg
-			if rows.Scan(&m.ID, &m.Role, &m.Content, &m.FinishReason, &m.ToolCalls, &m.Tools, &m.Images, &m.CreatedAt) == nil {
+			if rows.Scan(&m.ID, &m.Role, &m.Content, &m.FinishReason, &m.ToolCalls, &m.Tools, &m.Images, &m.Model, &m.CreatedAt) == nil {
 				last = m.ID
 				if b, e := json.Marshal(m); e == nil {
 					fmt.Fprintf(w, "data: %s\n\n", b)
@@ -833,4 +857,169 @@ func (d *Deps) chatExportHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s.md\"", safe))
 	_, _ = w.Write([]byte(b.String()))
+}
+
+// ── chat models — the pickable model surface (ease-of-life A/C). ──
+// GET /api/chat/models → the usable chat models the user can pick / escalate to,
+// each tagged local-vs-cloud (the ⚡Fast / 🧠Smart switch) and private_safe (a
+// model whose provider does NOT train on inputs — so a private/work-corpus corpus is
+// never silently sent to a training cloud provider). The UI sends {model,provider}
+// to pin a pick (chatSend → dispatch_chat_pinned); local models keep using the
+// 'reason' role alias (the default). Embedding models are excluded.
+type chatModelOpt struct {
+	ID            string `json:"id"`       // model id to send as `model`
+	Provider      string `json:"provider"` // provider to pin (sent as `provider`)
+	Tier          string `json:"tier"`     // "local" | "cloud"
+	PrivateSafe   bool   `json:"private_safe"`
+	Vision        bool   `json:"vision"`
+	ContextWindow int    `json:"context_window,omitempty"`
+}
+
+func (d *Deps) chatModelsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 6*time.Second)
+	defer cancel()
+	// local providers run on the operator's own rig → always private-safe. A cloud
+	// model is private-safe only when it explicitly does NOT train on inputs
+	// (coalesce unknown → treated as training = unsafe, the conservative default).
+	rows, err := d.Pool.Query(ctx, `
+		WITH m AS (
+		  SELECT model, provider,
+		         (provider IN ('flexllama','lm_studio','ollama')) AS is_local,
+		         coalesce(supports_vision,false) AS vision,
+		         coalesce(context_window,0) AS ctx,
+		         coalesce(trains_on_data,true) AS trains
+		    FROM stewards.model_capability
+		   WHERE coalesce(usable,false) = true
+		     AND model NOT ILIKE '%embed%' AND model NOT ILIKE '%nomic%'
+		)
+		SELECT model, provider,
+		       CASE WHEN is_local THEN 'local' ELSE 'cloud' END,
+		       (is_local OR NOT trains) AS private_safe,
+		       vision, ctx
+		  FROM m
+		 ORDER BY is_local DESC, (is_local OR NOT trains) DESC, ctx DESC, model`)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "models: "+err.Error())
+		return
+	}
+	defer rows.Close()
+	out := []chatModelOpt{}
+	for rows.Next() {
+		var o chatModelOpt
+		if rows.Scan(&o.ID, &o.Provider, &o.Tier, &o.PrivateSafe, &o.Vision, &o.ContextWindow) == nil {
+			out = append(out, o)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"models": out})
+}
+
+// ── chat work-item retry — re-run a failed/stuck artifact build (ease-of-life B). ──
+// POST /api/chat/work-item/retry {work_item_id, model?, provider?}. A failed (or
+// cancelled) doc-build otherwise dead-ends at ⚠️ on its card; this re-dispatches
+// its current stage via work_item_dispatch_stage(.., allow_failed_status=true),
+// optionally pinning a stronger model first (model_override/provider_override).
+// Only failed/cancelled items are retryable — an in-flight build is left alone.
+type chatRetryReq struct {
+	WorkItemID string `json:"work_item_id"`
+	Model      string `json:"model,omitempty"`
+	Provider   string `json:"provider,omitempty"`
+}
+
+func (d *Deps) chatWorkItemRetryHandler(w http.ResponseWriter, r *http.Request) {
+	var req chatRetryReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.WorkItemID) == "" {
+		writeErr(w, http.StatusBadRequest, "work_item_id required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
+	defer cancel()
+
+	// normalize to a re-dispatchable state + clear the failure markers, and pin a
+	// stronger model if the caller asked. Only failed/cancelled items qualify.
+	tag, err := d.Pool.Exec(ctx,
+		`UPDATE stewards.work_items
+		    SET status='failed', error=NULL, last_failure_reason=NULL,
+		        model_override    = COALESCE(NULLIF($2,''), model_override),
+		        provider_override = COALESCE(NULLIF($3,''), provider_override)
+		  WHERE id=$1::uuid AND status IN ('failed','cancelled')`,
+		req.WorkItemID, req.Model, req.Provider)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "retry prep: "+err.Error())
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		writeErr(w, http.StatusConflict, "work item not found or not in a retryable (failed/cancelled) state")
+		return
+	}
+	var wqID int64
+	if err := d.Pool.QueryRow(ctx,
+		`SELECT stewards.work_item_dispatch_stage($1::uuid, NULL, true)`, req.WorkItemID,
+	).Scan(&wqID); err != nil {
+		log.Printf("api: work-item retry dispatch (id=%s): %v", req.WorkItemID, err)
+		writeErr(w, http.StatusInternalServerError, "redispatch: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"work_queue_id": wqID, "status": "redispatched"})
+}
+
+// ── chat regenerate — re-run the last reply IN PLACE (ease-of-life D). ──
+// POST /api/chat/regenerate {session_id, model?, provider?}. Rewinds to just
+// before the last user turn (deletes that turn + everything after it — its
+// assistant/tool replies) and re-dispatches the same user text, so the reply is
+// replaced rather than a duplicate question appended. Optionally on a stronger
+// model (pinned provider+model), which is how "↻ retry" / "⤴ stronger" work.
+type chatRegenReq struct {
+	SessionID string `json:"session_id"`
+	Model     string `json:"model,omitempty"`
+	Provider  string `json:"provider,omitempty"`
+}
+
+func (d *Deps) chatRegenerateHandler(w http.ResponseWriter, r *http.Request) {
+	var req chatRegenReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.SessionID) == "" {
+		writeErr(w, http.StatusBadRequest, "session_id required")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 45*time.Second)
+	defer cancel()
+
+	// the last real user turn (skip the first-turn "(Context: …)" grounding row).
+	var lastUserID int64
+	var lastUserContent string
+	err := d.Pool.QueryRow(ctx,
+		`SELECT id, coalesce(content,'') FROM stewards.messages
+		  WHERE session_id=$1 AND role='user' AND content NOT LIKE '(Context:%'
+		  ORDER BY id DESC LIMIT 1`, req.SessionID).Scan(&lastUserID, &lastUserContent)
+	if err != nil {
+		writeErr(w, http.StatusConflict, "no user turn to regenerate")
+		return
+	}
+	// rewind: drop the last user turn + its replies (everything at/after it).
+	if _, err := d.Pool.Exec(ctx,
+		`DELETE FROM stewards.messages WHERE session_id=$1 AND id >= $2`, req.SessionID, lastUserID); err != nil {
+		writeErr(w, http.StatusInternalServerError, "rewind: "+err.Error())
+		return
+	}
+
+	model := req.Model
+	if model == "" {
+		model = "reason"
+	}
+	provider := strings.TrimSpace(req.Provider)
+	var wqID int64
+	if provider != "" {
+		err = d.Pool.QueryRow(ctx,
+			`SELECT stewards.dispatch_chat_pinned($1, $2, 'work-item-chat', $3, $4, NULL)`,
+			req.SessionID, lastUserContent, model, provider).Scan(&wqID)
+	} else {
+		err = d.Pool.QueryRow(ctx,
+			`SELECT stewards.dispatch_chat_turn($1, $2, 'work-item-chat', $3, NULL, NULL)`,
+			req.SessionID, lastUserContent, model).Scan(&wqID)
+	}
+	if err != nil {
+		log.Printf("api: chat regenerate (session=%s, model=%s, provider=%s): %v", req.SessionID, model, provider, err)
+		writeErr(w, http.StatusInternalServerError, "regenerate dispatch: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, chatSendResp{SessionID: req.SessionID, WorkQueueID: wqID})
 }
