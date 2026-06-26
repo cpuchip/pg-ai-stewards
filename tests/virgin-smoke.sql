@@ -1843,26 +1843,37 @@ END $$;
 -- build must FAIL, not pose as success) + the chat→brainstorm grant.
 -- ---------------------------------------------------------------------
 DO $$
-DECLARE v_wi uuid; v_status text;
+DECLARE v_wi uuid; v_status text; v_sandbox text := 'task-vs-gate';
 BEGIN
   ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='doc_build_verify_artifact_trg'),
      '51: the doc-build artifact-exists gate trigger must exist';
-  -- A doc-build that completes with NO exported artifact must be flipped to failed.
+  -- A doc-build that completes with NO artifact attributed to its sandbox must flip
+  -- to failed. (The gate keys on chat_attachments.sandbox == input.sandbox.)
   v_wi := stewards.work_item_create('doc-build',
-            jsonb_build_object('spawned_from_chat','vs-gate-test','binding_question','x'),
+            jsonb_build_object('spawned_from_chat','vs-gate-test','sandbox',v_sandbox,'binding_question','x'),
             'vs-gate-test', 'dev', NULL::int, NULL::uuid);
   UPDATE stewards.work_items SET status='completed' WHERE id=v_wi;
   SELECT status INTO v_status FROM stewards.work_items WHERE id=v_wi;
   ASSERT v_status='failed',
-     '51: doc-build completing with no artifact must flip to failed (got '||v_status||')';
-  -- With an artifact present for the session, completion stands.
-  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size)
-    VALUES ('vs-gate-test','d.pdf','application/pdf','document','\x25504446'::bytea, 4);
+     '51: doc-build completing with no sandbox-attributed artifact must flip to failed (got '||v_status||')';
+  -- An artifact in the SAME chat session but a DIFFERENT sandbox must NOT satisfy the
+  -- gate — this is the false-pass that sandbox attribution closes (an unrelated
+  -- generate_image PNG used to let an empty build pose as success).
+  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size, sandbox)
+    VALUES ('vs-gate-test','unrelated.png','image/png','image','\x89504e47'::bytea, 4, 'task-other');
+  UPDATE stewards.work_items SET status='in_progress' WHERE id=v_wi;
+  UPDATE stewards.work_items SET status='completed' WHERE id=v_wi;
+  SELECT status INTO v_status FROM stewards.work_items WHERE id=v_wi;
+  ASSERT v_status='failed',
+     '51: an artifact from a DIFFERENT sandbox must not pass the gate (got '||v_status||')';
+  -- With an artifact attributed to THIS build''s sandbox, completion stands.
+  INSERT INTO stewards.chat_attachments (session_id, filename, mime_type, kind, bytes, byte_size, sandbox)
+    VALUES ('vs-gate-test','d.pdf','application/pdf','document','\x25504446'::bytea, 4, v_sandbox);
   UPDATE stewards.work_items SET status='in_progress' WHERE id=v_wi;
   UPDATE stewards.work_items SET status='completed' WHERE id=v_wi;
   SELECT status INTO v_status FROM stewards.work_items WHERE id=v_wi;
   ASSERT v_status='completed',
-     '51: doc-build completing WITH an artifact must stay completed (got '||v_status||')';
+     '51: doc-build completing WITH a sandbox-matched artifact must stay completed (got '||v_status||')';
   DELETE FROM stewards.work_items WHERE id=v_wi;
   DELETE FROM stewards.chat_attachments WHERE session_id='vs-gate-test';
   -- chat → brainstorm grant.
