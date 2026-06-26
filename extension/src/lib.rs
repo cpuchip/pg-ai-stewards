@@ -663,6 +663,12 @@ extension_sql_file!(
     requires = ["create_auto_critique"],
 );
 
+extension_sql_file!(
+    "../66-rigor-verify.sql",
+    name = "create_rigor_verify",
+    requires = ["create_rigor_mode"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
