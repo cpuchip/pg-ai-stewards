@@ -30,6 +30,11 @@ const projects = ref<{ name: string; doc_count: number }[]>([])
 // corpus is never silently escalated to a training provider.
 const models = ref<ChatModelOpt[]>([])
 const pinned = ref<ChatModelOpt | null>(null)
+// rigor mode (65): a per-response toggle that loads the research-rigor contract —
+// ground or flag every claim, verify the specific ones first, calibrate, split
+// observation from recommendation, check the premise. The deliberate, defensible
+// answer over a curated bucket (slower; cites as it goes).
+const rigor = ref(false)
 onMounted(async () => {
   try { projects.value = (await api.chatProjects()).projects } catch { /* none */ }
   try { models.value = (await api.chatModels()).models } catch { /* keep default-only */ }
@@ -427,6 +432,7 @@ async function send(override?: ChatModelOpt) {
       model: sendModel,
       provider: sendProvider,
       attachment_ids: attachmentIds,
+      rigor: rigor.value,
     })
     if (r.session_id && r.session_id !== activeSession.value) {
       activeSession.value = r.session_id
@@ -796,6 +802,12 @@ function onKey(e: KeyboardEvent) {
                 :disabled="!chatRef" title="attach a document, image, or zipped folder" @click="pickFiles">📎</button>
         <input ref="fileInput" type="file" multiple class="hidden" @change="onFiles"
                accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.epub,.html,.htm,.txt,.md,.csv,.json,.rtf,.zip,.7z,.tar,.gz,.tgz,.bz2,.xz,.rar" />
+        <!-- rigor mode (65): a traceable, source-cited answer over the bucket -->
+        <button class="pb-2 text-lg leading-none disabled:opacity-40 transition"
+                :class="rigor ? 'text-amber-300' : 'text-zinc-500 hover:text-amber-300'"
+                :disabled="!chatRef"
+                :title="rigor ? 'Rigor mode ON — every claim grounded in a source or flagged, calibrated by evidence, observation kept separate from recommendation. Click to turn off.' : 'Rigor mode — a defensible, source-cited answer where every line traces to the bucket (slower). Click to turn on.'"
+                @click="rigor = !rigor">🔬</button>
         <textarea
           v-model="input"
           :disabled="!chatRef"

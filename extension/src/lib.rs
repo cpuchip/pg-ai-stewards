@@ -657,6 +657,12 @@ extension_sql_file!(
     requires = ["create_orient_survey"],
 );
 
+extension_sql_file!(
+    "../65-rigor-mode.sql",
+    name = "create_rigor_mode",
+    requires = ["create_auto_critique"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

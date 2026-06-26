@@ -2354,4 +2354,33 @@ BEGIN
     RAISE NOTICE 'OK 53: standing trajectory critique — config-gated (default OFF), worker-only, graders excluded, fires once at a committed tool-using run that has no verdict (the verify half, made standing)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→64) is sound =='
+-- ---------------------------------------------------------------------
+-- 54. Rigor mode (65) — the research-rigor contract ships + a dispatcher-loaded
+-- session skill renders even for a skill-DENIED agent (so the Rigor toggle can
+-- load the contract onto the chat), while the management catalog stays gated.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_blk text;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM stewards.skills WHERE family='research-rigor' AND active),
+        '65: the research-rigor skill ships';
+    INSERT INTO stewards.agent_tool_perms (agent_family,tool_pattern,action) VALUES ('rg-smoke-fam','skill','deny');
+    INSERT INTO stewards.skills (family,model_match,description,body,active)
+      VALUES ('rg-smoke','*','rigor smoke fixture','BODY: RG SMOKE LOADED.',true);
+    INSERT INTO stewards.sessions (id,kind) VALUES ('rg-smoke-sess','agent') ON CONFLICT DO NOTHING;
+    INSERT INTO stewards.session_skills (session_id,family) VALUES ('rg-smoke-sess','rg-smoke');
+    v_blk := stewards.render_skills_block('rg-smoke-fam','test-model','rg-smoke-sess');
+    ASSERT v_blk LIKE '%BODY: RG SMOKE LOADED.%',
+        '65: a dispatcher-loaded session skill renders even for a skill-denied agent (the Rigor toggle path)';
+    ASSERT v_blk NOT LIKE '%<available_skills>%',
+        '65: a skill-denied agent still gets no catalog — the model cannot browse/manage skills';
+    ASSERT stewards.render_skills_block('rg-smoke-fam','test-model','rg-empty-sess') IS NULL,
+        '65: skill-denied + nothing loaded still renders empty (invariant preserved)';
+    DELETE FROM stewards.session_skills WHERE session_id='rg-smoke-sess';
+    DELETE FROM stewards.sessions WHERE id='rg-smoke-sess';
+    DELETE FROM stewards.skills WHERE family='rg-smoke';
+    DELETE FROM stewards.agent_tool_perms WHERE agent_family='rg-smoke-fam';
+    RAISE NOTICE 'OK 54: rigor mode — research-rigor contract ships + a dispatcher-loaded session skill renders unconditionally (the toggle reaches the skill-denied chat) while the catalog stays gated';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→65) is sound =='

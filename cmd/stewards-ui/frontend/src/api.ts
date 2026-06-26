@@ -612,7 +612,7 @@ export const api = {
   // Stewdio chat-with-a-work-item (P1). chatSend appends a turn + dispatches it;
   // the reply is streamed separately via EventSource('/api/chat/stream?session_id=').
   // rich-docs P2: attachment_ids inject uploaded media as subject material.
-  chatSend: (req: { session_id?: string; target_ref?: string; message: string; model?: string; provider?: string; attachment_ids?: number[] }) =>
+  chatSend: (req: { session_id?: string; target_ref?: string; message: string; model?: string; provider?: string; attachment_ids?: number[]; rigor?: boolean }) =>
     postJSON<{ session_id: string; work_queue_id: number }>('/api/chat/send', req),
   // ease-of-life A/C: the pickable chat models — ⚡Fast(local)/🧠Smart(cloud), each
   // flagged private_safe (provider does NOT train on inputs). Send {model,provider}

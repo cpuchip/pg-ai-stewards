@@ -57,6 +57,7 @@ type chatSendReq struct {
 	Model         string  `json:"model,omitempty"`         // role alias / model id; default 'reason' (→ local rig via overlay)
 	Provider      string  `json:"provider,omitempty"`      // ease-of-life A: pin an EXPLICIT provider (with Model = a concrete model id) so a stronger model can take over; empty = resolve Model as a role alias
 	AttachmentIDs []int64 `json:"attachment_ids,omitempty"` // rich-docs P2: chat_attachments to inject as subject material
+	Rigor         bool    `json:"rigor,omitempty"`          // rigor mode (65): load the research-rigor contract for this response — ground or flag every claim, calibrate, separate observation from recommendation
 }
 
 type chatSendResp struct {
@@ -102,6 +103,25 @@ func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
 	sid := req.SessionID
 	if sid == "" {
 		sid = chatSessionFor(req.TargetRef)
+	}
+
+	// rigor mode (65): load the research-rigor contract into THIS session so the
+	// composed prompt requires a traceable answer — ground or flag every claim,
+	// verify the specific ones first, calibrate, split observation from
+	// recommendation, check the premise. The chat agent is skill-denied, but a
+	// dispatcher-loaded session skill renders unconditionally (65). Reversible —
+	// turning rigor off (or a fresh session) drops the discipline.
+	if req.Rigor {
+		if _, err := d.Pool.Exec(ctx,
+			`INSERT INTO stewards.session_skills (session_id, family) VALUES ($1, 'research-rigor')
+			 ON CONFLICT (session_id, family) DO NOTHING`, sid); err != nil {
+			log.Printf("api: chat rigor load (session=%s): %v", sid, err)
+		}
+	} else {
+		// rigor off → ensure the discipline isn't lingering from a prior rigor turn
+		// on the same session (the toggle is per-response, not sticky).
+		_, _ = d.Pool.Exec(ctx,
+			`DELETE FROM stewards.session_skills WHERE session_id=$1 AND family='research-rigor'`, sid)
 	}
 
 	// grounding is seeded only on the first turn (dispatch_chat_turn checks for an
