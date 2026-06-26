@@ -178,14 +178,10 @@ INSERT INTO stewards.config (key, value, description) VALUES
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, description = EXCLUDED.description;
 
 -- ── spawn is a narrow privilege: leaf subagent-* worker families do their own
--- local research and do NOT re-delegate. Removing consult_subagent from them IS
--- the tool-removal (the grant is the tool). Re-grant explicitly to make a family
--- an orchestrator (docs/delegation-limits.md). ──
-UPDATE stewards.agent_tool_perms SET action = 'deny'
- WHERE tool_pattern = 'consult_subagent' AND action = 'allow'
-   AND agent_family IN ('subagent-doc-investigate','subagent-docs-audit','subagent-doc-summary',
-                        'subagent-files-audit','subagent-session-investigate','subagent-url-summary',
-                        'stewards-explore');
+-- local research and do NOT re-delegate. The grant cleanup (deny consult_subagent
+-- to the leaves) MUST run AFTER §4 es10 below — es10 sweeps a grant to EVERY
+-- pipeline-stage agent_family (which includes the leaves), so a deny placed here
+-- would be silently overwritten by it. The deny therefore lives just after es10. ──
 
 
 -- =====================================================================
@@ -538,6 +534,17 @@ SELECT DISTINCT
  WHERE stage ->> 'agent_family' IS NOT NULL
 ON CONFLICT (agent_family, tool_pattern)
    DO UPDATE SET action = 'allow', source = 'manual';
+
+-- ── grant cleanup (spawn-bounds): es10 just swept consult_subagent to every
+-- pipeline-stage agent_family, including the leaf subagent-* workers. A leaf does
+-- local research and never re-delegates, so revoke it here (AFTER es10, or es10
+-- would re-allow it — that ordering bug let leaves keep the spawn tool). Re-grant
+-- explicitly to make a family an orchestrator. docs/delegation-limits.md. ──
+UPDATE stewards.agent_tool_perms SET action = 'deny'
+ WHERE tool_pattern = 'consult_subagent' AND action = 'allow'
+   AND agent_family IN ('subagent-doc-investigate','subagent-docs-audit','subagent-doc-summary',
+                        'subagent-files-audit','subagent-session-investigate','subagent-url-summary',
+                        'stewards-explore');
 
 
 -- =====================================================================
