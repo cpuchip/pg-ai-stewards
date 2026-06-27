@@ -681,6 +681,12 @@ extension_sql_file!(
     requires = ["create_rigor_force_final"],
 );
 
+extension_sql_file!(
+    "../69-a2a-engine.sql",
+    name = "create_a2a_engine",
+    requires = ["create_model_fallback_hardening"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
