@@ -2970,4 +2970,150 @@ BEGIN
     RAISE NOTICE 'OK 63b: worlds graph-expand — p_expand=false excludes the non-matching world_edges neighbor; p_expand=true surfaces it';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→72) is sound =='
+-- ---------------------------------------------------------------------
+-- 64a. brain hybrid RRF math (73) — the DISCRIMINATING test, the brain
+-- path. Same canonical worked example as OK 60a/61a: prove the FUSION MATH
+-- deterministically and show it disagrees with the OLD weighted-linear
+-- blend (so the test distinguishes real RRF from score-mixing).
+--
+--   FTS (lexical) list = [A, B]   → A rank 1, B rank 2
+--   vector        list = [B, C]   → B rank 1, C rank 2
+--   RRF score = Σ 1/(k+rank) over the legs an item appears in, k=60:
+--     B = 1/(60+2) + 1/(60+1) ≈ 0.0325   (in BOTH legs)
+--     A = 1/(60+1)            ≈ 0.0164   (lexical only)
+--     C = 1/(60+2)            ≈ 0.0161   (vector only)
+--   → RRF order is B, A, C: B wins for being in BOTH legs, NOT for raw score.
+-- A carries a HUGE raw FTS score (999); weighted-linear (0.45·lex+0.55·sem)
+-- would let that dominate and rank A FIRST. The methods DISAGREE — that is
+-- what makes this a real test of RRF for the brain_search_hybrid path.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_k         constant int := 60;
+    v_rrf_order text;
+    v_rrf_top   text;
+    v_wl_top    text;
+    v_b_rrf     numeric := 1.0/(60+2) + 1.0/(60+1);   -- B, in both legs
+    v_a_rrf     numeric := 1.0/(60+1);                -- A, lexical only
+BEGIN
+    WITH legs(item, fts_rank, sem_rank, fts_raw, sem_raw) AS (
+        VALUES
+            ('A', 1,    NULL::int, 999.0, NULL::numeric),   -- lexical-only outlier
+            ('B', 2,    1,         0.50,  1.00),            -- both legs
+            ('C', NULL::int, 2,    NULL::numeric, 0.90)     -- vector-only
+    ),
+    scored AS (
+        SELECT item,
+               coalesce(1.0/(v_k + fts_rank), 0)
+             + coalesce(1.0/(v_k + sem_rank), 0)       AS rrf,
+               0.45 * coalesce(fts_raw, 0)
+             + 0.55 * coalesce(sem_raw, 0)             AS weighted_linear
+          FROM legs
+    )
+    SELECT (SELECT string_agg(item, ',' ORDER BY rrf DESC, item) FROM scored),
+           (SELECT item FROM scored ORDER BY rrf DESC, item LIMIT 1),
+           (SELECT item FROM scored ORDER BY weighted_linear DESC, item LIMIT 1)
+      INTO v_rrf_order, v_rrf_top, v_wl_top;
+
+    ASSERT round(v_b_rrf, 4) = 0.0325 AND round(v_a_rrf, 4) = 0.0164,
+        format('64a: RRF arithmetic — expected B≈0.0325 / A≈0.0164, got %s / %s',
+               round(v_b_rrf,4), round(v_a_rrf,4));
+    ASSERT v_b_rrf > v_a_rrf,
+        '64a: B (present in BOTH legs) outranks A (one leg) under RRF';
+    ASSERT v_rrf_order = 'B,A,C',
+        format('64a: RRF order must be B,A,C (rank-based fusion), got %s', v_rrf_order);
+    ASSERT v_rrf_top = 'B', '64a: RRF top is B';
+
+    -- INVERSE HYPOTHESIS: the OLD weighted-linear blend would rank A first
+    -- (its 999 raw FTS score dominates). The methods DISAGREE → the test
+    -- discriminates real RRF from score-blending.
+    ASSERT v_wl_top = 'A',
+        format('64a: weighted-linear (0.45·lex+0.55·sem) would rank A first; got %s', v_wl_top);
+    ASSERT v_rrf_top <> v_wl_top,
+        '64a: RRF and weighted-linear pick DIFFERENT winners on this fixture (the discrimination)';
+
+    RAISE NOTICE 'OK 64a: brain hybrid RRF math — Σ 1/(k+rank), k=60; rank-based fusion orders B,A,C (B wins for being in both legs); the old weighted-linear blend would wrongly pick A — the methods disagree, so the test discriminates real RRF for the brain path';
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 64b. brain hybrid UNION + fallback (73) — the genuine end-to-end test.
+-- Because brain_search_hybrid takes the query embedding as a PARAMETER,
+-- BOTH legs run deterministically in the virgin env (no embed provider):
+-- seed a brain entry found ONLY by FTS (text matches, no embedding) and one
+-- found ONLY by vector (embedding == the query vector, text doesn't match).
+-- Then: the UNION surfaces both, NULL-embedding degrades to FTS-only, and
+-- the existing single-leg searches (brain_search_text / brain_search_vec)
+-- are unchanged. The category filter is exercised on both legs.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_fts_id  text;
+    v_vec_id  text;
+    v_qvec    vector(768) := ('[1' || repeat(',0', 767) || ']')::vector(768);  -- dim1 = 1
+    v_has_fts boolean; v_has_vec boolean; v_n int;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='brain_search_hybrid'),
+        '64b: brain_search_hybrid exists';
+    -- the bare legs are kept (additive)
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='brain_search_text'),
+        '64b: brain_search_text kept (the lexical leg / FTS primitive)';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='brain_search_vec'),
+        '64b: brain_search_vec kept (the vector primitive)';
+
+    -- FTS-only entry: distinctive token 'zephyrbrain' so plainto_tsquery
+    -- matches ONLY this row; no embedding ⇒ invisible to the vector leg.
+    v_fts_id := stewards.brain_upsert('ideas', 'fusion note',
+        'zephyrbrain reciprocal rank fusion blends two retrievers', '{}'::jsonb, NULL, NULL, 'smoke');
+    -- vector-only entry: text shares NO terms with the query; embedding ==
+    -- the query vector (cosine distance 0) ⇒ invisible to the FTS leg.
+    v_vec_id := stewards.brain_upsert('ideas', 'meadow note',
+        'completely unrelated meadow content', '{}'::jsonb, NULL, NULL, 'smoke');
+    UPDATE stewards.brain_entries SET embedding = v_qvec WHERE id = v_vec_id;
+
+    -- HYBRID with the query embedding: the UNION surfaces BOTH legs' hits.
+    SELECT bool_or(id = v_fts_id), bool_or(id = v_vec_id)
+      INTO v_has_fts, v_has_vec
+      FROM stewards.brain_search_hybrid('zephyrbrain reciprocal rank fusion', v_qvec, NULL, 10);
+    ASSERT v_has_fts AND v_has_vec,
+        format('64b: hybrid UNION surfaces BOTH the FTS-only and vector-only entry; got fts=%s vec=%s', v_has_fts, v_has_vec);
+
+    -- INVERSE HYPOTHESIS — drop the query embedding: the vector leg empties,
+    -- so the vector-only entry DISAPPEARS and only the FTS one remains.
+    SELECT bool_or(id = v_fts_id), bool_or(id = v_vec_id)
+      INTO v_has_fts, v_has_vec
+      FROM stewards.brain_search_hybrid('zephyrbrain reciprocal rank fusion', NULL, NULL, 10);
+    ASSERT v_has_fts AND v_has_vec IS NOT TRUE,
+        format('64b: NULL-embedding FTS-only fallback keeps the FTS entry, drops the vector-only one; got fts=%s vec=%s', v_has_fts, v_has_vec);
+
+    -- the category filter applies to BOTH legs: filtering to a category with
+    -- no seeds returns neither (lex leg via brain_search_text, sem leg via
+    -- the e.category guard).
+    SELECT count(*) INTO v_n
+      FROM stewards.brain_search_hybrid('zephyrbrain reciprocal rank fusion', v_qvec, 'journal', 10)
+     WHERE id IN (v_fts_id, v_vec_id);
+    ASSERT v_n = 0, '64b: category filter applies to both legs (wrong category ⇒ neither seed)';
+
+    -- the existing single-leg searches are UNCHANGED.
+    SELECT bool_or(id = v_fts_id), bool_or(id = v_vec_id)
+      INTO v_has_fts, v_has_vec
+      FROM stewards.brain_search_text('zephyrbrain reciprocal rank fusion', NULL, 20);
+    ASSERT v_has_fts AND v_has_vec IS NOT TRUE,
+        '64b: brain_search_text unchanged — finds the FTS entry, not the un-matching vector-only one';
+    SELECT bool_or(id = v_vec_id), bool_or(id = v_fts_id)
+      INTO v_has_vec, v_has_fts
+      FROM stewards.brain_search_vec(v_qvec, NULL, 20);
+    ASSERT v_has_vec AND v_has_fts IS NOT TRUE,
+        '64b: brain_search_vec unchanged — finds the embedded entry, not the un-embedded one';
+
+    -- cleanup (cascades tags/subtasks/versions; clear the enqueued embed jobs).
+    DELETE FROM stewards.work_queue
+     WHERE payload->>'target_table' = 'brain_entries'
+       AND payload->>'target_id' IN (v_fts_id, v_vec_id);
+    DELETE FROM stewards.brain_entries WHERE id IN (v_fts_id, v_vec_id);
+    RAISE NOTICE 'OK 64b: brain-hybrid — brain_search_hybrid RRF-UNIONs the FTS-only + vector-only brain entries; NULL-embedding ⇒ FTS-only fallback; category filter applies to both legs; brain_search_text + brain_search_vec untouched';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→73) is sound =='
