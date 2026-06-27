@@ -3212,4 +3212,96 @@ BEGIN
     RAISE NOTICE 'OK 65b: North Star in compose_system_prompt — carried on every agent call, FIRST (before covenant + agent) and echoed LAST; clearing the why removes the block deterministically (inverse hypothesis)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→74) is sound =='
+-- ---------------------------------------------------------------------
+-- 66. agent-facing brain search WIRED to the hybrid (75) — the documented
+-- brain_search_semantic, finally real. 73 built brain_search_hybrid but left
+-- the agent-facing tool (tool_def 'brain_search_text', execute_target the
+-- sql_fn brain_search_text_tool) on the FTS-only brain_search_text. 75 repoints
+-- the wrapper: embed the query INLINE via stewards.embed_query (the pg_extern,
+-- EXCEPTION → NULL fallback) and call brain_search_hybrid with that vector.
+-- Pure SQL — no Go dispatch (the brain tool is a sql_fn, unlike the engram
+-- search whose wrapper is Go).
+--
+-- Proven deterministically in the virgin env (NO embed provider):
+--   (1) STRUCTURAL / INVERSE HYPOTHESIS — the wrapper now routes through
+--       brain_search_hybrid AND embeds via embed_query (the OLD body did
+--       NEITHER: it called brain_search_text directly). This distinguishes the
+--       new path from the old.
+--   (2) the tool_def execute_target is intact (still the sql_fn
+--       brain_search_text_tool), and dispatching it EXACTLY as the engine does
+--       (SELECT <schema>.<fn>($1)) returns the FTS hit — the agent path runs
+--       end-to-end.
+--   (3) FTS-only DEGRADE — with no provider, embed_query raises → NULL → the
+--       vector leg is empty, so the tool surfaces the FTS-matching entry but
+--       NOT a vector-only entry (the graceful fallback, through the tool).
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_fts_id text;
+    v_vec_id text;
+    v_qvec   vector(768) := ('[1' || repeat(',0', 767) || ']')::vector(768);  -- dim1 = 1
+    v_def    text;
+    v_et     jsonb;
+    v_schema text;
+    v_fn     text;
+    v_args   jsonb;
+    v_result jsonb;
+    v_ids    text[];
+BEGIN
+    -- (1) STRUCTURAL / INVERSE HYPOTHESIS: the wrapper routes through the hybrid
+    -- and embeds inline. (The function NAME contains the substring
+    -- 'brain_search_text', so we assert on the NEW markers — brain_search_hybrid
+    -- + embed_query — which the OLD wrapper had neither of.)
+    v_def := pg_get_functiondef('stewards.brain_search_text_tool(jsonb)'::regprocedure);
+    ASSERT v_def ILIKE '%brain_search_hybrid%',
+        '66: brain_search_text_tool now routes through brain_search_hybrid (the repoint; the old body did not)';
+    ASSERT v_def ILIKE '%embed_query%',
+        '66: brain_search_text_tool embeds the query inline via embed_query (text-in → vector; the old body did not)';
+
+    -- (2) the tool_def execute_target is intact and resolves to the wrapper.
+    SELECT execute_target INTO v_et FROM stewards.tool_defs WHERE name = 'brain_search_text';
+    ASSERT v_et IS NOT NULL, '66: the brain_search_text tool_def exists';
+    ASSERT v_et->>'kind' = 'sql_fn' AND v_et->>'name' = 'brain_search_text_tool'
+           AND v_et->>'schema' = 'stewards',
+        format('66: brain_search_text dispatches to the sql_fn stewards.brain_search_text_tool; got %s', v_et);
+    v_schema := v_et->>'schema';
+    v_fn     := v_et->>'name';
+
+    -- seed an FTS-only entry (distinctive nonce token 'zephyrwire' so
+    -- plainto_tsquery ANDs to ONLY this row; no embedding ⇒ invisible to the
+    -- vector leg) and a vector-only entry (embedding == the query vector, text
+    -- shares no terms ⇒ invisible to the FTS leg). Same trick as 64b.
+    v_fts_id := stewards.brain_upsert('ideas', 'wired fusion note',
+        'zephyrwire reciprocal rank fusion blends two retrievers', '{}'::jsonb, NULL, NULL, 'smoke');
+    v_vec_id := stewards.brain_upsert('ideas', 'wired meadow note',
+        'completely unrelated meadow content', '{}'::jsonb, NULL, NULL, 'smoke');
+    UPDATE stewards.brain_entries SET embedding = v_qvec WHERE id = v_vec_id;
+
+    -- dispatch the tool EXACTLY as the engine does: SELECT <schema>.<fn>($1).
+    v_args := jsonb_build_object('query', 'zephyrwire reciprocal rank fusion');
+    EXECUTE format('SELECT %I.%I($1)', v_schema, v_fn) USING v_args INTO v_result;
+
+    SELECT array_agg(elem->>'id') INTO v_ids
+      FROM jsonb_array_elements(v_result) elem;
+
+    -- (3) FTS-only degrade through the tool: no provider ⇒ embed_query raised →
+    -- NULL → vector leg empty. The FTS entry IS surfaced; the vector-only is NOT.
+    ASSERT v_ids @> ARRAY[v_fts_id],
+        format('66: the wired tool surfaces the FTS-matching entry (lexical leg fires with no provider); ids=%s', v_ids);
+    ASSERT NOT (coalesce(v_ids, ARRAY[]::text[]) @> ARRAY[v_vec_id]),
+        format('66: with no embed provider the tool degrades to FTS-only — the vector-only entry is NOT surfaced; ids=%s', v_ids);
+
+    -- the output shape is preserved (id, title, category, rank).
+    ASSERT (SELECT bool_and(elem ? 'rank')
+              FROM jsonb_array_elements(v_result) elem),
+        '66: the tool preserves the (id, title, category, rank) output shape — the fused score is aliased to rank';
+
+    -- cleanup (cascades tags/subtasks/versions; clear the enqueued embed jobs).
+    DELETE FROM stewards.work_queue
+     WHERE payload->>'target_table' = 'brain_entries'
+       AND payload->>'target_id' IN (v_fts_id, v_vec_id);
+    DELETE FROM stewards.brain_entries WHERE id IN (v_fts_id, v_vec_id);
+    RAISE NOTICE 'OK 66: agent brain search wired — brain_search_text_tool embeds the query inline (embed_query) and routes through brain_search_hybrid; execute_target intact; dispatched as the engine does, no embed provider ⇒ FTS-only degrade (FTS entry surfaced, vector-only not); output shape preserved';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→75) is sound =='
