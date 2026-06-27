@@ -79,7 +79,7 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      69-a2a-engine.sql 70-hinge-decouple.sql \
      71-hybrid-rrf.sql 72-hybrid-rrf-everywhere.sql \
      73-brain-hybrid.sql 74-north-star.sql \
-     75-wire-brain-hybrid.sql ./
+     75-wire-brain-hybrid.sql 76-wire-engram-search.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
