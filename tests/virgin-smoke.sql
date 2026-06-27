@@ -2743,4 +2743,231 @@ BEGIN
     RAISE NOTICE 'OK 60b: hybrid RRF functions — world_entity_hybrid + doc_search_hybrid exist and degrade to lexical-only with no embed provider; doc_search_tool routes through the hybrid fn; the bare doc_search FTS primitive is intact';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→71) is sound =='
+-- ---------------------------------------------------------------------
+-- 61a. pool_search → RRF (72) — the DISCRIMINATING math, for the fusion
+-- expression pool_search_hybrid computes. Like 60a (and for the same
+-- reason: the virgin env has no embed provider, so the sem leg can't run
+-- live), the math fixture IS the discrimination — rank-fusion orders B,A,C
+-- while the OLD weighted-blend would pick A (the raw-score outlier). Plus:
+-- the bare scoped-FTS primitive, the hybrid, and the routed tool all exist.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_k         constant int := 60;
+    v_rrf_order text;
+    v_rrf_top   text;
+    v_wl_top    text;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='pool_search'),
+        '61a: pool_search bare scoped-FTS primitive exists';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='pool_search_hybrid'),
+        '61a: pool_search_hybrid exists';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs
+                   WHERE name='pool_search' AND description ILIKE '%RRF%'),
+        '61a: pool_search tool_def description reflects hybrid/RRF';
+
+    WITH legs(item, fts_rank, sem_rank, fts_raw, sem_raw) AS (
+        VALUES
+            ('A', 1,    NULL::int, 999.0, NULL::numeric),   -- lexical only, huge raw score (outlier)
+            ('B', 2,    1,         0.50,  1.00),            -- in BOTH legs
+            ('C', NULL::int, 2,    NULL::numeric, 0.90)     -- semantic only
+    ),
+    scored AS (
+        SELECT item,
+               coalesce(1.0/(v_k + fts_rank), 0)
+             + coalesce(1.0/(v_k + sem_rank), 0)       AS rrf,
+               0.45 * coalesce(fts_raw, 0)
+             + 0.55 * coalesce(sem_raw, 0)             AS weighted_linear
+          FROM legs
+    )
+    SELECT (SELECT string_agg(item, ',' ORDER BY rrf DESC, item) FROM scored),
+           (SELECT item FROM scored ORDER BY rrf DESC, item LIMIT 1),
+           (SELECT item FROM scored ORDER BY weighted_linear DESC, item LIMIT 1)
+      INTO v_rrf_order, v_rrf_top, v_wl_top;
+
+    ASSERT v_rrf_order = 'B,A,C', format('61a: RRF order must be B,A,C, got %s', v_rrf_order);
+    ASSERT v_rrf_top = 'B' AND v_wl_top = 'A',
+        format('61a: RRF picks B (both legs), weighted-linear picks A (the outlier) — the discrimination; got %s / %s', v_rrf_top, v_wl_top);
+    ASSERT v_rrf_top <> v_wl_top, '61a: the two fusion methods DISAGREE on this fixture';
+
+    RAISE NOTICE 'OK 61a: pool_search RRF math — Σ 1/(k+rank), k=60 orders B,A,C; the old weighted-blend would pick A — methods disagree, so the test discriminates real RRF for the pool_search path';
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 61b. pool_search_hybrid, FUNCTIONAL — project scope enforced on BOTH legs
+-- + graceful FTS-only fallback (no embed provider). One doc in the project
+-- under test, one in a walled-off project.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_n int; v_global int; v_has_out boolean;
+BEGIN
+    INSERT INTO stewards.docs (slug, title, body, kind, project_association) VALUES
+      ('ps-rrf-in',  'Rank Fusion In',  'reciprocal rank fusion blends lexical and semantic retrievers.', 'doc', 'ps-proj'),
+      ('ps-rrf-out', 'Rank Fusion Out', 'reciprocal rank fusion lives here too but in another project.',  'doc', 'ps-other');
+
+    SELECT count(*) INTO v_n
+      FROM stewards.pool_search_hybrid('reciprocal rank fusion', ARRAY['ps-proj']::text[], 10, false);
+    ASSERT v_n = 1, format('61b: scoped to ps-proj returns exactly the in-neighborhood hit (FTS fallback), got %s', v_n);
+
+    SELECT bool_or(slug='ps-rrf-out') INTO v_has_out
+      FROM stewards.pool_search_hybrid('reciprocal rank fusion', ARRAY['ps-proj']::text[], 10, false);
+    ASSERT v_has_out IS NOT TRUE, '61b: the walled-off doc (ps-other) is NOT returned under a ps-proj scope (per-leg scope)';
+
+    SELECT count(*) INTO v_global
+      FROM stewards.pool_search_hybrid('reciprocal rank fusion', NULL, 10, false);
+    ASSERT v_global >= 2, format('61b: global (unscoped) sees both docs — proving the scope above did the filtering, got %s', v_global);
+
+    ASSERT (stewards.pool_search_tool(jsonb_build_object('query','reciprocal rank fusion','project','ps-proj'))::jsonb -> 'results') IS NOT NULL,
+        '61b: pool_search_tool returns a results envelope via the hybrid fn';
+
+    DELETE FROM stewards.docs WHERE slug IN ('ps-rrf-in','ps-rrf-out');
+    RAISE NOTICE 'OK 61b: pool_search_hybrid — RRF over docs scoped to the project neighborhood on BOTH legs; walled-off projects excluded; graceful FTS-only fallback; tool routes through the hybrid';
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 62. engram-hybrid (72) — the genuine end-to-end RRF UNION test. Because
+-- search_engrams_hybrid takes the query embedding as a PARAMETER, BOTH legs
+-- run deterministically in the virgin env (no embed provider needed): seed
+-- an engram found ONLY by FTS (text matches, no embedding) and one found
+-- ONLY by vector (embedding == the query vector, text doesn't match), and a
+-- same-message sibling reachable only via expand. Then: union surfaces both,
+-- NULL-embedding degrades to FTS-only, search_engrams_by_vector is unchanged,
+-- the GENERATED tsvector backfilled, and expand pulls the provenance sibling.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_sess    text := 'engram-hybrid-smoke';
+    v_m1      bigint; v_m2 bigint;
+    v_qvec    vector(768) := ('[1' || repeat(',0', 767) || ']')::vector(768);  -- dim1 = 1
+    v_has_fts boolean; v_has_vec boolean; v_has_sib boolean;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_schema='stewards' AND table_name='engram_embeddings' AND column_name='engram_fts'),
+        '62: engram_embeddings.engram_fts column exists';
+    ASSERT EXISTS (SELECT 1 FROM pg_indexes
+                   WHERE schemaname='stewards' AND indexname='engram_embeddings_fts_idx'),
+        '62: engram_embeddings_fts_idx GIN index exists';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='search_engrams_hybrid'),
+        '62: search_engrams_hybrid exists';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='search_engrams_by_vector'),
+        '62: search_engrams_by_vector kept (additive)';
+
+    INSERT INTO stewards.sessions (id, kind) VALUES (v_sess, 'agent') ON CONFLICT DO NOTHING;
+    INSERT INTO stewards.messages (session_id, role, content) VALUES (v_sess, 'user', 'm1') RETURNING id INTO v_m1;
+    INSERT INTO stewards.messages (session_id, role, content) VALUES (v_sess, 'user', 'm2') RETURNING id INTO v_m2;
+
+    INSERT INTO stewards.engram_embeddings
+        (id, message_id, engram_id, tier, topic, content_preview, embedding, session_id, project_association)
+    VALUES
+      (v_m1::text||':e-fts', v_m1, 'e-fts', 'hot', 'fusion',  'reciprocal rank fusion blends two retrievers', NULL,   v_sess, NULL),
+      (v_m1::text||':e-sib', v_m1, 'e-sib', 'hot', 'orchard', 'a sibling engram about apples and harvest',    NULL,   v_sess, NULL),
+      (v_m2::text||':e-vec', v_m2, 'e-vec', 'hot', 'meadow',  'completely unrelated meadow content',          v_qvec, v_sess, NULL);
+
+    -- the GENERATED tsvector backfilled every seeded row (no manual UPDATE).
+    ASSERT (SELECT bool_and(engram_fts IS NOT NULL) FROM stewards.engram_embeddings
+            WHERE id IN (v_m1::text||':e-fts', v_m1::text||':e-sib', v_m2::text||':e-vec')),
+        '62: engram_fts GENERATED column populated on all seeded rows (backfill works)';
+
+    -- HYBRID with the query embedding: the UNION surfaces BOTH the FTS-only
+    -- and the vector-only engram.
+    SELECT bool_or(engram_id='e-fts'), bool_or(engram_id='e-vec')
+      INTO v_has_fts, v_has_vec
+      FROM stewards.search_engrams_hybrid('reciprocal rank fusion', v_qvec, v_sess, NULL, 10, false);
+    ASSERT v_has_fts AND v_has_vec,
+        format('62: hybrid UNION surfaces BOTH the FTS-only and vector-only engram; got fts=%s vec=%s', v_has_fts, v_has_vec);
+
+    -- INVERSE HYPOTHESIS — drop the query embedding: the vector leg empties,
+    -- so the vector-only engram DISAPPEARS and only the FTS one remains.
+    SELECT bool_or(engram_id='e-fts'), bool_or(engram_id='e-vec')
+      INTO v_has_fts, v_has_vec
+      FROM stewards.search_engrams_hybrid('reciprocal rank fusion', NULL, v_sess, NULL, 10, false);
+    ASSERT v_has_fts AND v_has_vec IS NOT TRUE,
+        format('62: NULL-embedding FTS-only fallback keeps the FTS engram, drops the vector-only one; got fts=%s vec=%s', v_has_fts, v_has_vec);
+
+    -- the existing vector-only search is UNCHANGED.
+    SELECT bool_or(engram_id='e-vec'), bool_or(engram_id='e-fts')
+      INTO v_has_vec, v_has_fts
+      FROM stewards.search_engrams_by_vector(v_qvec, v_sess, NULL, 10);
+    ASSERT v_has_vec AND v_has_fts IS NOT TRUE,
+        '62: search_engrams_by_vector unchanged — finds the embedded engram, not the un-embedded one';
+
+    -- graph-expand: e-sib shares a message with e-fts but matches neither leg.
+    SELECT bool_or(engram_id='e-sib') INTO v_has_sib
+      FROM stewards.search_engrams_hybrid('reciprocal rank fusion', v_qvec, v_sess, NULL, 10, false);
+    ASSERT v_has_sib IS NOT TRUE, '62: expand=false does NOT surface the same-message sibling';
+    SELECT bool_or(engram_id='e-sib') INTO v_has_sib
+      FROM stewards.search_engrams_hybrid('reciprocal rank fusion', v_qvec, v_sess, NULL, 10, true);
+    ASSERT v_has_sib, '62: expand=true surfaces the same-message sibling engram (1-hop provenance neighbor)';
+
+    DELETE FROM stewards.messages WHERE session_id = v_sess;  -- cascades engram_embeddings
+    DELETE FROM stewards.sessions WHERE id = v_sess;
+    RAISE NOTICE 'OK 62: engram-hybrid — engram_fts tsvector+GIN added & backfilled; search_engrams_hybrid RRF-UNIONs the FTS-only + vector-only engrams; NULL-embedding ⇒ FTS-only; vector-only search untouched; expand pulls the same-message sibling';
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 63a. graph-expand on docs (72) — the distinct TRAVERSAL layer. Seed a doc
+-- A that matches the query and a doc B that does NOT but is A's 1-hop
+-- SIMILAR_TO neighbor (asserted directly — no embeddings needed). The expand
+-- must genuinely add reach: B appears ONLY when p_expand=true.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_has_a boolean; v_has_b boolean;
+BEGIN
+    INSERT INTO stewards.docs (slug, title, body, kind, project_association) VALUES
+      ('gx-doc-a', 'Zephyr Protocol', 'the zephyr protocol governs windward signaling.', 'doc', 'gx-proj'),
+      ('gx-doc-b', 'Meadow Notes',    'notes about meadows and clover, nothing windward.', 'doc', 'gx-proj');
+    PERFORM stewards.graph_edge_upsert('doc','gx-doc-a','doc','gx-doc-b','SIMILAR_TO', 0.9,
+              jsonb_build_object('method','pgvector_cosine','score',0.9));
+
+    SELECT bool_or(slug='gx-doc-a'), bool_or(slug='gx-doc-b')
+      INTO v_has_a, v_has_b
+      FROM stewards.doc_search_hybrid('zephyr protocol', ARRAY[]::text[], 10, false);
+    ASSERT v_has_a AND v_has_b IS NOT TRUE,
+        format('63a: expand=false returns the direct hit A, not its non-matching neighbor B; got a=%s b=%s', v_has_a, v_has_b);
+
+    SELECT bool_or(slug='gx-doc-a'), bool_or(slug='gx-doc-b')
+      INTO v_has_a, v_has_b
+      FROM stewards.doc_search_hybrid('zephyr protocol', ARRAY[]::text[], 10, true);
+    ASSERT v_has_a AND v_has_b,
+        format('63a: expand=true surfaces the 1-hop SIMILAR_TO neighbor B (never matched the query); got a=%s b=%s', v_has_a, v_has_b);
+
+    DELETE FROM stewards.edges e USING stewards.nodes n
+     WHERE (e.src=n.id OR e.dst=n.id) AND n.kind='doc' AND n.ref IN ('gx-doc-a','gx-doc-b');
+    DELETE FROM stewards.nodes WHERE kind='doc' AND ref IN ('gx-doc-a','gx-doc-b');
+    DELETE FROM stewards.docs WHERE slug IN ('gx-doc-a','gx-doc-b');
+    RAISE NOTICE 'OK 63a: docs graph-expand — p_expand=false excludes the non-matching SIMILAR_TO neighbor; p_expand=true surfaces it (the expand genuinely adds reach)';
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 63b. graph-expand on worlds (72) — same shape over world_edges. Entity X
+-- matches the query; entity Y does NOT but is X's 1-hop world_edges neighbor.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_has_x boolean; v_has_y boolean;
+BEGIN
+    PERFORM stewards.world_upsert('gx-world','GX World',NULL,NULL,true);
+    PERFORM stewards.world_entity_upsert('gx-world','character','Borin','a dwarf smith');
+    PERFORM stewards.world_entity_upsert('gx-world','place','Deephold','a mountain hall');
+    PERFORM stewards.world_edge_upsert('gx-world','Borin','Deephold','located_in', NULL);
+
+    SELECT bool_or(name='Borin'), bool_or(name='Deephold')
+      INTO v_has_x, v_has_y
+      FROM stewards.world_entity_hybrid('gx-world','Borin',12,false);
+    ASSERT v_has_x AND v_has_y IS NOT TRUE,
+        format('63b: expand=false returns Borin, not the non-matching neighbor Deephold; got x=%s y=%s', v_has_x, v_has_y);
+
+    SELECT bool_or(name='Borin'), bool_or(name='Deephold')
+      INTO v_has_x, v_has_y
+      FROM stewards.world_entity_hybrid('gx-world','Borin',12,true);
+    ASSERT v_has_x AND v_has_y,
+        format('63b: expand=true surfaces the 1-hop world_edges neighbor Deephold; got x=%s y=%s', v_has_x, v_has_y);
+
+    DELETE FROM stewards.worlds WHERE slug='gx-world';   -- cascades entities + edges
+    RAISE NOTICE 'OK 63b: worlds graph-expand — p_expand=false excludes the non-matching world_edges neighbor; p_expand=true surfaces it';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→72) is sound =='
