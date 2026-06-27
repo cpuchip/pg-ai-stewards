@@ -21,7 +21,7 @@ Five moving parts. Three are processes, one is a database, one is a person.
 
 | Part | What it is | What it owns |
 |---|---|---|
-| **The extension** | Rust (pgrx) + ~220 SQL migrations inside Postgres | All state: `work_items`, `work_queue`, `sessions`, `messages`, `agents`, `pipelines`, `tool_defs`, covenant, intent, cost. All composition logic, as SQL functions. |
+| **The extension** | Rust (pgrx) + a consolidated, authored SQL chain (`00-config` → `70-hinge-decouple`) inside Postgres | All state: `work_items`, `work_queue`, `sessions`, `messages`, `agents`, `pipelines`, `tool_defs`, covenant, intent, cost. All composition logic, as SQL functions. |
 | **The dispatchers** | N background workers (default 4) registered by the extension at postmaster startup | Claiming queue rows, calling model providers over HTTP, writing results back. The only part that talks to an LLM. |
 | **The bridge** (`stewards-mcp`) | A Go daemon beside the database | MCP tool calls. It claims exactly one kind of queue row (`mcp_proxy`) and speaks MCP to external tool servers — stdio child processes or streamable HTTP. Secrets resolve from *its* environment, never from the database. |
 | **The hosts** | Whatever feeds turns in: a persona host on a chatroom, a CLI, an MCP server your coding agent calls | Translating an outside event (a chat message, a command) into a work item, and a finished work item back into an outside effect (a reply in the room). |
@@ -198,13 +198,16 @@ The worker writes back in one transaction:
   tokens, cache reads and writes, and the gateway-reported upstream cost.
   Costs roll into 5-hour, daily, weekly, and monthly buckets; a work item
   that exceeds its cost cap is quarantined, not silently continued.
-- **Auto-fire markers** on the payload run their handlers. Seven exist:
+- **Auto-fire markers** on the payload run their handlers. Each parses the
+  model's JSON answer and applies it — advancing a gate, recording a
+  verification, tallying a council vote. The original gate/council set —
   `_gate_eval`, `_scenarios_gen`, `_verify`, `_sabbath`, `_atonement`,
-  `_council_member`, `_council_synthesize`. Each parses the model's JSON
-  answer and applies it — advancing a gate, recording a verification,
-  tallying a council vote. Marker errors are logged, never propagated: a
-  failed auto-apply leaves the work item un-transitioned for a human
-  re-trigger rather than corrupting state.
+  `_council_member`, `_council_synthesize` — has since grown as subsystems
+  landed: `_probe` records a model-capability verdict (auto-probe),
+  engram-extraction markers fold async distillations back into a message,
+  and the trajectory-critic harvest feeds the self-improvement loop. Marker
+  errors are logged, never propagated: a failed auto-apply leaves the work
+  item un-transitioned for a human re-trigger rather than corrupting state.
 
 If the model answered plainly, skip to Scene 6. If it answered with
 `tool_calls`, the loop begins.
@@ -328,6 +331,57 @@ one you assumed wrongly:
 4. **The human is the Hinge.** Review stages, gates, cost quarantines, and
    merge/deploy authority all terminate at a person. The substrate
    proposes, executes, verifies, and accounts; it does not own outcomes.
+
+---
+
+## Beyond the turn — the subsystems built on it
+
+This document dissects one turn. Everything below is built *out of* turns —
+each is the same dispatch loop pointed at a different job, so the mental model
+above predicts all of them. Pointers, by file in the authored chain, for what
+this narrative deliberately doesn't show:
+
+- **Maturity gates + scenarios/verify** (`08-gates.sql`) — the
+  `raw → researched → planned → specced → executing → verified` ladder, an
+  LLM gate that returns `advance | revise | surface`, generated acceptance
+  criteria, and a verify pass that checks output against them.
+- **Council, sabbath, atonement** (`12-council.sql`, `10-sabbath-atonement.sql`)
+  — multi-agent deliberation and the end-of-cycle reflection/repair passes,
+  fired from the same auto-fire markers.
+- **The Hinge** (`39-hinge.sql`, decoupled in `70-hinge-decouple.sql`) — the
+  approval ledger: actions are classified by `kind`, with operator-configured
+  auto-approve and always-escalate lists, so irreversible moves (cutover, a
+  new capability, a spend increase) route to a human.
+- **A2A peer handoffs** (`69-a2a-engine.sql`) — `register / submit / claim /
+  needs_input / answer / receipt / note`: agent-to-agent coordination as
+  relational primitives (a work item is the task; `INPUT_REQUIRED` is the
+  Hinge). Names are aligned to the A2A standard; the JSON-RPC / agent-card
+  wire wrapper is a later edge adapter. This is the *peer* complement to the
+  parent-child spawn tree in [delegation-limits.md](delegation-limits.md).
+- **Rigor mode** (`65-rigor-mode.sql` → `67-rigor-force-final.sql`) — a
+  per-response "ground or flag" contract (tag every claim grounded / inference
+  / model-prior), a fidelity-sharpened trajectory rubric, and a force-final
+  that drops tools two rounds before the `steps` cap so a careful run still
+  ends with a grounded answer instead of dying at the budget.
+- **Trajectory critic + self-improvement** (`56-trajectory-critic.sql`,
+  `59-self-improvement.sql`) — a Glass-Box judge over a run's *trajectory*
+  (tool choice, error-state recognition, grounding, role adherence), feeding a
+  reflective tuning loop that proposes one additive prompt clause per recurring
+  failure. The loop's grader families are escalate-only — an optimizer can
+  never edit what grades it (the eval-gaming guard).
+- **Model capability, auto-probe, aliases, failover** (`19-models.sql`,
+  `31-model-aliases.sql`, `32-alias-failover.sql`, `68-model-fallback-hardening.sql`)
+  — a usability registry kept current by a streaming auto-probe, role aliases,
+  and free-first fallback; the dispatcher substitutes a usable model for an
+  unusable one and logs the swap. See [wiring-up-models.md](wiring-up-models.md).
+- **Loreworks** (`54-loreworks.sql` → `58-world-edge-audit.sql`) — building a
+  *world* (entities + a typed edge-graph) from a source corpus, with hybrid
+  lexical+semantic lore search and a grounding critic that prunes ungrounded
+  edges. See [loreworks.md](loreworks.md).
+- **Self-tending memory + large-result page-in** (`41-memory-tend.sql`,
+  `33-page-in.sql`) — Hinge-gated growth of associative graph edges with
+  multi-hop recall, and a "research notebook" that keeps a fat tool result
+  durable while the model pages the rest in on demand.
 
 ---
 
