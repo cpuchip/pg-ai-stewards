@@ -749,6 +749,22 @@ extension_sql_file!(
     requires = ["create_brain_hybrid"],
 );
 
+// 75: wire the AGENT-FACING brain search to 73's brain_search_hybrid. 73 built
+// the hybrid fn but left the tool_def 'brain_search_text' dispatching (sql_fn
+// brain_search_text_tool) to the FTS-only brain_search_text. This repoints that
+// wrapper — exactly as 71 §3 repointed doc_search_tool — to embed the query
+// INLINE via the embed_query pg_extern (EXCEPTION → NULL ⇒ FTS-only fallback)
+// and call brain_search_hybrid. It is a clean SQL swap, NOT the Go-layer change
+// 73's header expected: the brain tool is a sql_fn (unlike the engram search,
+// whose wrapper is Go), and embed_query is a synchronous pg_extern callable in
+// SQL. The documented brain_search_semantic, finally real. The engram search
+// has no agent-facing tool in this repo, so it is left untouched (flagged).
+extension_sql_file!(
+    "../75-wire-brain-hybrid.sql",
+    name = "create_brain_search_wire",
+    requires = ["create_north_star"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
