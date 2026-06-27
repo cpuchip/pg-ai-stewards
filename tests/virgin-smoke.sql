@@ -2462,4 +2462,121 @@ BEGIN
     RAISE NOTICE 'OK 57: model-fallback hardening — a pulled local model classifies transient (failover walks to a live member) + the local MoE pair are mutual fallbacks';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→68) is sound =='
+-- ---------------------------------------------------------------------
+-- 58. A2A / Open Engine (69) — an agent hands work to an agent and the
+-- human is no longer the hallway. Proves the whole loop deterministically:
+-- register → submit → inbox(todo) → claim (atomic lock) → needs_input
+-- (owner gets the question) → answer (worker gets it) → receipt (resolved
+-- + owner gets the receipt) → inbox clears. Plus the NOTES pane + clear.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_wi      uuid;
+    v_inbox   jsonb;
+    v_res     jsonb;
+    v_note_id bigint;
+BEGIN
+    -- Core ships NO operator agents — the registry starts empty.
+    ASSERT (SELECT count(*) FROM stewards.a2a_agents) = 0,
+        '69: core seeds NO A2A agents (registry is operator/overlay data)';
+    -- The inert holding pipeline + the drive-the-engine capability skill DO ship.
+    ASSERT EXISTS (SELECT 1 FROM stewards.pipelines WHERE family='a2a-handoff'),
+        '69: the inert a2a-handoff holding pipeline ships in core';
+    ASSERT EXISTS (SELECT 1 FROM stewards.skills WHERE family='drive-the-engine'),
+        '69: the drive-the-engine capability skill ships in core';
+
+    -- Register two participants (owner hands work to worker).
+    PERFORM stewards.a2a_register('lane:smoke-owner',  'Smoke Owner',  'session');
+    PERFORM stewards.a2a_register('lane:smoke-worker', 'Smoke Worker', 'session');
+
+    -- Submit a task. A bad assignee must be refused.
+    BEGIN
+        PERFORM stewards.a2a_submit('lane:ghost', 'should fail', '{}'::jsonb, 'lane:smoke-owner');
+        ASSERT false, '69: a2a_submit to an unregistered assignee must raise';
+    EXCEPTION WHEN OTHERS THEN NULL; END;
+
+    v_res := stewards.a2a_submit(
+        'lane:smoke-worker',
+        'Say hello',
+        jsonb_build_object('outcome','greet the engine','stop_condition','one line'),
+        'lane:smoke-owner');
+    v_wi := (v_res->>'work_item_id')::uuid;
+    ASSERT v_res->>'state' = 'queued',
+        '69: a submitted task is queued (awaiting claim, not bgworker-dispatched)';
+    ASSERT (SELECT status FROM stewards.work_items WHERE id=v_wi) = 'awaiting_review',
+        '69: the assigned work_item is parked (status=awaiting_review) so the bgworker never dispatches it';
+    ASSERT (SELECT origin FROM stewards.work_items WHERE id=v_wi) = 'a2a',
+        '69: an A2A task carries origin=a2a';
+
+    -- The worker's inbox shows it as a todo (not a note).
+    v_inbox := stewards.a2a_inbox('lane:smoke-worker');
+    ASSERT (v_inbox->>'todo_count')::int = 1 AND (v_inbox->>'note_count')::int = 0,
+        '69: the assigned task shows in the worker''s TODOS pane';
+
+    -- Claim is an atomic lock: first wins, second loses.
+    v_res := stewards.a2a_claim(v_wi, 'lane:smoke-worker');
+    ASSERT (v_res->>'claimed')::bool, '69: the first claim succeeds (queued→in_progress)';
+    ASSERT v_res->>'title' = 'Say hello', '69: a claim returns the full ticket';
+    v_res := stewards.a2a_claim(v_wi, 'lane:other-worker');
+    ASSERT NOT (v_res->>'claimed')::bool, '69: a second claim loses the lock (already claimed)';
+
+    -- Blocked → the owner gets the exact question.
+    PERFORM stewards.a2a_needs_input(v_wi, 'Formal or casual hello?');
+    ASSERT (SELECT a2a_question FROM stewards.work_items WHERE id=v_wi) = 'Formal or casual hello?',
+        '69: needs_input stores the blocking question';
+    v_inbox := stewards.a2a_inbox('lane:smoke-owner');
+    ASSERT (v_inbox->>'note_count')::int = 1,
+        '69: the owner gets a question-note when a task is blocked';
+
+    -- Owner answers → the worker gets it → block clears.
+    PERFORM stewards.a2a_answer(v_wi, 'Casual.');
+    ASSERT (SELECT a2a_question FROM stewards.work_items WHERE id=v_wi) IS NULL,
+        '69: answering clears the block';
+    v_inbox := stewards.a2a_inbox('lane:smoke-worker');
+    ASSERT (v_inbox->>'note_count')::int = 1,
+        '69: the worker gets the answer in its inbox';
+
+    -- Receipt → resolved + completed + the owner is told (the accounting).
+    v_res := stewards.a2a_receipt(v_wi, 'Said hello, casually.',
+                                  jsonb_build_object('output','hello!'));
+    ASSERT v_res->>'state' = 'resolved',
+        '69: a receipt resolves the task';
+    ASSERT (SELECT status FROM stewards.work_items WHERE id=v_wi) = 'completed'
+       AND (SELECT escalation_state FROM stewards.work_items WHERE id=v_wi) = 'resolved',
+        '69: a receipted task is completed/resolved';
+    ASSERT (SELECT stage_results->'handoff'->>'output' FROM stewards.work_items WHERE id=v_wi)
+           = 'Said hello, casually.',
+        '69: the artifact + summary land in stage_results';
+
+    -- A resolved task leaves the worker's todo queue; the owner has a receipt.
+    v_inbox := stewards.a2a_inbox('lane:smoke-worker');
+    ASSERT (v_inbox->>'todo_count')::int = 0,
+        '69: a resolved task is no longer in the worker''s todos';
+    v_inbox := stewards.a2a_inbox('lane:smoke-owner');
+    ASSERT (v_inbox->>'note_count')::int = 2,
+        '69: the owner now has the question-note + the receipt-note';
+
+    -- A receipt must require an active claim.
+    BEGIN
+        PERFORM stewards.a2a_receipt(v_wi, 'double', '{}'::jsonb);
+        ASSERT false, '69: receipting a non-claimed (already-resolved) task must raise';
+    EXCEPTION WHEN OTHERS THEN NULL; END;
+
+    -- NOTES pane: leave + clear (the v0 inbox, in the substrate).
+    v_res := stewards.a2a_note('lane:smoke-worker', 'ping when free', 'lane:smoke-owner');
+    v_note_id := (v_res->>'note_id')::bigint;
+    ASSERT (stewards.a2a_inbox('lane:smoke-worker')->>'note_count')::int = 2,
+        '69: a fresh note shows in the recipient''s NOTES pane';
+    PERFORM stewards.a2a_note_clear('lane:smoke-worker');
+    ASSERT (stewards.a2a_inbox('lane:smoke-worker')->>'note_count')::int = 0,
+        '69: clearing the inbox drops the 📬';
+
+    -- Clean up so the smoke is self-contained.
+    DELETE FROM stewards.agent_notes WHERE recipient LIKE 'lane:smoke-%';
+    DELETE FROM stewards.work_items   WHERE id = v_wi;
+    DELETE FROM stewards.a2a_agents   WHERE agent_id LIKE 'lane:smoke-%';
+
+    RAISE NOTICE 'OK 58: A2A engine — register→submit→inbox→claim(atomic lock)→needs_input→answer→receipt→done, plus the notes pane; an agent hands work to an agent with zero copy-paste';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→69) is sound =='

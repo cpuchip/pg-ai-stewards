@@ -125,6 +125,7 @@ func main() {
 	registerModelTools(srv, pool)
 	registerRedlineTools(srv, pool)
 	registerImageTools(srv, pool) // generate_image (Gemini Nano Banana → chat attachment); NOT on the read-only HTTP profile
+	registerA2ATools(srv, pool)   // A2A / Open Engine — hand work to / claim work from other agents
 
 	log.Printf("server starting on stdio (mcp protocol)")
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {

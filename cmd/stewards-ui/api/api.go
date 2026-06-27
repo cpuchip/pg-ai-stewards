@@ -53,6 +53,7 @@ func Register(mux *http.ServeMux, deps *Deps) {
 	deps.registerObjects(mux)
 	deps.registerChat(mux)
 	deps.registerDiagnose(mux)
+	deps.registerA2A(mux)
 }
 
 // writeJSON marshals v to JSON, sets the Content-Type header, and
