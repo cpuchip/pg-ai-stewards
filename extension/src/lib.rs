@@ -735,6 +735,20 @@ extension_sql_file!(
     requires = ["create_hybrid_rrf_everywhere"],
 );
 
+// 74: the North Star — the substrate's Intent (step 1), on every call. Gives
+// the engine the one piece of the creation cycle it ran without: the named
+// *why*. render_north_star() composes a short standing block from the
+// operator-owned north_star.* config (generic real default in the core; an
+// operator names their own; an empty why opts out). compose_system_prompt is
+// re-authored (later-file-wins over 09) to prepend it FIRST and echo it last,
+// with directions that re-root the substrate's existing covenant behaviors so
+// the why is load-bearing — the tie-breaker when values conflict.
+extension_sql_file!(
+    "../74-north-star.sql",
+    name = "create_north_star",
+    requires = ["create_brain_hybrid"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

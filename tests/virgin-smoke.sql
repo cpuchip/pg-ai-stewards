@@ -3116,4 +3116,100 @@ BEGIN
     RAISE NOTICE 'OK 64b: brain-hybrid — brain_search_hybrid RRF-UNIONs the FTS-only + vector-only brain entries; NULL-embedding ⇒ FTS-only fallback; category filter applies to both legs; brain_search_text + brain_search_vec untouched';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→73) is sound =='
+-- ---------------------------------------------------------------------
+-- 65a. North Star render (74) — the substrate's Intent, step 1.
+-- render_north_star() composes a block from the operator-owned north_star.*
+-- config: the why, optional source, and the directions it governs, plus the
+-- tie-breaker line that makes it load-bearing. Prove the mechanism + the two
+-- operator-facing behaviors deterministically (no LLM): a real generic default
+-- ships; an operator override renders; clearing the why opts OUT (NULL).
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_block   text;
+    v_default text;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='render_north_star'),
+        '65a: render_north_star exists';
+
+    -- The core ships a REAL generic default (DO NOTHING seed), not a placeholder.
+    v_default := stewards.config_get_text('north_star.why');
+    ASSERT v_default IS NOT NULL AND length(trim(v_default)) > 0,
+        '65a: a generic north_star.why ships in the core (every steward has a why out of the box)';
+
+    v_block := stewards.render_north_star();
+    ASSERT v_block LIKE '=== North Star ===%',
+        '65a: the block leads with the === North Star === marker';
+    ASSERT position(v_default IN v_block) > 0,
+        '65a: the configured why renders into the block';
+    ASSERT v_block LIKE '%this is the tie-breaker.',
+        format('65a: the directions + tie-breaker line render (load-bearing, not a sticker); got tail=%s',
+               right(v_block, 40));
+    -- the directions are the substrate's existing covenant behaviors, restated.
+    ASSERT v_block ILIKE '%never compel%' AND v_block ILIKE '%assume you can be wrong%',
+        '65a: the default directions re-root existing covenant behaviors (preside-not-compel, verify/assume-wrong)';
+
+    -- OPERATOR OVERRIDE: config_set changes the why; the block follows it.
+    PERFORM stewards.config_set('north_star.why', to_jsonb('SMOKE-WHY-z9 serve the welfare of the soul'::text));
+    v_block := stewards.render_north_star();
+    ASSERT v_block ILIKE '%SMOKE-WHY-z9%',
+        '65a: an operator override (config_set north_star.why) renders — content is the operator''s';
+
+    -- OPT-OUT: clearing the why ⇒ no block (fail-open-to-silence).
+    PERFORM stewards.config_set('north_star.why', to_jsonb(''::text));
+    ASSERT stewards.render_north_star() IS NULL,
+        '65a: an empty why opts OUT — render_north_star returns NULL (the mechanism is optional)';
+
+    -- restore the shipped default for 65b + a clean end state.
+    PERFORM stewards.config_set('north_star.why', to_jsonb(v_default));
+    RAISE NOTICE 'OK 65a: North Star render — generic default ships; operator override renders; empty why opts out (NULL); the directions re-root existing covenant behaviors with a tie-breaker line';
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 65b. North Star in compose_system_prompt (74) — the chokepoint. Every
+-- agent call carries the why FIRST (primacy) and echoed last (recency), ahead
+-- of the covenant and the agent block. Inverse hypothesis: clear the why and
+-- the block vanishes from the very same prompt while the agent still renders.
+-- Uses the core-seeded 'stewards-explore' family (model_match '*').
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_prompt  text;
+    v_default text := stewards.config_get_text('north_star.why');
+    p_ns      int;
+    p_agent   int;
+    p_cov     int;
+BEGIN
+    v_prompt := stewards.compose_system_prompt('stewards-explore', 'smoke-model-65b', 'ns-smoke-65b');
+
+    p_ns    := position('=== North Star ===' IN v_prompt);
+    p_agent := position('=== Agent ===' IN v_prompt);
+    p_cov   := position('=== Active Covenant ===' IN v_prompt);
+
+    ASSERT p_ns > 0,
+        '65b: the North Star block appears in compose_system_prompt (carried on the call)';
+    -- PRIMACY: it precedes the agent block (and the covenant, when one is seeded).
+    ASSERT p_agent > 0 AND p_ns < p_agent,
+        format('65b: the North Star precedes the === Agent === block (primacy); ns=%s agent=%s', p_ns, p_agent);
+    ASSERT p_cov = 0 OR p_ns < p_cov,
+        format('65b: when a covenant is seeded, the North Star precedes it (the why frames the how); ns=%s cov=%s', p_ns, p_cov);
+    -- RECENCY: the why is echoed last as the tie-breaker.
+    ASSERT v_prompt ILIKE '%the North Star above is the why that breaks the tie.%',
+        '65b: the North Star is echoed LAST (recency) as the conflict tie-breaker';
+
+    -- INVERSE HYPOTHESIS: opt out (clear the why) ⇒ the block disappears from
+    -- the SAME prompt, but the agent persona still renders (only the why is gone).
+    PERFORM stewards.config_set('north_star.why', to_jsonb(''::text));
+    v_prompt := stewards.compose_system_prompt('stewards-explore', 'smoke-model-65b', 'ns-smoke-65b');
+    ASSERT position('=== North Star ===' IN v_prompt) = 0,
+        '65b: with the why cleared, the North Star block is GONE from compose_system_prompt (the mechanism, not hardcoded text)';
+    ASSERT v_prompt ILIKE '%careful researcher%',
+        '65b: the agent prompt still renders with the why cleared (only the North Star was removed)';
+
+    -- restore the shipped default.
+    PERFORM stewards.config_set('north_star.why', to_jsonb(v_default));
+    RAISE NOTICE 'OK 65b: North Star in compose_system_prompt — carried on every agent call, FIRST (before covenant + agent) and echoed LAST; clearing the why removes the block deterministically (inverse hypothesis)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→74) is sound =='

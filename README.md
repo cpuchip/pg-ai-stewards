@@ -113,9 +113,18 @@ public, generalized substrate. The interfaces still move; the engine is solid. O
 | [Loreworks](docs/loreworks.md) | Build, explore, and inhabit a *world* from source lore — entities, a typed edge-graph, and hybrid (lexical + semantic) lore search. |
 | [Operations](docs/operations.md) | The upgrade / migrate / verify runbook — code-in-image, data-in-volume, config-is-code. |
 | [Delegation limits](docs/delegation-limits.md) | How far an agent may spawn sub-agents (depth / width / grants), and how to raise the bounds as models improve. |
+| [The North Star](docs/north-star.md) | The standing *why* carried on every agent call — set your own, or use the generic default. |
 
 Copy-paste starters (model catalog, content digesters) live in
 [`examples/`](examples/).
+
+## The pattern behind it
+
+The governance this engine runs on — intent, covenant, stewardship, watching, atonement — is drawn
+from [*Beyond the Prompt*](https://github.com/cpuchip/scripture-book), a book on the creation cycle of
+human–AI collaboration. The book describes the pattern; **pg-ai-stewards is that pattern instantiated.**
+The first thing every agent call carries — [the North Star](docs/north-star.md), the named *why* — is
+step one of that cycle.
 
 ## License
 
