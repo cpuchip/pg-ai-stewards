@@ -2579,4 +2579,46 @@ BEGIN
     RAISE NOTICE 'OK 58: A2A engine — register→submit→inbox→claim(atomic lock)→needs_input→answer→receipt→done, plus the notes pane; an agent hands work to an agent with zero copy-paste';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→69) is sound =='
+-- ---------------------------------------------------------------------
+-- 59. Hinge reviewer decouple (70) — the cloud-Max reviewer may run during a
+-- MANUAL GPU pause (opt-in), but a watchman EMERGENCY pause always halts it,
+-- and its own switch always halts it. (Bounds in hinge_record_verdict unchanged.)
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_run text;
+BEGIN
+    -- a virgin DB has no pending hinges → enqueue one probe so should_run can be true
+    PERFORM stewards.hinge_enqueue('smoke-decouple','probe','{}'::jsonb,'smoke');
+
+    PERFORM stewards.config_set('autonomy_paused','false'::jsonb,NULL);
+    ASSERT (stewards.hinge_gate_status()->>'should_run')='true',
+        '70: not paused + pending → should_run';
+
+    PERFORM stewards.config_set('autonomy_paused','true'::jsonb,NULL);
+    PERFORM stewards.config_set('reflect_pause_source', to_jsonb('manual'::text), NULL);
+    PERFORM stewards.config_set('hinge_runs_during_global_pause','false'::jsonb,NULL);
+    ASSERT (stewards.hinge_gate_status()->>'should_run')='false',
+        '70: manual pause + opt-out → halt (current behavior preserved)';
+
+    PERFORM stewards.config_set('hinge_runs_during_global_pause','true'::jsonb,NULL);
+    ASSERT (stewards.hinge_gate_status()->>'should_run')='true',
+        '70: manual pause + opt-IN → runs on the Max plan (the decouple unlock)';
+
+    PERFORM stewards.config_set('reflect_pause_source', to_jsonb('guard:autonomous spend'::text), NULL);
+    ASSERT (stewards.hinge_gate_status()->>'should_run')='false',
+        '70: a watchman EMERGENCY (guard:*) pause halts the reviewer even when opted-in (emergency supreme)';
+
+    PERFORM stewards.config_set('reflect_pause_source', to_jsonb('manual'::text), NULL);
+    PERFORM stewards.config_set('hinge_daemon_paused','true'::jsonb,NULL);
+    ASSERT (stewards.hinge_gate_status()->>'should_run')='false',
+        '70: the reviewer''s own kill switch (hinge_daemon_paused) halts it';
+
+    -- restore virgin defaults + drop the probe
+    PERFORM stewards.config_set('hinge_daemon_paused','false'::jsonb,NULL);
+    PERFORM stewards.config_set('autonomy_paused','false'::jsonb,NULL);
+    PERFORM stewards.config_set('hinge_runs_during_global_pause','false'::jsonb,NULL);
+    DELETE FROM stewards.hinge_reviews WHERE kind='smoke-decouple';
+    RAISE NOTICE 'OK 59: hinge decouple — cloud-Max reviewer runs during a manual GPU pause when opted-in; a watchman emergency or its own switch still halts it';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→70) is sound =='
