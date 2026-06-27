@@ -707,6 +707,19 @@ extension_sql_file!(
     requires = ["create_hinge_decouple"],
 );
 
+// 72: extend 71's real-RRF treatment to EVERY remaining doc-corpus surface
+// (pool_search and the engram search were single-leg), and add an opt-in 1-hop
+// graph-expand hop to all four hybrid surfaces. The engram FTS leg is a genuine
+// schema change: a GENERATED tsvector + GIN index on engram_embeddings (was
+// vector-only). pool_search/search_engrams_hybrid are authored once at their
+// final signature (with p_expand); doc_search_hybrid + world_entity_hybrid gain
+// p_expand via the drop-then-create idiom (cf. 32's pick_alias_member).
+extension_sql_file!(
+    "../72-hybrid-rrf-everywhere.sql",
+    name = "create_hybrid_rrf_everywhere",
+    requires = ["create_hybrid_rrf"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
