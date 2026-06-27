@@ -78,7 +78,7 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      67-rigor-force-final.sql 68-model-fallback-hardening.sql \
      69-a2a-engine.sql 70-hinge-decouple.sql \
      71-hybrid-rrf.sql 72-hybrid-rrf-everywhere.sql \
-     73-brain-hybrid.sql ./
+     73-brain-hybrid.sql 74-north-star.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
