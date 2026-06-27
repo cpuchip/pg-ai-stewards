@@ -687,6 +687,12 @@ extension_sql_file!(
     requires = ["create_model_fallback_hardening"],
 );
 
+extension_sql_file!(
+    "../70-hinge-decouple.sql",
+    name = "create_hinge_decouple",
+    requires = ["create_a2a_engine"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
