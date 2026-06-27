@@ -720,6 +720,21 @@ extension_sql_file!(
     requires = ["create_hybrid_rrf"],
 );
 
+// 73: the last doc-corpus surface to get real RRF — the personal brain.
+// brain_entries already carries BOTH a GENERATED body_tsv (+GIN) and an
+// embedding vector(768) (+HNSW), so this is zero schema change: it only
+// fuses the existing brain_search_text (FTS) and brain_search_vec (vector)
+// legs into stewards.brain_search_hybrid via equal-weight RRF (k=60). The
+// query embedding is a PARAMETER (mirroring brain_search_vec / 72's
+// search_engrams_hybrid; NULL ⇒ FTS-only fallback). No graph-expand (brain
+// entries are not graph nodes); MCP wiring deferred (query-side embed is a
+// Go-layer change, exactly like 72 left search_engrams_hybrid's Go wiring).
+extension_sql_file!(
+    "../73-brain-hybrid.sql",
+    name = "create_brain_hybrid",
+    requires = ["create_hybrid_rrf_everywhere"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
