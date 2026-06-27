@@ -82,11 +82,29 @@ mine."
   RLS; (4) **no identity rides the dispatch session** — and worse, a regression: `a2a_claim(claimer=…)`
   takes identity **from the payload** (self-asserted), the opposite of identity-at-transport.
 
-## 4. The technical approach (leading; research-pending refinement)
+## 4. The technical approach (research-confirmed)
 
-Leading shape — **row-per-tenant + RLS + identity-at-transport + secure views** (the natural fit for
-a single-Postgres in-DB runtime; the parallel research pass validates this vs schema-per-tenant):
+**The Postgres-multi-tenancy research pass (`.spec/notes/2026-06-27-postgres-multitenancy-research.md`,
+web-cited) confirmed model (a): shared schema + `owner_id` column + RLS with FORCE + a non-superuser
+dispatch role + owner-OR-grant policies via a `SECURITY DEFINER` membership fn + `security_invoker`
+secure views.** It wins because the *sharing* predicate (`owner OR grant`) is relational — only RLS
+expresses it natively (schemas/separate-DBs can't); the runtime is one database by design; single-user
+collapses to a no-op; and we already dropped AGE *to get* RLS. (Schema-per-tenant is the documented
+runner-up, the right pivot only if a future need demands per-tenant `pg_dump`/`DROP SCHEMA` — deferred
+escape hatch, not built.) The research doc carries the copy-paste DDL templates.
 
+**★ The single highest-leverage line is not a policy — it's the bgworker's connection role.** A pgrx
+bgworker connecting as the bootstrap **superuser silently voids every policy** (superusers bypass RLS
+even under FORCE). So the order is non-obvious: the **non-superuser role + the leak-detector oracle
+land FIRST**, before any column or policy — everything else is inert until the worker is non-super.
+**One relief specific to us:** the classic RLS-+-PgBouncer pooling leak does **not** hit the bgworker
+(it owns its SPI transactions); it only touches the external MCP/HTTP edge.
+
+0. **The non-superuser dispatch role + the oracle (FIRST).** `CREATE ROLE stewards_app NOLOGIN
+   NOSUPERUSER NOBYPASSRLS`; the bgworker connects as it (`BackgroundWorkerInitializeConnection(…,
+   "stewards_app", …)`), belt-and-suspenders `SET LOCAL ROLE stewards_app` per work txn. Ship the
+   **RLS-leak detector** alongside: a smoke that connects as `stewards_app`, sets `app.principal=B`,
+   asserts **zero** of A's rows + the inverse (no context → only the solo owner's). Build-the-oracle-first.
 1. **The tenant key.** Add `account_id` (uuid, FK to a new `stewards.accounts`) to the row-bearing
    tables, backfilled from the owning `work_item`/`intent`. `intents` gets `account_id`. A virgin
    install seeds exactly one account; everything defaults to it.
@@ -128,10 +146,14 @@ knowledge graph). It rides Phases 2–3 below.
 
 ## 6. Phases (single-user first, multi-tenant additive)
 
-- **P0 — Single-user made explicit + the tenant-key foundation (additive, zero behavior change).**
-  `stewards.accounts` (seed one), `account_id` columns + backfill, the non-superuser app role wired
-  (but RLS not yet enforced). After P0 the solo install behaves *identically* — we've only added a
-  key. *Oracle: virgin-smoke proves one account, all rows owned, the runtime unchanged.*
+- **P0 — The non-super role + the oracle + the tenant key (additive, zero behavior change).** First
+  the `stewards_app` (NOSUPERUSER/NOBYPASSRLS) role + the bgworker connecting as it + the RLS-leak
+  detector smoke (the safety floor — inert but proven). Then `stewards.accounts` (seed one),
+  `account_id` columns + backfill to `solo_principal()`. **Keep `intent_id` (workstream scoping)
+  distinct from `owner_id`/`account_id` (principal ownership)** — different questions; the 3 tables
+  with `intent_id` get the owner key alongside. After P0 the solo install behaves *identically* —
+  we've only added a key and a role. *Oracle: virgin-smoke proves the worker is non-super, one
+  account, all rows owned, runtime unchanged.*
 - **P1 — Identity-at-transport + RLS isolation.** `SET LOCAL app.current_account` at dispatch; `FORCE`
   RLS on the tenant tables; secure views; the SPI carve-outs. *Oracle: virgin-smoke RLS assertion —
   tenant A cannot read B's sessions/messages/edges/docs; drop the policy, confirm the leak returns
@@ -161,4 +183,6 @@ knowledge graph). It rides Phases 2–3 below.
   `study/yt/google-cloud-agentic-playlist-digest.md` (#1 + C-1) — the directly-relevant primitive.
 - The Loreworks world engine (`54`–`58`) — the code-as-World substrate.
 - The A2A scope-wall / token model (`69-a2a-engine.sql`, the llama-chip hub) — the lightest auth.
-- A parallel industry-standard-Postgres-multi-tenancy research pass refines §4's pattern choice.
+- The Postgres-multi-tenancy research (web-cited): `.spec/notes/2026-06-27-postgres-multitenancy-research.md`
+  — confirmed model (a), the bgworker-role-first ordering, the DDL templates, the single-user collapse,
+  the top-6 gotchas (superuser-bypass + pooling first).
