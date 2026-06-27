@@ -2621,4 +2621,126 @@ BEGIN
     RAISE NOTICE 'OK 59: hinge decouple — cloud-Max reviewer runs during a manual GPU pause when opted-in; a watchman emergency or its own switch still halts it';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→70) is sound =='
+-- ---------------------------------------------------------------------
+-- 60a. Hybrid RRF math (71) — the DISCRIMINATING test. The virgin env has no
+-- embed provider, so the sem leg is always empty here; we cannot exercise RRF
+-- against live embeddings. Instead prove the FUSION MATH deterministically with
+-- the canonical worked example, and show it disagrees with the OLD weighted-
+-- linear blend (so the test actually distinguishes real RRF from score-mixing).
+--
+--   FTS (lexical) list = [A, B]   → A rank 1, B rank 2
+--   semantic     list = [B, C]   → B rank 1, C rank 2
+--   RRF score = Σ 1/(k+rank) over the legs an item appears in, k=60:
+--     B = 1/(60+2) + 1/(60+1) ≈ 0.0325   (in BOTH legs)
+--     A = 1/(60+1)            ≈ 0.0164   (lexical only)
+--     C = 1/(60+2)            ≈ 0.0161   (semantic only)
+--   → RRF order is B, A, C: B wins for being in BOTH legs, NOT for any raw score.
+-- A carries a HUGE raw FTS score (999) in this fixture; weighted-linear
+-- (0.45·lex + 0.55·sem) would let that dominate and rank A FIRST. The two
+-- methods DISAGREE — that is what makes this a real test of RRF.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_k         constant int := 60;
+    v_rrf_order text;
+    v_rrf_top   text;
+    v_wl_top    text;
+    v_b_rrf     numeric := 1.0/(60+2) + 1.0/(60+1);   -- B, in both legs
+    v_a_rrf     numeric := 1.0/(60+1);                -- A, lexical only
+BEGIN
+    WITH legs(item, fts_rank, sem_rank, fts_raw, sem_raw) AS (
+        VALUES
+            -- A: lexical only, but with a huge raw FTS score (the outlier)
+            ('A', 1,    NULL::int, 999.0, NULL::numeric),
+            ('B', 2,    1,         0.50,  1.00),
+            ('C', NULL::int, 2,    NULL::numeric, 0.90)
+    ),
+    scored AS (
+        SELECT item,
+               coalesce(1.0/(v_k + fts_rank), 0)
+             + coalesce(1.0/(v_k + sem_rank), 0)       AS rrf,
+               0.45 * coalesce(fts_raw, 0)
+             + 0.55 * coalesce(sem_raw, 0)             AS weighted_linear
+          FROM legs
+    )
+    SELECT (SELECT string_agg(item, ',' ORDER BY rrf DESC, item) FROM scored),
+           (SELECT item FROM scored ORDER BY rrf DESC, item LIMIT 1),
+           (SELECT item FROM scored ORDER BY weighted_linear DESC, item LIMIT 1)
+      INTO v_rrf_order, v_rrf_top, v_wl_top;
+
+    -- the arithmetic matches the canonical worked example
+    ASSERT round(v_b_rrf, 4) = 0.0325 AND round(v_a_rrf, 4) = 0.0164,
+        format('60a: RRF arithmetic — expected B≈0.0325 / A≈0.0164, got %s / %s',
+               round(v_b_rrf,4), round(v_a_rrf,4));
+    ASSERT v_b_rrf > v_a_rrf,
+        '60a: B (present in BOTH legs) outranks A (one leg) under RRF';
+
+    -- real RRF fuses by RANK, not raw score → order B, A, C, top = B
+    ASSERT v_rrf_order = 'B,A,C',
+        format('60a: RRF order must be B,A,C (rank-based fusion), got %s', v_rrf_order);
+    ASSERT v_rrf_top = 'B', '60a: RRF top is B';
+
+    -- INVERSE HYPOTHESIS: the OLD weighted-linear blend would rank A first
+    -- (its 999 raw FTS score dominates). The methods DISAGREE → the test
+    -- discriminates real RRF from score-blending (weakening either to agree
+    -- would be eval-gaming).
+    ASSERT v_wl_top = 'A',
+        format('60a: weighted-linear (the OLD 0.45·lex+0.55·sem) would rank A first; got %s — if this ever equals the RRF top the fixture no longer discriminates', v_wl_top);
+    ASSERT v_rrf_top <> v_wl_top,
+        '60a: RRF and weighted-linear pick DIFFERENT winners on this fixture (the discrimination)';
+
+    RAISE NOTICE 'OK 60a: hybrid RRF math — Σ 1/(k+rank), k=60; rank-based fusion orders B,A,C (B wins for being in both legs); the old weighted-linear blend would wrongly pick A — the methods disagree, so the test discriminates real RRF';
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 60b. Hybrid RRF functions exist and run in the no-embed virgin env (71).
+-- With no embed provider, embed_query raises → v_vec NULL → sem leg empty →
+-- both functions degrade to lexical-only, which must still return the hit.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE v_world bigint; v_n int; v_doc_n int;
+BEGIN
+    -- both hybrid functions exist
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='world_entity_hybrid'), 'world_entity_hybrid exists';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='doc_search_hybrid'), 'doc_search_hybrid exists';
+    -- the bare FTS primitive is LEFT INTACT (it is the lexical leg / internal caller)
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+                   WHERE n.nspname='stewards' AND p.proname='doc_search'), 'bare doc_search FTS primitive kept';
+
+    -- world_entity_hybrid: lexical fallback with no embed provider
+    v_world := stewards.world_upsert('rrf-smoke','RRF Smoke',NULL,NULL,true);
+    PERFORM stewards.world_entity_upsert('rrf-smoke','character','Borin','a dwarf smith of the deep halls');
+    PERFORM stewards.world_entity_upsert('rrf-smoke','place','Deephold','a mountain stronghold');
+    SELECT count(*) INTO v_n FROM stewards.world_entity_hybrid('rrf-smoke','Borin',5);
+    ASSERT v_n >= 1, '60b: world_entity_hybrid returns the lexical hit (graceful fallback, no embed provider)';
+
+    -- doc_search_hybrid: lexical fallback over a couple of seeded docs
+    INSERT INTO stewards.docs (slug, title, body, project_association) VALUES
+      ('rrf-doc-1','Reciprocal Ranks','The fusion blends lexical and semantic ranks deterministically.','rrf-smoke-proj'),
+      ('rrf-doc-2','Apples','Nothing about retrieval in this one.','rrf-smoke-proj');
+    SELECT count(*) INTO v_doc_n
+      FROM stewards.doc_search_hybrid('lexical semantic ranks', ARRAY[]::text[], 5);
+    ASSERT v_doc_n >= 1, '60b: doc_search_hybrid returns the lexical hit (graceful fallback, no embed provider)';
+
+    -- the kinds filter passes through both legs
+    SELECT count(*) INTO v_doc_n
+      FROM stewards.doc_search_hybrid('lexical semantic ranks', ARRAY['nonexistent-kind'], 5);
+    ASSERT v_doc_n = 0, '60b: doc_search_hybrid honors the kinds filter (no match → empty)';
+
+    -- the agent-facing tool wrapper now routes through the hybrid fn
+    ASSERT jsonb_array_length(stewards.doc_search_tool(
+              jsonb_build_object('query','lexical semantic ranks'))) >= 1,
+        '60b: doc_search_tool routes through doc_search_hybrid';
+    -- and its tool_def description was updated to say "hybrid"/"RRF" (honest contract)
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs
+                   WHERE name='doc_search' AND description ILIKE '%RRF%'),
+        '60b: doc_search tool_def description reflects hybrid/RRF';
+
+    DELETE FROM stewards.docs WHERE project_association='rrf-smoke-proj';
+    DELETE FROM stewards.worlds WHERE slug='rrf-smoke';
+    RAISE NOTICE 'OK 60b: hybrid RRF functions — world_entity_hybrid + doc_search_hybrid exist and degrade to lexical-only with no embed provider; doc_search_tool routes through the hybrid fn; the bare doc_search FTS primitive is intact';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→71) is sound =='

@@ -599,7 +599,8 @@ extension_sql_file!(
 // 57: Loreworks C/G — hybrid lore search (world_entity_hybrid = the embed_query
 // semantic leg the 54 comment promised) + the lore tools (lore_search/
 // lore_entity/lore_neighbors) + the read-only loremaster agent + lore_inject
-// for grounding a persona in a world room.
+// for grounding a persona in a world room. (57's fusion was weighted-linear;
+// 71 upgrades world_entity_hybrid to real equal-weight RRF.)
 extension_sql_file!(
     "../57-loreworks-chat.sql",
     name = "create_loreworks_chat",
@@ -693,6 +694,19 @@ extension_sql_file!(
     requires = ["create_a2a_engine"],
 );
 
+// 71: make hybrid search REAL Reciprocal Rank Fusion. Replaces 57's
+// weighted-linear world_entity_hybrid (0.45·lex + 0.55·sem) with canonical
+// equal-weight RRF (Σ 1/(k+rank), k=60), and adds doc_search_hybrid so the doc
+// corpus finally has a semantic leg (docs already carry a vector(768)
+// embedding) — repointing the agent-facing doc_search tool to it. The bare
+// doc_search FTS function stays as the lexical primitive. "RRF" now matches
+// the SQL.
+extension_sql_file!(
+    "../71-hybrid-rrf.sql",
+    name = "create_hybrid_rrf",
+    requires = ["create_hinge_decouple"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
@@ -753,8 +767,9 @@ fn providers_loaded() -> TableIterator<
 /// `::vector`). This is the query-time embedding primitive the substrate lacked:
 /// `doc_search`/`pool_search` are full-text and `doc_similar` uses *precomputed*
 /// edges, so nothing could embed an arbitrary query at search time. With this, a
-/// hybrid full-text + semantic (RRF) search becomes pure SQL over any embedded
-/// table.
+/// hybrid full-text + semantic search becomes pure SQL over any embedded table —
+/// realized in 71 (`world_entity_hybrid`, `doc_search_hybrid`) as real
+/// Reciprocal Rank Fusion (RRF, Σ 1/(k+rank), k=60).
 ///
 /// Resolution: `provider` (else `stewards.config 'embed_provider'`), `model`
 /// (else the provider's default), `dimensions` (default 768 = nomic; pass 1536
