@@ -122,6 +122,15 @@ land FIRST**, before any column or policy — everything else is inert until the
 5. **Parameterized secure views** (`security_invoker`/`security_barrier`) for shared-but-scoped reads
    (`doc_search`, `context_search`, the graph walks, world reads) → "global corpus + my private rows
    + my granted rows" in one surface. Fold the `sessions.private` wall into a real policy.
+   **★ The cross-session SEARCH tools are the surfaces the wall most critically covers:** the
+   agent-facing `brain_search`, **`engram_search` (76 — ratified 2026-06-27 to ship *substrate-wide*,
+   `p_session_id = NULL`, on the explicit understanding that RLS — not per-tool filters — is where it
+   gets scoped per-tenant)**, `pool_search`, and the hybrids (`doc_search_hybrid` etc.) all read across
+   every session today. Under RLS+FORCE on the engram/brain/doc tables, an unscoped `SELECT … NULL`
+   automatically returns only the caller's tenant rows — so the substrate-wide tools become tenant-safe
+   *for free*, which is exactly why we did **not** plumb redundant per-tool session/project filters.
+   `engram_search` is the canonical test case for the RLS-leak oracle (item 0): an agent in account B
+   searching engrams must surface zero of A's.
 6. **RLS-aware SPI path.** Audit the dispatcher / gates / cost rollups; legitimate cross-tenant work
    (watchman, steward, global cost accounting) gets explicit, audited `SECURITY DEFINER` carve-outs —
    not blanket superuser.
