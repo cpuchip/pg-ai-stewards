@@ -29,13 +29,15 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// A2AResult is the shared output shape: the verb's jsonb, passed through.
-type A2AResult struct {
-	Result json.RawMessage `json:"result"`
-}
+// A2AResult is the shared output shape. Every verb returns a jsonb
+// OBJECT, so the structured output is map[string]any — a permissive
+// {"type":"object"} schema. (Do NOT use json.RawMessage here: the SDK
+// reflects []byte as an array-of-uint8 schema and then rejects the
+// object the DB actually returns — the bug the live MCP surface caught.)
+type A2AResult = map[string]any
 
 // callA2A runs a SQL function returning jsonb and returns it both as the
-// structured result and as readable text content.
+// structured result (an object) and as readable text content.
 func callA2A(ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) (*mcp.CallToolResult, A2AResult, error) {
 	cctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -43,9 +45,17 @@ func callA2A(ctx context.Context, pool *pgxpool.Pool, sql string, args ...any) (
 	if err := pool.QueryRow(cctx, sql, args...).Scan(&raw); err != nil {
 		return toolError("a2a: %v", err), A2AResult{}, nil
 	}
+	var obj A2AResult
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		// The verbs always return an object; if that ever changes, surface
+		// the raw text rather than failing output validation.
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: string(raw)}},
+		}, A2AResult{"result": string(raw)}, nil
+	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{&mcp.TextContent{Text: string(raw)}},
-	}, A2AResult{Result: raw}, nil
+	}, obj, nil
 }
 
 // nz maps an empty string to a SQL NULL (so optional args stay absent
@@ -57,14 +67,29 @@ func nz(s string) any {
 	return s
 }
 
-// nzJSON maps an empty/null RawMessage to a SQL NULL (the verb coalesces
-// to '{}'); otherwise passes the bytes for a ::jsonb cast.
-func nzJSON(r json.RawMessage) any {
-	t := strings.TrimSpace(string(r))
-	if t == "" || t == "null" {
+// mjson marshals an object arg to bytes for a ::jsonb cast, or NULL when
+// empty (the verb coalesces to '{}').
+func mjson(m map[string]any) any {
+	if len(m) == 0 {
 		return nil
 	}
-	return []byte(r)
+	b, err := json.Marshal(m)
+	if err != nil {
+		return nil
+	}
+	return b
+}
+
+// mjsonArr marshals an array arg to bytes for a ::jsonb cast, or NULL when empty.
+func mjsonArr(a []string) any {
+	if len(a) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(a)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 func registerA2ATools(srv *mcp.Server, pool *pgxpool.Pool) {
@@ -77,7 +102,7 @@ func registerA2ATools(srv *mcp.Server, pool *pgxpool.Pool) {
 		return callA2A(ctx, pool,
 			`SELECT stewards.a2a_register($1,$2,$3,$4,$5::jsonb,$6,$7,$8::jsonb)`,
 			in.AgentID, nz(in.DisplayName), nz(in.Kind), nz(in.Lane),
-			nzJSON(in.Capabilities), nz(in.Delivery), nz(in.Endpoint), nzJSON(in.Scope))
+			mjsonArr(in.Capabilities), nz(in.Delivery), nz(in.Endpoint), mjson(in.Scope))
 	})
 
 	// ── a2a_submit ────────────────────────────────────────────────────
@@ -90,8 +115,8 @@ func registerA2ATools(srv *mcp.Server, pool *pgxpool.Pool) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in A2ASubmitInput) (*mcp.CallToolResult, A2AResult, error) {
 		res, out, _ := callA2A(ctx, pool,
 			`SELECT stewards.a2a_submit($1,$2,$3::jsonb,$4,$5,$6,$7)`,
-			in.Assignee, in.Title, nzJSON(in.Spec), nz(in.Owner), nz(in.Project), nz(in.Slug), nz(in.Intent))
-		mirrorTodo(in.Assignee, in.Title, in.Owner, out.Result)
+			in.Assignee, in.Title, mjson(in.Spec), nz(in.Owner), nz(in.Project), nz(in.Slug), nz(in.Intent))
+		mirrorTodo(in.Assignee, in.Title, in.Owner)
 		return res, out, nil
 	})
 
@@ -140,8 +165,8 @@ func registerA2ATools(srv *mcp.Server, pool *pgxpool.Pool) {
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in A2AReceiptInput) (*mcp.CallToolResult, A2AResult, error) {
 		res, out, _ := callA2A(ctx, pool,
 			`SELECT stewards.a2a_receipt($1::uuid,$2,$3::jsonb)`,
-			in.WorkItemID, in.Summary, nzJSON(in.Artifact))
-		mirrorReceipt(out.Result, in.Summary)
+			in.WorkItemID, in.Summary, mjson(in.Artifact))
+		mirrorReceipt(out, in.Summary)
 		return res, out, nil
 	})
 
@@ -176,24 +201,24 @@ func registerA2ATools(srv *mcp.Server, pool *pgxpool.Pool) {
 // =====================================================================
 
 type A2ARegisterInput struct {
-	AgentID      string          `json:"agent_id" jsonschema:"your durable identity; a session lane like 'lane:pg-ai-stewards'"`
-	DisplayName  string          `json:"display_name,omitempty" jsonschema:"human-readable name"`
-	Kind         string          `json:"kind,omitempty" jsonschema:"session | daemon | persona | external (default session)"`
-	Lane         string          `json:"lane,omitempty" jsonschema:"the .mind/sessions lane this session inhabits"`
-	Capabilities json.RawMessage `json:"capabilities,omitempty" jsonschema:"JSON array of skills you offer"`
-	Delivery     string          `json:"delivery,omitempty" jsonschema:"pull | heartbeat | webhook (default pull)"`
-	Endpoint     string          `json:"endpoint,omitempty" jsonschema:"webhook/external callback URL"`
-	Scope        json.RawMessage `json:"scope,omitempty" jsonschema:"JSON object: the projects/intents/tools you may touch"`
+	AgentID      string         `json:"agent_id" jsonschema:"your durable identity; your session lane name like 'pg-ai-stewards'"`
+	DisplayName  string         `json:"display_name,omitempty" jsonschema:"human-readable name"`
+	Kind         string         `json:"kind,omitempty" jsonschema:"session | daemon | persona | external (default session)"`
+	Lane         string         `json:"lane,omitempty" jsonschema:"the .mind/sessions lane this session inhabits"`
+	Capabilities []string       `json:"capabilities,omitempty" jsonschema:"skills you offer (array of names)"`
+	Delivery     string         `json:"delivery,omitempty" jsonschema:"pull | heartbeat | webhook (default pull)"`
+	Endpoint     string         `json:"endpoint,omitempty" jsonschema:"webhook/external callback URL"`
+	Scope        map[string]any `json:"scope,omitempty" jsonschema:"the projects/intents/tools you may touch"`
 }
 
 type A2ASubmitInput struct {
-	Assignee string          `json:"assignee" jsonschema:"registered agent_id to assign the task to"`
-	Title    string          `json:"title" jsonschema:"one-line outcome the ticket asks for"`
-	Spec     json.RawMessage `json:"spec,omitempty" jsonschema:"the 7-part ticket: {outcome, sources, context, allowed_actions, stop_condition, definition_of_done}"`
-	Owner    string          `json:"owner,omitempty" jsonschema:"your agent_id (so the worker can ask you questions and send the receipt)"`
-	Project  string          `json:"project,omitempty" jsonschema:"optional project slug to associate"`
-	Slug     string          `json:"slug,omitempty" jsonschema:"optional human-readable slug"`
-	Intent   string          `json:"intent,omitempty" jsonschema:"optional intent slug; defaults to the configured default intent"`
+	Assignee string         `json:"assignee" jsonschema:"registered agent_id to assign the task to"`
+	Title    string         `json:"title" jsonschema:"one-line outcome the ticket asks for"`
+	Spec     map[string]any `json:"spec,omitempty" jsonschema:"the 7-part ticket: {outcome, sources, context, allowed_actions, stop_condition, definition_of_done}"`
+	Owner    string         `json:"owner,omitempty" jsonschema:"your agent_id (so the worker can ask you questions and send the receipt)"`
+	Project  string         `json:"project,omitempty" jsonschema:"optional project slug to associate"`
+	Slug     string         `json:"slug,omitempty" jsonschema:"optional human-readable slug"`
+	Intent   string         `json:"intent,omitempty" jsonschema:"optional intent slug; defaults to the configured default intent"`
 }
 
 type A2AAgentInput struct {
@@ -216,9 +241,9 @@ type A2AAnswerInput struct {
 }
 
 type A2AReceiptInput struct {
-	WorkItemID string          `json:"work_item_id"`
-	Summary    string          `json:"summary" jsonschema:"what you did, in a sentence or two"`
-	Artifact   json.RawMessage `json:"artifact,omitempty" jsonschema:"the proof: {doc_slug, url, files, output, ...}"`
+	WorkItemID string         `json:"work_item_id"`
+	Summary    string         `json:"summary" jsonschema:"what you did, in a sentence or two"`
+	Artifact   map[string]any `json:"artifact,omitempty" jsonschema:"the proof: {doc_slug, url, files, output, ...}"`
 }
 
 type A2ANoteInput struct {
@@ -271,7 +296,7 @@ func appendMirror(subdir, recipient, line string) {
 	}
 }
 
-func mirrorTodo(assignee, title, owner string, _ json.RawMessage) {
+func mirrorTodo(assignee, title, owner string) {
 	from := owner
 	if from == "" {
 		from = "(unknown)"
@@ -289,7 +314,7 @@ func mirrorNote(recipient, sender, body string) {
 
 // mirrorReceipt writes the receipt to the owner's inbox file, if we can
 // learn the owner from the verb's result.
-func mirrorReceipt(result json.RawMessage, summary string) {
+func mirrorReceipt(result A2AResult, summary string) {
 	if a2aMirrorDir() == "" {
 		return
 	}
@@ -297,7 +322,8 @@ func mirrorReceipt(result json.RawMessage, summary string) {
 		ReceiptTo  string `json:"receipt_to"`
 		ResolvedBy string `json:"resolved_by"`
 	}
-	if err := json.Unmarshal(result, &r); err != nil || r.ReceiptTo == "" {
+	b, _ := json.Marshal(result)
+	if err := json.Unmarshal(b, &r); err != nil || r.ReceiptTo == "" {
 		return
 	}
 	appendMirror("inbox", r.ReceiptTo, fmt.Sprintf("RECEIPT from %s: %s", r.ResolvedBy, oneLine(summary)))
