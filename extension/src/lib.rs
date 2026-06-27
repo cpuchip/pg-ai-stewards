@@ -758,11 +758,25 @@ extension_sql_file!(
 // 73's header expected: the brain tool is a sql_fn (unlike the engram search,
 // whose wrapper is Go), and embed_query is a synchronous pg_extern callable in
 // SQL. The documented brain_search_semantic, finally real. The engram search
-// has no agent-facing tool in this repo, so it is left untouched (flagged).
+// has no agent-facing tool in this repo; 75 flagged that gap, and 76 fills it.
 extension_sql_file!(
     "../75-wire-brain-hybrid.sql",
     name = "create_brain_search_wire",
     requires = ["create_north_star"],
+);
+
+// 76: the agent-facing ENGRAM search — the twin of 75's brain wiring. 72 built
+// search_engrams_hybrid but no agent could reach it (no tool_def, no Go handler;
+// unlike the brain search, the engram search had no agent surface at all). This
+// adds engram_search_tool (text-in → embed_query inline → search_engrams_hybrid,
+// same FTS-only-degrade guard), the engram_search tool_def, and a grant that
+// MIRRORS brain_search_text's families exactly (only stewards-explore needs an
+// explicit allow; the rest reach it by the resolver's default-allow — no
+// broadening). 75 flagged this gap; 76 fills it.
+extension_sql_file!(
+    "../76-wire-engram-search.sql",
+    name = "create_engram_search_wire",
+    requires = ["create_brain_search_wire"],
 );
 
 // ---------------------------------------------------------------------------

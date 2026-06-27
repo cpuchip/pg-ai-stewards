@@ -3304,4 +3304,101 @@ BEGIN
     RAISE NOTICE 'OK 66: agent brain search wired — brain_search_text_tool embeds the query inline (embed_query) and routes through brain_search_hybrid; execute_target intact; dispatched as the engine does, no embed provider ⇒ FTS-only degrade (FTS entry surfaced, vector-only not); output shape preserved';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→75) is sound =='
+-- ---------------------------------------------------------------------
+-- 67. agent-facing ENGRAM search WIRED (76) — the twin of 66. 72 built
+-- search_engrams_hybrid but no agent could reach it (no tool_def, no Go
+-- handler). 76 adds the engram_search tool_def + the engram_search_tool wrapper
+-- (text-in → embed_query inline → search_engrams_hybrid) and grants it to
+-- EXACTLY brain_search_text's families. Proven deterministically in the virgin
+-- env (NO embed provider), mirroring 66:
+--   (1) STRUCTURAL / INVERSE HYPOTHESIS — the wrapper routes through
+--       search_engrams_hybrid AND embeds via embed_query (the tool did not
+--       exist before 76).
+--   (2) the engram_search tool_def exists, execute_target is the sql_fn
+--       engram_search_tool, and dispatching it EXACTLY as the engine does
+--       (SELECT <schema>.<fn>($1)) returns the FTS-matching engram.
+--   (3) GRANT MIRROR — engram_search is allowed for exactly brain_search_text's
+--       families: stewards-explore (the lone deny-base family that allows brain)
+--       now allows it; a brain-DENIED family (watchman-consolidator, a core
+--       `*:deny` family) still denies it (no broadening). watchman is chosen
+--       because its deny is seeded in the CORE chain (03-watchman) — it holds in
+--       the virgin env, where operator-imported families like analyst are absent.
+--   (4) FTS-only DEGRADE — no provider ⇒ embed_query NULL ⇒ vector leg empty,
+--       so the FTS engram is surfaced but a vector-only engram is NOT.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_sess   text := 'engram-wire-smoke';
+    v_m1     bigint; v_m2 bigint;
+    v_qvec   vector(768) := ('[1' || repeat(',0', 767) || ']')::vector(768);  -- dim1 = 1
+    v_def    text;
+    v_et     jsonb;
+    v_schema text;
+    v_fn     text;
+    v_args   jsonb;
+    v_result jsonb;
+    v_eids   text[];
+BEGIN
+    -- (1) STRUCTURAL / INVERSE HYPOTHESIS: the wrapper routes through the hybrid
+    -- and embeds inline.
+    v_def := pg_get_functiondef('stewards.engram_search_tool(jsonb)'::regprocedure);
+    ASSERT v_def ILIKE '%search_engrams_hybrid%',
+        '67: engram_search_tool routes through search_engrams_hybrid';
+    ASSERT v_def ILIKE '%embed_query%',
+        '67: engram_search_tool embeds the query inline via embed_query (text-in → vector)';
+
+    -- (2) the tool_def exists and dispatches to the sql_fn wrapper.
+    SELECT execute_target INTO v_et FROM stewards.tool_defs WHERE name = 'engram_search';
+    ASSERT v_et IS NOT NULL, '67: the engram_search tool_def exists (the new agent surface)';
+    ASSERT v_et->>'kind' = 'sql_fn' AND v_et->>'name' = 'engram_search_tool'
+           AND v_et->>'schema' = 'stewards',
+        format('67: engram_search dispatches to the sql_fn stewards.engram_search_tool; got %s', v_et);
+    v_schema := v_et->>'schema';
+    v_fn     := v_et->>'name';
+
+    -- (3) GRANT MIRROR: engram_search reaches exactly brain_search_text's set.
+    ASSERT stewards.tool_permission('stewards-explore', 'engram_search') = 'allow'
+       AND stewards.tool_permission('stewards-explore', 'brain_search_text') = 'allow',
+        '67: stewards-explore (deny-base + brain allow) now allows engram_search too (the mirror)';
+    ASSERT stewards.tool_permission('watchman-consolidator', 'engram_search') = 'deny'
+       AND stewards.tool_permission('watchman-consolidator', 'brain_search_text') = 'deny',
+        '67: a brain-DENIED core family (watchman-consolidator) still denies engram_search — no broadening (inverse of the mirror)';
+
+    -- seed an FTS-only engram (distinctive nonce 'zephyrengram' ⇒ plainto_tsquery
+    -- ANDs to ONLY this row; no embedding ⇒ invisible to the vector leg) and a
+    -- vector-only engram (embedding == query vector; text shares no terms). Same
+    -- shape as OK 62's engram seeding.
+    INSERT INTO stewards.sessions (id, kind) VALUES (v_sess, 'agent') ON CONFLICT DO NOTHING;
+    INSERT INTO stewards.messages (session_id, role, content) VALUES (v_sess, 'user', 'm1') RETURNING id INTO v_m1;
+    INSERT INTO stewards.messages (session_id, role, content) VALUES (v_sess, 'user', 'm2') RETURNING id INTO v_m2;
+    INSERT INTO stewards.engram_embeddings
+        (id, message_id, engram_id, tier, topic, content_preview, embedding, session_id, project_association)
+    VALUES
+      (v_m1::text||':e-fts', v_m1, 'e-fts', 'hot', 'fusion', 'zephyrengram reciprocal rank fusion blends two retrievers', NULL,   v_sess, NULL),
+      (v_m2::text||':e-vec', v_m2, 'e-vec', 'hot', 'meadow', 'completely unrelated meadow content',                       v_qvec, v_sess, NULL);
+
+    -- dispatch the tool EXACTLY as the engine does: SELECT <schema>.<fn>($1).
+    v_args := jsonb_build_object('query', 'zephyrengram reciprocal rank fusion');
+    EXECUTE format('SELECT %I.%I($1)', v_schema, v_fn) USING v_args INTO v_result;
+
+    SELECT array_agg(elem->>'engram_id') INTO v_eids
+      FROM jsonb_array_elements(v_result) elem;
+
+    -- (4) FTS-only degrade through the tool: no provider ⇒ the FTS engram IS
+    -- surfaced, the vector-only one is NOT (embed_query raised → NULL → empty leg).
+    ASSERT v_eids @> ARRAY['e-fts'],
+        format('67: the wired tool surfaces the FTS-matching engram (lexical leg fires with no provider); engram_ids=%s', v_eids);
+    ASSERT NOT (coalesce(v_eids, ARRAY[]::text[]) @> ARRAY['e-vec']),
+        format('67: with no embed provider the tool degrades to FTS-only — the vector-only engram is NOT surfaced; engram_ids=%s', v_eids);
+
+    -- output shape: message_id + engram_id + the fused score aliased to rank.
+    ASSERT (SELECT bool_and((elem ? 'engram_id') AND (elem ? 'message_id') AND (elem ? 'rank'))
+              FROM jsonb_array_elements(v_result) elem),
+        '67: the tool output carries message_id, engram_id, and the fused score as rank';
+
+    DELETE FROM stewards.messages WHERE session_id = v_sess;  -- cascades engram_embeddings
+    DELETE FROM stewards.sessions WHERE id = v_sess;
+    RAISE NOTICE 'OK 67: agent engram search wired — engram_search tool_def + engram_search_tool embed inline (embed_query) and route through search_engrams_hybrid; granted to exactly brain_search_text''s families (stewards-explore mirrored, watchman-consolidator still denied); no embed provider ⇒ FTS-only degrade (FTS engram surfaced, vector-only not)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→76) is sound =='
