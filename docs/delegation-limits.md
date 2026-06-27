@@ -18,6 +18,12 @@ delegation **tree** is bounded structurally:
 A breach **raises** (the work errors instead of spawning) — the hard backstop. Leaves simply aren't
 given the tool, so they never try.
 
+> This page is the **parent → child spawn tree** (one agent delegating *downward*). The *peer*
+> complement — handing a tracked task sideways to another agent and claiming work handed to you — is
+> the **A2A engine** (`69-a2a-engine.sql`: `submit / claim / needs_input / answer / receipt`), a
+> different surface with its own bounds. See [anatomy-of-a-turn.md](anatomy-of-a-turn.md) → *Beyond the
+> turn*.
+
 ## The principle (why it's done this way)
 Bound the work **structurally, not behaviorally.** A prompt that says "don't recurse too deep" gets
 ignored the same way "don't over-research" did. A tool the agent **doesn't have** can't be called, and
