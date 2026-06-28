@@ -1,9 +1,31 @@
 # The Tool Shelf — progressive disclosure for tools
 
-**Status:** DRAFT — council-pending (Michael ratifies before any build).
+**Status:** **RATIFIED in council 2026-06-27 (probe-first).** Build proceeds per the ruling below.
 **Date:** 2026-06-27.
 **Touches:** `compose_tools` (a core dispatch path) → wants a council read first.
 **Relation:** finishes what `37-tool-groups.sql` started; mirrors `24-skills.sql` exactly.
+
+## Council ruling (2026-06-27)
+
+Ratified the design as written (§4), with one amendment and the four questions (§9) answered:
+
+- **Probe-first amendment.** Insert **P0.5 — an adoption probe** between P0 (build mechanism) and
+  P1 (assign groups + flip on). The shelf exists for the *local* model (the 156-tool dump wedged the
+  local MoE, not a cloud model), but the local model is also the one most likely to fail the
+  open-the-right-group behavior. So measure before committing. **★ The probe is cheap because the
+  proxy already ships:** the **skills shelf** (`skill_group_open`/`skill_load`) is progressive
+  disclosure in production — so "do local models reach for an on-demand load tool?" is answerable from
+  the ledger *today*. (That telemetry pass is running as of this ruling; it doubles as the answer to
+  "are the context-management tools used at all?")
+- **Q1 always-open floor — yes, as a flag.** `always_open boolean` on `tool_groups`; default floor =
+  search/doc/context/productivity. Operator tunes membership.
+- **Q2 group-level only for P0 — yes.** Per-tool `tool_load` deferred (likely never needed).
+- **Q3 P3 auto-opener (the "tools engram") — timing set by the probe.** If local self-opens reliably →
+  P3 stays a future nicety. If not → P3 (embed+RRF pre-open top-N groups) becomes load-bearing and
+  ships *with* P0, not after.
+- **Q4 membership in the overlay — yes.** Core ships mechanism + flag-off + a generic group set.
+- **Michael's steer:** current models are generally capable tool-callers, so the probe is expected to
+  greenlight the *manual* shelf (no auto-opener needed) — but we test rather than assume.
 
 ---
 
