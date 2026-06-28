@@ -3517,4 +3517,78 @@ BEGIN
     RAISE NOTICE 'OK 68: Tool Shelf — flag OFF byte-identical (levers suppressed, dry_run tools == compose_tools_scoped, no catalog); flag ON folds every tool to a <folded_tools> catalog + the 3 levers; reveal_tool loads a schema; cooldown auto-refolds an idle tool (catalog line stays) and pin_tool re-opens it';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→77) is sound =='
+-- ---------------------------------------------------------------------
+-- 69. yt slide frames (78) — captioned vision frames. Deterministic, with the
+-- inverse hypothesis (flag-off identity). Three properties:
+--   (a) align_slide_captions(frames, cues) — each frame's narration = the cues
+--       spoken in [its sec, the next frame's sec); the last frame takes the tail.
+--   (b) a CAPTIONED image attachment renders as TWO content_parts — the caption
+--       text part immediately BEFORE the image_url part (the slide + the words).
+--   (c, inverse) an UNcaptioned image renders byte-identically to 49 — a single
+--       image_url part, NO text part (the caption-NULL case IS the off state).
+-- chat_attachment_parts is 49's machinery (48/49 ship in core), so this exercises
+-- the real path. now() is constant in the DO block; fine (no temporal asserts).
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_sess    text := 'slide-smoke-69';
+    v_aligned jsonb;
+    v_capimg  bigint;
+    v_plainimg bigint;
+    v_parts   jsonb;
+    v_png     bytea := decode('89504e470d0a1a0a', 'hex');  -- a PNG header (non-null bytes)
+BEGIN
+    -- the caption column ships
+    ASSERT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='stewards'
+             AND table_name='chat_attachments' AND column_name='caption'),
+        '69: chat_attachments gains the caption column';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
+             WHERE n.nspname='stewards' AND p.proname='align_slide_captions'),
+        '69: align_slide_captions ships';
+
+    -- ── (a) the frame↔cue alignment ───────────────────────────────────────────
+    v_aligned := stewards.align_slide_captions(
+        '[{"sec":0,"file":"f0.png","t_link":"u&t=0"},{"sec":10,"file":"f1.png","t_link":"u&t=10"}]'::jsonb,
+        '[{"begin":1,"end":4,"text":"hello"},{"begin":5,"end":9,"text":"world"},{"begin":12,"end":15,"text":"after"}]'::jsonb);
+    ASSERT jsonb_array_length(v_aligned) = 2,
+        format('69a: alignment returns one entry per frame; got %s', jsonb_array_length(v_aligned));
+    ASSERT v_aligned->0->>'narration' = 'hello world',
+        format('69a: frame 0 (sec 0) takes the cues in [0,10) = "hello world"; got %L', v_aligned->0->>'narration');
+    ASSERT v_aligned->1->>'narration' = 'after',
+        format('69a: the last frame (sec 10) takes the tail cue (begin 12) = "after"; got %L', v_aligned->1->>'narration');
+    ASSERT v_aligned->0->>'file' = 'f0.png' AND v_aligned->0->>'t_link' = 'u&t=0',
+        '69a: alignment carries file + t_link through';
+
+    -- a session for the attachment fixtures (FK-safe)
+    INSERT INTO stewards.sessions (id, kind) VALUES (v_sess, 'chat') ON CONFLICT DO NOTHING;
+
+    -- ── (b) a captioned image → [caption text part, image part] in order ───────
+    INSERT INTO stewards.chat_attachments (session_id, kind, mime_type, bytes, caption)
+    VALUES (v_sess, 'image', 'image/png', v_png, 'the words spoken over this slide')
+    RETURNING id INTO v_capimg;
+    v_parts := stewards.chat_attachment_parts(ARRAY[v_capimg], v_sess);
+    ASSERT jsonb_array_length(v_parts) = 2,
+        format('69b: a captioned image yields 2 parts (caption + image); got %s', jsonb_array_length(v_parts));
+    ASSERT v_parts->0->>'type' = 'text' AND v_parts->0->>'text' = 'the words spoken over this slide',
+        '69b: the caption renders as a text part FIRST';
+    ASSERT v_parts->1->>'type' = 'image_url'
+       AND (v_parts->1->'image_url'->>'url') LIKE 'data:image/png;base64,%',
+        '69b: the image_url part (server-built data URL) follows the caption';
+
+    -- ── (c, inverse) an UNcaptioned image → 49 identity (one image_url part) ───
+    INSERT INTO stewards.chat_attachments (session_id, kind, mime_type, bytes)
+    VALUES (v_sess, 'image', 'image/png', v_png)
+    RETURNING id INTO v_plainimg;
+    v_parts := stewards.chat_attachment_parts(ARRAY[v_plainimg], v_sess);
+    ASSERT jsonb_array_length(v_parts) = 1,
+        format('69c: an uncaptioned image yields exactly 1 part (no caption text); got %s', jsonb_array_length(v_parts));
+    ASSERT v_parts->0->>'type' = 'image_url',
+        '69c: that single part is the image_url (byte-identical to 49 — the off state)';
+
+    -- ── restore virgin state ──────────────────────────────────────────────────
+    DELETE FROM stewards.chat_attachments WHERE session_id = v_sess;
+    DELETE FROM stewards.sessions WHERE id = v_sess;
+    RAISE NOTICE 'OK 69: yt slide frames — align_slide_captions windows cues per frame ([sec,next_sec), last takes the tail); a captioned image renders caption-text THEN image (slide + words); an uncaptioned image is byte-identical to 49 (one image_url part, inverse-proven)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→78) is sound =='

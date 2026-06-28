@@ -29,11 +29,14 @@
 #                    model as coder.)
 #   - fetch-md-mcp  (fetch a URL -> readable markdown; fetch_url / fetch_urls)
 #   - git-mcp       (general git ops, distinct from coder's sandbox-scoped git)
-#   - yt-mcp        (YouTube transcript + playlist tools via yt-dlp — OPT-IN,
-#                    built only with --build-arg WITH_YT=1, which also installs
-#                    a python3 + yt-dlp runtime. See docker-compose.yt.yaml and
-#                    examples/playlist-digester.sql. Omitted from the default
-#                    image so the generic core stays lean + python-free.)
+#   - yt-mcp        (YouTube transcript + playlist tools via yt-dlp, PLUS the
+#                    slide-frames tools (yt_download_video / yt_frames / yt_slides)
+#                    that turn a slide talk into transcript + slide screenshots a
+#                    vision model can read — OPT-IN, built only with --build-arg
+#                    WITH_YT=1, which also installs a python3 + yt-dlp + ffmpeg
+#                    runtime. See docker-compose.yt.yaml and examples/
+#                    playlist-digester.sql. Omitted from the default image so the
+#                    generic core stays lean + python-free.)
 # Web search needs an operator API key, so it is "bring your own" (register a
 # web_search_exa server in an overlay — see the docs). Domain MCP servers
 # (your own docs / data tools) are likewise BYO.
@@ -92,13 +95,25 @@ FROM alpine:3.20
 # a clear error. Add `chromium` to this apk line if you want JS-rendered pages.
 # Opt-in YouTube runtime: yt-mcp shells `yt-dlp`, which needs python3. Installed
 # only when WITH_YT=1 (pip pulls the LATEST yt-dlp — the alpine package lags and
-# breaks on YouTube changes). No ffmpeg: we fetch subtitles, never media.
+# breaks on YouTube changes). ffmpeg comes with it now: yt_download_video merges
+# the capped video+audio streams, and yt_frames extracts slide screenshots with
+# it (the slide-frames capability — transcript + slide-pixels → a vision model;
+# .spec/proposals/yt-slide-frames.md Part B). The default image still ships
+# neither python nor ffmpeg.
 ARG WITH_YT=0
 
+# yt-dlp must be RECENT: YouTube rotates an anti-bot "n challenge" and a stale
+# yt-dlp fails every video download with "n challenge solving failed" (general-
+# workspace hit this on 2026.03.13; updating to 2026.06.09 fixed it outright — no
+# JS runtime / deno needed, the stale version was the whole problem). So pin a
+# floor, not a bare -U, and REBUILD THE BRIDGE PERIODICALLY (the challenge keeps
+# moving; a months-old yt-dlp silently breaks). NB: Docker can serve a cached pip
+# layer — `--build-arg WITH_YT=1` alone won't refresh yt-dlp if this layer is
+# cached; bump the floor or build that step with --no-cache to force a fresh pull.
 RUN apk add --no-cache ca-certificates tzdata git github-cli docker-cli \
  && if [ "$WITH_YT" = "1" ]; then \
-        apk add --no-cache python3 py3-pip \
-        && pip install --break-system-packages --no-cache-dir -U yt-dlp ; \
+        apk add --no-cache python3 py3-pip ffmpeg \
+        && pip install --break-system-packages --no-cache-dir -U "yt-dlp>=2026.06.09" ; \
     fi
 
 # Copy the whole build output so the optional yt-mcp binary comes along when it

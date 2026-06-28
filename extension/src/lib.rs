@@ -794,6 +794,24 @@ extension_sql_file!(
     requires = ["create_engram_search_wire"],
 );
 
+// 78: yt slide frames — captioned vision frames (Part B of yt-slide-frames.md).
+// Teach the EXISTING vision mechanism (47 multimodal + 49 doc-extract page
+// images) to read a slide frame ALONGSIDE the transcript narration spoken over
+// it: chat_attachments gains a `caption`, chat_attachment_parts (re-authored,
+// later-file-wins over 49) emits the caption as a text part right before the
+// image, and align_slide_captions(frames, cues) is the pure frame↔cue alignment
+// the digester reads. The frame INGESTION (reading the /yt volume) is operator
+// glue in examples/yt-transcripts.sql, like import_yt_transcript. create_doc_extract
+// is listed EXPLICITLY (not just transitively via create_tool_shelf): 78
+// re-authors chat_attachment_parts, so it MUST sort after 49 for its version to
+// win (the 2026-06-24 under-constrained-sort lesson — see 47's header). Flag-off:
+// an image with no caption renders byte-identically to 49.
+extension_sql_file!(
+    "../78-yt-slide-frames.sql",
+    name = "create_yt_slide_frames",
+    requires = ["create_tool_shelf", "create_doc_extract"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
