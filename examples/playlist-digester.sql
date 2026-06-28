@@ -381,3 +381,35 @@ UPDATE stewards.pipelines
  WHERE family = 'playlist-digest';
 DROP TRIGGER IF EXISTS work_items_playlist_digest_skip_empty ON stewards.work_items;
 DROP FUNCTION IF EXISTS stewards.playlist_digest_skip_empty();
+
+-- ── SEE THE SLIDES (opt-in; Part B of yt-slide-frames.md) ────────────────────
+-- A slide talk loses its densest content in a transcript-only digest: the
+-- architecture diagram, the benchmark table, the SQL on the slide, the "as you
+-- can see here →" the captions never spell out. With the yt overlay's ffmpeg +
+-- the slide tools (examples/yt-transcripts.sql: yt_persist_frames + slides_read,
+-- backed by core 78's captioned vision attachments), the digester can READ the
+-- slides — the rich-docs pattern (text + page-pixels → a vision model) applied to
+-- video. This is OPT-IN and left OUT of the default read/build stages above so a
+-- transcript-only digest stays cheap (the video download + frame extraction is
+-- the heavy part). To enable it:
+--
+--   1. READ stage: after yt_download, run `yt_slides` (downloads the capped video,
+--      extracts scene/chapter slide frames, writes frames.json) for the chosen
+--      video, then `yt_persist_frames(video_id)` to ingest the frames as captioned,
+--      transcript-aligned vision attachments in the digest session.
+--   2. BUILD stage: run it on a VISION-capable model (the `vision` alias, e.g. the
+--      local gemma-4 + mmproj rig). Add a step before "Key passages": page the
+--      slides in a few at a time with `slides_read(video_id, from, count)` — it
+--      loads the next batch as a vision turn (each captioned with the narration
+--      spoken over it); LOOK at each and record what the slide shows that the
+--      transcript missed (a diagram label, a benchmark number, the SQL/code),
+--      folding it into the digest with doc_append_section. Repeat until done=true.
+--      Never load all slides at once (the page-in-by-handle discipline).
+--
+-- The slide tools are granted to the `research` agent in examples/yt-transcripts.sql
+-- (reasserted here so this file is self-sufficient when imported after it).
+INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
+    ('research','yt_slides','allow','manual'),
+    ('research','yt_persist_frames','allow','manual'),
+    ('research','slides_read','allow','manual')
+ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET action = EXCLUDED.action;
