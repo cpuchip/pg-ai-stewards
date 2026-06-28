@@ -27,6 +27,53 @@ Ratified the design as written (§4), with one amendment and the four questions 
 - **Michael's steer:** current models are generally capable tool-callers, so the probe is expected to
   greenlight the *manual* shelf (no auto-opener needed) — but we test rather than assume.
 
+## Probe RESULT + the revised P0 (2026-06-28) — GREENLIT
+
+The P0.5 probe ran as a standalone harness (`scratchpad/shelf_probe.py`): the work-corpus research-draft
+task, **157 tools folded** to a name+purpose catalog + a `reveal_tool(name)` lever + a note, driving
+the **local** models against the live corpus. Result:
+
+| model | opened the right tools? | completed the task? |
+|---|---|---|
+| `qwen3.6-35b-a3b` | ✅ turn 1, 0 misses; **100% of 33 calls on revealed tools** | ✗ — its *known* over-gather (not the shelf); never committed |
+| `gemma-4-26b-a4b` | ✅ (1 stray, self-corrected) | ✅ grounded answer, `finish=stop`, 4 calls |
+
+**Findings (these supersede Q1/Q2/Q3 above):**
+1. **The manual shelf works on local models** — decisively. The `skill_group_open=0` telemetry was the
+   confound we suspected (skills autoload, so nobody manually opens); with a *real* fold + a clear note,
+   both models reach for the lever correctly.
+2. **Per-tool `reveal_tool(name)` is the granularity** (not `tool_group_open(group)`) — the named reflex
+   the telemetry favored, now confirmed. **Supersedes Q2's group-level answer.**
+3. **Default-fold EVERYTHING works** — the probe folded all 157 with no always-open core and the model
+   still opened the right tools. **Supersedes Q1's "always-open floor"** — the floor shrinks to just the
+   shelf-management levers (`reveal_tool`/`pin_tool`/`unpin_tool`); everything else folds by default.
+4. **The fold degrades gracefully** — gemma's one stray reveal cost a single call and self-corrected.
+5. **P3 auto-opener NOT needed** (Q3 resolved) — the manual shelf earns its keep.
+6. qwen's non-completion is its documented over-gather (force-final / route-to-gemma already handle it),
+   orthogonal to the shelf — gemma completing the identical setup proves it.
+
+### The revised P0 design (Michael, 2026-06-28) — the self-folding shelf
+An LRU cache for tool schemas: **the tools put themselves away.**
+- **Default-fold all.** Flag `tool_shelf_enabled` (config, default **false**). When on: every tool folds
+  to the catalog; only `reveal_tool` / `pin_tool` / `unpin_tool` are always present.
+- **Catalog** (`<folded_tools>` block): every tool name + one-line purpose + "`reveal_tool(name)` to load."
+- **`reveal_tool(name)`** loads a tool's full schema for the session (a `session_tool_reveals` row).
+- **★ Cooldown auto-refold.** A revealed tool not *used* within the last N tool-call rounds
+  (config `tool_shelf_cooldown`, default 4) **auto-folds** — its schema drops, the catalog line stays.
+  Inferred from recent `messages.tool_calls` (no separate write path). Keeps the open set tiny over a
+  long task without the model curating it.
+- **`pin_tool(name)` / `unpin_tool(name)`** — pin exempts a tool from the cooldown (stays open); the
+  model pins what it'll reuse.
+- **Composition** lives at the dispatch body-builder chokepoint (gated on the flag); **flag-off ⇒
+  byte-for-byte today's path** (the load-bearing oracle assert).
+
+### Build plan (incremental, each tested)
+- **P0a — the core fold:** `session_tool_reveals` + `reveal_tool` + catalog render + open-schema render
+  + the flag. Test: real dispatch through the substrate with the flag on (re-run the probe task on the
+  *real* path, not the harness). This is the proven core.
+- **P0b — self-folding:** the cooldown auto-refold + `pin_tool`/`unpin_tool`. Test: a long run shows
+  idle tools re-folding and the open set staying small.
+
 ---
 
 ## 1. The problem (with live numbers)
