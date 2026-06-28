@@ -3401,4 +3401,120 @@ BEGIN
     RAISE NOTICE 'OK 67: agent engram search wired — engram_search tool_def + engram_search_tool embed inline (embed_query) and route through search_engrams_hybrid; granted to exactly brain_search_text''s families (stewards-explore mirrored, watchman-consolidator still denied); no embed provider ⇒ FTS-only degrade (FTS engram surfaced, vector-only not)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→76) is sound =='
+-- ---------------------------------------------------------------------
+-- 68. Tool Shelf (77) — progressive disclosure for TOOLS. Deterministic,
+-- with the inverse hypothesis. Four properties:
+--   (a) flag OFF (default) ⇒ byte-for-byte pre-77 — the load-bearing assert.
+--       The three new levers are SUPPRESSED from compose_tools (the only new
+--       tool_defs, gated off ⇒ every other tool hits the same arms verbatim),
+--       dry_run's tools off-path IS the exact 37 expression, and the catalog
+--       renders NOTHING. (The full byte diff vs pre-77 is proven separately on
+--       the dev container — captured before/after applying 77 with the flag off.)
+--   (b) flag ON ⇒ a foldable tool's schema is ABSENT and its catalog line PRESENT,
+--       reveal_tool present; a fresh session folds to just the 3 levers.
+--   (c) after reveal_tool, that tool's full schema is PRESENT (revealed).
+--   (d, P0b) inverse hypothesis — a revealed tool idle for the cooldown auto-folds
+--       (catalog line stays); pin_tool re-opens it.
+-- Uses the seeded `research` family (resolves + carries tools, as OK 23/35 rely on).
+-- NOTE: now() is constant within this single-transaction DO block, so the injected
+-- cooldown rounds get an EXPLICIT created_at AFTER the reveal — in production each
+-- round is its own transaction with a distinct now(), so this only compensates for
+-- the test artifact (the dev-container run proved the real multi-transaction path).
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_sess   text := 'shelf-smoke-68';
+    v_pick   text := 'doc_search';   -- a core tool the research family carries
+    v_off    jsonb;
+    v_folded jsonb;
+    v_eff    text[];
+    v_cool   int  := GREATEST((stewards.config_get('tool_shelf_cooldown','4'::jsonb))::text::int, 1);
+    v_t0     timestamptz := now();
+BEGIN
+    -- the surface ships: table, config, the three levers, the render/compose fns
+    ASSERT (SELECT count(*) FROM information_schema.tables WHERE table_schema='stewards'
+             AND table_name='session_tool_reveals') = 1, '68: session_tool_reveals table ships';
+    ASSERT stewards.config_get_text('tool_shelf_enabled','x') = 'false', '68: master flag seeds OFF';
+    ASSERT (SELECT count(*) FROM stewards.tool_defs WHERE active AND name IN
+             ('reveal_tool','pin_tool','unpin_tool')) = 3, '68: the three shelf levers ship as tool_defs';
+    ASSERT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='stewards'
+             AND table_name='agents' AND column_name='tool_shelf_enabled'),
+        '68: agents gains the tool_shelf_enabled opt-in column';
+
+    -- ── (a) flag OFF ⇒ byte-for-byte pre-77 ───────────────────────────────────
+    ASSERT stewards.tool_shelf_on('research') = false, '68a: shelf OFF by default';
+    v_off := stewards.compose_tools('research');
+    ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_off) e
+                        WHERE e->'function'->>'name' IN ('reveal_tool','pin_tool','unpin_tool')),
+        '68a: the shelf levers are SUPPRESSED from compose_tools when off (byte-identity: the only new tool_defs are gated out)';
+    ASSERT stewards.dry_run_chat('research','smoke-model-68',v_sess,NULL)->'tools'
+         = stewards.compose_tools_scoped('research', stewards.session_tool_scope(v_sess)),
+        '68a: dry_run tools off-path IS the exact 37 expression (compose_tools_scoped) — unchanged';
+    ASSERT stewards.render_folded_tools_block('research', v_sess) IS NULL,
+        '68a: the catalog renders NULL when the shelf is off';
+    ASSERT stewards.compose_system_prompt('research','smoke-model-68',v_sess) NOT LIKE '%<folded_tools>%',
+        '68a: the system prompt carries no folded catalog when off';
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v_off) e WHERE e->'function'->>'name'=v_pick),
+        '68a: precondition — research carries doc_search';
+
+    -- ── (b) flag ON ⇒ fold everything to the catalog + the 3 levers ────────────
+    PERFORM stewards.config_set('tool_shelf_enabled','true'::jsonb, NULL);
+    UPDATE stewards.agents SET tool_shelf_enabled = true WHERE family='research';
+    ASSERT stewards.tool_shelf_on('research') = true, '68b: shelf ON once master + agent opt-in';
+    ASSERT (SELECT count(*) FROM jsonb_array_elements(stewards.compose_tools('research')) e
+             WHERE e->'function'->>'name' IN ('reveal_tool','pin_tool','unpin_tool')) = 3,
+        '68b: the three levers appear in compose_tools when on';
+    v_folded := stewards.compose_tools_folded('research', v_sess, NULL);
+    ASSERT jsonb_array_length(v_folded) = 3,
+        format('68b: a fresh session folds to just the 3 levers; got %s', jsonb_array_length(v_folded));
+    ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_folded) e WHERE e->'function'->>'name'=v_pick),
+        '68b: a foldable tool''s schema is ABSENT from the folded array';
+    ASSERT stewards.render_folded_tools_block('research', v_sess) LIKE '%reveal_tool("'||v_pick||'")%',
+        '68b: the folded tool''s catalog line is PRESENT (name + reveal hint)';
+    ASSERT stewards.compose_system_prompt('research','smoke-model-68',v_sess) LIKE '%<folded_tools>%',
+        '68b: the catalog rides in the system prompt when on';
+
+    -- ── (c) reveal_tool loads the schema ──────────────────────────────────────
+    PERFORM stewards.reveal_tool_tool(jsonb_build_object('_session_id',v_sess,'name',v_pick));
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(stewards.compose_tools_folded('research',v_sess,NULL)) e
+                    WHERE e->'function'->>'name'=v_pick),
+        '68c: after reveal_tool the tool''s full schema is PRESENT';
+    ASSERT (stewards.reveal_tool_tool(jsonb_build_object('_session_id',v_sess,'name','no_such_tool_x')) ? 'error'),
+        '68c: revealing an unknown tool returns a recoverable error (no raise)';
+
+    -- ── (d, P0b) cooldown auto-refold + pin (inverse hypothesis) ──────────────
+    INSERT INTO stewards.sessions (id, kind) VALUES (v_sess, 'chat') ON CONFLICT DO NOTHING;
+    -- N+1 tool-call rounds that do NOT use v_pick, timestamped AFTER the reveal.
+    FOR i IN 1..(v_cool + 1) LOOP
+        INSERT INTO stewards.messages (session_id, role, content, tool_calls, created_at)
+        VALUES (v_sess, 'assistant', '',
+            jsonb_build_array(jsonb_build_object('id','sc'||i,'type','function',
+                'function', jsonb_build_object('name','web_search','arguments','{}'))),
+            v_t0 + (i * interval '1 second'));
+    END LOOP;
+    v_eff := stewards.effective_revealed_tools(v_sess);
+    ASSERT NOT (v_pick = ANY(v_eff)),
+        format('68d: a revealed-but-idle tool auto-folds after the cooldown (effective=%s)', v_eff);
+    ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(stewards.compose_tools_folded('research',v_sess,NULL)) e
+                        WHERE e->'function'->>'name'=v_pick),
+        '68d: the auto-folded tool''s schema is gone from the array';
+    ASSERT stewards.render_folded_tools_block('research', v_sess) LIKE '%reveal_tool("'||v_pick||'")%',
+        '68d: the auto-folded tool''s catalog line STAYS (only the schema dropped)';
+    PERFORM stewards.pin_tool_tool(jsonb_build_object('_session_id',v_sess,'name',v_pick));
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(stewards.compose_tools_folded('research',v_sess,NULL)) e
+                    WHERE e->'function'->>'name'=v_pick),
+        '68d: pin_tool re-opens the tool and exempts it from the cooldown';
+    ASSERT v_pick = ANY(stewards.effective_revealed_tools(v_sess)),
+        '68d: effective_revealed_tools now includes the pinned tool';
+
+    -- ── restore virgin state (config off, agent off, drop fixtures) ────────────
+    DELETE FROM stewards.messages           WHERE session_id = v_sess;
+    DELETE FROM stewards.session_tool_reveals WHERE session_id = v_sess;
+    DELETE FROM stewards.sessions           WHERE id = v_sess;
+    UPDATE stewards.agents SET tool_shelf_enabled = false WHERE family='research';
+    PERFORM stewards.config_set('tool_shelf_enabled','false'::jsonb, NULL);
+    ASSERT stewards.tool_shelf_on('research') = false, '68: restored to shelf-off';
+    RAISE NOTICE 'OK 68: Tool Shelf — flag OFF byte-identical (levers suppressed, dry_run tools == compose_tools_scoped, no catalog); flag ON folds every tool to a <folded_tools> catalog + the 3 levers; reveal_tool loads a schema; cooldown auto-refolds an idle tool (catalog line stays) and pin_tool re-opens it';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→77) is sound =='
