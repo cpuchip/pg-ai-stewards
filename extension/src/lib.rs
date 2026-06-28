@@ -779,6 +779,21 @@ extension_sql_file!(
     requires = ["create_brain_search_wire"],
 );
 
+// 77: the Tool Shelf — progressive disclosure for TOOLS (the dynamic half of
+// 37's static tool-group scoping; the tool twin of 24's skill shelf). When
+// enabled for a family (master config tool_shelf_enabled AND agents.
+// tool_shelf_enabled), compose_tools/compose_system_prompt/dry_run_chat fold
+// every tool to a one-line <folded_tools> catalog and ship only reveal_tool/
+// pin_tool/unpin_tool + the schemas the agent reveals on demand. A cooldown
+// auto-refolds idle tools (inferred from messages.tool_calls); pin exempts a
+// tool. Default OFF ⇒ byte-for-byte pre-77 (gated branches + gated-off levers).
+// GREENLIT by the P0.5 probe (both local models opened the right tools).
+extension_sql_file!(
+    "../77-tool-shelf.sql",
+    name = "create_tool_shelf",
+    requires = ["create_engram_search_wire"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
