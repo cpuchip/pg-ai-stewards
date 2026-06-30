@@ -20,6 +20,24 @@ point it at a campaign and it keeps the canon and voices the characters. The
 report-builder and the dungeon master are the same governed pipeline aimed at
 different canon — so the serious tool and the fun one are one tool.
 
+## The idea
+
+The name is the thesis: not `pg-ai-agents` but **stewards**. An agent executes a
+task and forgets; a steward is *entrusted*, accountable for what it holds, free
+within bounds, oriented toward what the work is actually for. A language model is a
+brilliant agent and a poor steward: it arrives a stranger every time (no memory),
+optimizes the task in front of it instead of the goal behind it (no orientation),
+and answers to no one between turns (no accountability).
+
+pg-ai-stewards supplies what the model lacks: **memory** so trust compounds, a
+standing **intent** it works toward, **accountability** (governance, spend caps, and
+a human Hinge), and a **covenant** that says how it works, all as queryable rows.
+Most of the field is building better brains and better hands. This is the
+**institution layer** that goes *around* an agent, giving it the memory, the record,
+and the accountability a workplace gives a worker, so an *ordinary* agent becomes
+trustworthy over time. Reflexion-style self-correction and RAG-style retrieval both
+live inside it; they're two of its organs, not the whole body.
+
 ## Why it's different
 
 Most "chat with your knowledge" tools bolt a vector store, a job queue, a file
