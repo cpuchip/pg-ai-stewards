@@ -812,6 +812,51 @@ extension_sql_file!(
     requires = ["create_tool_shelf", "create_doc_extract"],
 );
 
+// 79: BINEVAL — force the trajectory-critic (56) to DECOMPOSE its verdict into
+// binary yes/no answers via a submit_trajectory_verdict TOOL (the required args
+// ARE the questions, so a weak model can't skip them) instead of free-text JSON.
+// `committed` is one of the questions ⇒ the spiral becomes a verdict signal that
+// flows to 59's agent-improver. Re-authors the trajectory-critic agent (UPDATE),
+// so it requires create_trajectory_critic. ("Ask, Don't Judge", arXiv:2606.27226.)
+extension_sql_file!(
+    "../79-bineval.sql",
+    name = "create_bineval",
+    requires = ["create_yt_slide_frames", "create_trajectory_critic"],
+);
+
+// 80: the REST — every rest_every_n_steps assistant rounds (config, default 0=off)
+// fold tools to a housekeeping set + inject a [REST] tidy-up nudge, then full tools
+// resume. Re-authors chat_post_internal (later-file-wins over 67), so it MUST sort
+// after create_rigor_force_final; force-final near the cap still takes precedence.
+// Also carries the per-dispatch _sampling override (the qwen3.6-MoE repetition-loop
+// fix: presence_penalty=1.5 / temp 0.6). Default OFF ⇒ pre-80 behavior.
+extension_sql_file!(
+    "../80-rest.sql",
+    name = "create_rest",
+    requires = ["create_bineval", "create_rigor_force_final"],
+);
+
+// 81: the spiral oracle — deterministic session_spiraled() + spiral_report() over
+// stewards.messages (the over-gather-never-commit gauge for the uplift arc).
+// Read-only; no behavior change. requires create_rest only for chain order.
+extension_sql_file!(
+    "../81-spiral-oracle.sql",
+    name = "create_spiral_oracle",
+    requires = ["create_rest"],
+);
+
+// 82: the world-graph — projects become an n-level hierarchy (parent_slug) with
+// worlds as leaves (FK); cross_world_edges link entities across world/project
+// boundaries; resolve_cross_service_http pairs HTTP producers/consumers across a
+// project subtree on a normalized contract key (contract-as-node — the existing
+// (world,kind,name) dedup IS the matcher); project_tree() is the picker. Uses the
+// loreworks tables, so it requires create_loreworks. (world-graph-spec.md D1-D5.)
+extension_sql_file!(
+    "../82-world-graph.sql",
+    name = "create_world_graph",
+    requires = ["create_spiral_oracle", "create_loreworks"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

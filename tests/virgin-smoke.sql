@@ -2022,8 +2022,8 @@ DECLARE v_traj jsonb; v_world bigint; v_e1 bigint; v_res jsonb;
 BEGIN
     -- generic Glass-Box pieces
     ASSERT EXISTS (SELECT 1 FROM stewards.agents WHERE family='trajectory-critic'
-                   AND response_format->>'type'='json_object'),
-        'trajectory-critic judge exists (json_object output)';
+                   AND response_format IS NULL),
+        'trajectory-critic judge exists (BINEVAL: re-authored by 79 to answer via the submit_trajectory_verdict tool — response_format NULL)';
     ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
                    WHERE n.nspname='stewards' AND p.proname='assemble_trajectory'),
         'assemble_trajectory exists';
@@ -2395,7 +2395,7 @@ BEGIN
     SELECT (body LIKE '%VERIFY BEFORE YOU SHIP%') INTO v_skill
       FROM stewards.skills WHERE family='research-rigor' AND model_match='*';
     ASSERT v_skill, '66: research-rigor v2 — the contract requires verify-before-ship (re-read the cited source; never generalize a single record / state a subset as a population stat)';
-    SELECT (prompt LIKE '%FIDELITY%' AND prompt LIKE '%generalized to a state%') INTO v_critic
+    SELECT (prompt LIKE '%FIDELITY%' AND prompt LIKE '%state-level%') INTO v_critic
       FROM stewards.agents WHERE family='trajectory-critic';
     ASSERT v_critic, '66: the trajectory-critic grounding dimension is sharpened into a fidelity rubric — fails over-generalization / subset-as-population / over-confident tags / wrong-source even when a citation resolves';
     v_fam := stewards.config_get_text('auto_critique_families','');
@@ -3591,4 +3591,50 @@ BEGIN
     RAISE NOTICE 'OK 69: yt slide frames — align_slide_captions windows cues per frame ([sec,next_sec), last takes the tail); a captioned image renders caption-text THEN image (slide + words); an uncaptioned image is byte-identical to 49 (one image_url part, inverse-proven)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→78) is sound =='
+-- ── 79–82: the reliability + world-graph wave ─────────────────────────────────
+DO $$
+BEGIN
+    ASSERT (SELECT count(*) FROM stewards.tool_defs WHERE name='submit_trajectory_verdict' AND active)=1,
+           '79: submit_trajectory_verdict tool_def should exist';
+    ASSERT (SELECT response_format IS NULL FROM stewards.agents WHERE family='trajectory-critic'),
+           '79: trajectory-critic should answer via the tool (response_format NULL)';
+    RAISE NOTICE 'OK 70: BINEVAL — submit_trajectory_verdict tool + trajectory-critic re-authored to decompose its verdict';
+END $$;
+
+DO $$
+BEGIN
+    ASSERT (SELECT value FROM stewards.config WHERE key='rest_every_n_steps') = '0'::jsonb,
+           '80: rest_every_n_steps should default to 0 (off)';
+    ASSERT (SELECT count(*) FROM stewards.config WHERE key='rest_tools')=1,
+           '80: rest_tools housekeeping set should be seeded';
+    ASSERT (SELECT bool_and(prosrc LIKE '%_sampling%' AND prosrc LIKE '%[REST]%') FROM pg_proc WHERE proname='chat_post_internal'),
+           '80: chat_post_internal should carry the REST branch + the _sampling override';
+    RAISE NOTICE 'OK 71: the REST — rest_every_n_steps/rest_tools config + chat_post_internal re-authored (rest + _sampling), default off';
+END $$;
+
+DO $$
+BEGIN
+    ASSERT stewards.session_spiraled('__virgin_no_such_session__') = false,
+           '81: session_spiraled on an empty session should be false';
+    ASSERT (SELECT count(*) FROM stewards.spiral_report()) >= 0,
+           '81: spiral_report() should be callable on a virgin ledger';
+    RAISE NOTICE 'OK 72: spiral oracle — session_spiraled() + spiral_report() callable';
+END $$;
+
+DO $$
+BEGIN
+    ASSERT (SELECT count(*) FROM information_schema.tables WHERE table_schema='stewards' AND table_name='cross_world_edges')=1,
+           '82: cross_world_edges table should exist';
+    ASSERT (SELECT count(*) FROM information_schema.columns WHERE table_schema='stewards' AND table_name='projects' AND column_name='parent_slug')=1,
+           '82: projects.parent_slug (the n-level hierarchy) should exist';
+    -- the deterministic normalizer is itself an oracle: /api strip + param/numeric collapse collide; different routes do not
+    ASSERT stewards.normalize_http_key('GET','/api/users/123') = stewards.normalize_http_key('get','/users/{id}'),
+           '82: normalize_http_key must collide /api/users/123 and /users/{id}';
+    ASSERT stewards.normalize_http_key('GET','/orders/1') <> stewards.normalize_http_key('GET','/users/1'),
+           '82: normalize_http_key must keep different routes distinct';
+    ASSERT (SELECT count(*) FROM stewards.project_tree()) >= 0,
+           '82: project_tree() picker should be callable';
+    RAISE NOTICE 'OK 73: world-graph — cross_world_edges + projects.parent_slug + normalize_http_key (collide/distinct) + project_tree()';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→82) is sound =='
