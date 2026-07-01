@@ -99,7 +99,7 @@ COMMENT ON FUNCTION stewards.import_code_graph(text,text,jsonb,jsonb) IS
 --   p_ref          — the git ref this extraction represents (default 'HEAD').
 --   p_repo_origins — { "<world>": "<git-remote-url>" } (default '{}'); lodestar's
 --                    world_meta[w].repo_origin feeds this.
--- Stamped: worlds.metadata.{ref, repo_origin?}; world_entities.metadata.{path, repo_origin?}
+-- Stamped: worlds.metadata.{ref, repo_origin?}; world_entities.metadata.{file_path, repo_origin?}
 -- where path = the repo-relative FILE path (the node id's 2nd ::-segment) — this is
 -- what unblocks #301 source links.
 -- =====================================================================
@@ -189,20 +189,16 @@ BEGIN
     -- uses — so it's O(n) (one hash join, no per-entity nested scan). The file path is
     -- the node id's 2nd ::-segment for EVERY kind: files (world::path), decls
     -- (world::path::name), and contracts (world::path::kind::key).
-    -- ★ Collision guard: import_code_graph stored the HTTP ROUTE under metadata.path
-    -- for http_endpoint/http_client contract nodes. #301 wants metadata.path to mean
-    -- the FILE uniformly across kinds, so we overwrite it with the file path and
-    -- PRESERVE the route under metadata.route (no extracted signal lost). Note the SQL
-    -- resolver resolve_cross_service_http reads metadata->>'path', but it is NOT in the
-    -- lodestar import path (lodestar pre-computes cross_edges, stored directly above).
+    -- ★ Naming (Michael, 2026-07-01): use a dedicated FILE_PATH key (pedantic + uniform
+    -- across kinds — this is what #301 reads) and leave metadata.path ALONE. import_code_graph
+    -- already stores the HTTP ROUTE under metadata.path for http_endpoint/http_client contract
+    -- nodes; that stays put (a route like "/users/{id}" is a path template, not a full URI, so
+    -- `path` is where it belongs and no route/uri rename is needed). Additive, zero overwrite:
+    -- the resolver's metadata->>'path' is untouched; file_path is new information alongside it.
     UPDATE stewards.world_entities e
        SET metadata = e.metadata
-                    || CASE WHEN e.metadata ? 'path'
-                             AND (e.metadata->>'path') IS DISTINCT FROM split_part(nd.id,'::',2)
-                            THEN jsonb_build_object('route', e.metadata->>'path')
-                            ELSE '{}'::jsonb END
                     || CASE WHEN split_part(nd.id,'::',2) <> ''
-                            THEN jsonb_build_object('path', split_part(nd.id,'::',2))
+                            THEN jsonb_build_object('file_path', split_part(nd.id,'::',2))
                             ELSE '{}'::jsonb END
                     || CASE WHEN p_repo_origins ? nd.world
                             THEN jsonb_build_object('repo_origin', p_repo_origins->>nd.world)
@@ -216,4 +212,4 @@ BEGIN
 END $fn$;
 
 COMMENT ON FUNCTION stewards.import_lodestar_graph(text,jsonb,text,jsonb) IS
-'83 (D5 ingest, whole-graph): land a full lodestar extraction {worlds,nodes,edges,cross_edges} — per-world structure via import_code_graph, then lodestar''s already-computed cross-service edges DIRECTLY into cross_world_edges (node-id→entity-id). lodestar is the single deterministic extraction authority; the substrate stores. Optional p_ref + p_repo_origins (#298) stamp git provenance into world/entity metadata (world.metadata.{ref,repo_origin}; entity.metadata.{path,repo_origin}) WITHOUT changing world identity — path (node-id 2nd ::-segment) unblocks #301 source links. Feed via: SELECT stewards.import_lodestar_graph(''project'', ''<lodestar JSON>''::jsonb, ''v1.2'', ''{"svc":"https://github.com/x/svc"}''::jsonb).';
+'83 (D5 ingest, whole-graph): land a full lodestar extraction {worlds,nodes,edges,cross_edges} — per-world structure via import_code_graph, then lodestar''s already-computed cross-service edges DIRECTLY into cross_world_edges (node-id→entity-id). lodestar is the single deterministic extraction authority; the substrate stores. Optional p_ref + p_repo_origins (#298) stamp git provenance into world/entity metadata (world.metadata.{ref,repo_origin}; entity.metadata.{path,repo_origin}) WITHOUT changing world identity — file_path (node-id 2nd ::-segment; metadata.path is left as the route import_code_graph stores) unblocks #301 source links. Feed via: SELECT stewards.import_lodestar_graph(''project'', ''<lodestar JSON>''::jsonb, ''v1.2'', ''{"svc":"https://github.com/x/svc"}''::jsonb).';

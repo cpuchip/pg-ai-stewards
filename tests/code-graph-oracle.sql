@@ -113,11 +113,11 @@ END $$;
 -- ORACLE 4 — branch-aware capture (#298, legs 1): the two OPTIONAL params
 -- stamp git provenance WITHOUT changing world identity. Asserts (a) world
 -- metadata.{ref, repo_origin} lands (repo_origin only for worlds in the map),
--- (b) entity metadata.path is the repo-relative FILE path parsed from the node
--- id's 2nd ::-segment (uniform across file/decl/contract) + entity repo_origin,
--- and the collision guard: a contract node's HTTP route (import_code_graph put
--- it under metadata.path) is overwritten by the file path but PRESERVED as
--- metadata.route (no extracted signal lost).
+-- (b) entity metadata.file_path is the repo-relative FILE path parsed from the
+-- node id's 2nd ::-segment (uniform across file/decl/contract) + entity
+-- repo_origin — ADDITIVE: metadata.path is LEFT as the HTTP route import_code_graph
+-- stores for a contract node (a path template is not a full URI, so it belongs
+-- under path; file_path is the pedantic, uniform key #301 reads).
 -- ===================================================================
 SELECT stewards.import_lodestar_graph('ref-demo', '{
   "worlds": ["svc-a","svc-b"],
@@ -135,7 +135,7 @@ SELECT stewards.import_lodestar_graph('ref-demo', '{
 DO $$
 DECLARE
     v_wref_a text; v_worg_a text; v_wref_b text; v_worg_b text;
-    v_path text; v_eorg text; v_ep_path text; v_ep_route text; v_ep_method text;
+    v_fpath text; v_eorg text; v_ep_fpath text; v_ep_path text; v_ep_method text;
 BEGIN
     -- (a) world A: ref + repo_origin both stamped from the params
     SELECT metadata->>'ref', metadata->>'repo_origin' INTO v_wref_a, v_worg_a
@@ -147,21 +147,21 @@ BEGIN
       FROM stewards.worlds WHERE slug='ref-demo/svc-b';
     ASSERT v_wref_b = 'v1.2', format('svc-b world ref should be v1.2, got %s', v_wref_b);
     ASSERT v_worg_b IS NULL, format('svc-b world repo_origin should be unset (not in the map), got %s', v_worg_b);
-    -- (b) file entity: path parsed from the node-id 2nd ::-segment + repo_origin
-    SELECT e.metadata->>'path', e.metadata->>'repo_origin' INTO v_path, v_eorg
+    -- (b) file entity: file_path parsed from the node-id 2nd ::-segment + repo_origin
+    SELECT e.metadata->>'file_path', e.metadata->>'repo_origin' INTO v_fpath, v_eorg
       FROM stewards.world_entities e JOIN stewards.worlds w ON e.world_id=w.world_id
      WHERE w.slug='ref-demo/svc-a' AND e.kind='file' AND e.name='users.go';
-    ASSERT v_path = 'src/users.go', format('file entity path should be src/users.go, got %s', v_path);
+    ASSERT v_fpath = 'src/users.go', format('file entity file_path should be src/users.go, got %s', v_fpath);
     ASSERT v_eorg = 'https://github.com/x/svc-a', format('file entity repo_origin should be the URL, got %s', v_eorg);
-    -- collision guard: contract entity gets the FILE path, KEEPS method, PRESERVES route
-    SELECT e.metadata->>'path', e.metadata->>'route', e.metadata->>'method'
-      INTO v_ep_path, v_ep_route, v_ep_method
+    -- additive on a contract entity: file_path added, metadata.path (the route) LEFT ALONE, method untouched
+    SELECT e.metadata->>'file_path', e.metadata->>'path', e.metadata->>'method'
+      INTO v_ep_fpath, v_ep_path, v_ep_method
       FROM stewards.world_entities e JOIN stewards.worlds w ON e.world_id=w.world_id
      WHERE w.slug='ref-demo/svc-a' AND e.kind='http_endpoint' AND e.name='GET /users/{}';
-    ASSERT v_ep_path = 'src/users.go', format('endpoint path should be overwritten to the file src/users.go, got %s', v_ep_path);
-    ASSERT v_ep_route = '/users/{id}', format('endpoint route (the old metadata.path) should be preserved, got %s', v_ep_route);
+    ASSERT v_ep_fpath = 'src/users.go', format('endpoint file_path should be the file src/users.go, got %s', v_ep_fpath);
+    ASSERT v_ep_path = '/users/{id}', format('endpoint metadata.path (the route) should be LEFT untouched, got %s', v_ep_path);
     ASSERT v_ep_method = 'GET', format('endpoint method should be untouched, got %s', v_ep_method);
-    RAISE NOTICE 'OK ref-capture — world.{ref,repo_origin} + entity.{path,repo_origin} stamped; route preserved; repo_origin conditional on the map';
+    RAISE NOTICE 'OK ref-capture — world.{ref,repo_origin} + entity.{file_path,repo_origin} stamped; metadata.path (route) untouched; repo_origin conditional on the map';
 END $$;
 
 SELECT 'CODE-GRAPH INGEST GREEN — extract → world-graph → cross-service traversal + whole-graph import + branch-aware capture' AS result;
