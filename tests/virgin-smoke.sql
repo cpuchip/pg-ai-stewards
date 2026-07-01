@@ -3637,4 +3637,34 @@ BEGIN
     RAISE NOTICE 'OK 73: world-graph — cross_world_edges + projects.parent_slug + normalize_http_key (collide/distinct) + project_tree()';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→82) is sound =='
+-- 83: code-graph ingest — the whole-graph e2e is baked into the gate. Import a
+-- tiny two-world lodestar extraction and assert its cross-service edge lands.
+DO $$
+DECLARE v jsonb; v_edges int;
+BEGIN
+    ASSERT (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON p.pronamespace=n.oid
+            WHERE n.nspname='stewards' AND p.proname='import_code_graph')=1,
+           '83: import_code_graph should exist';
+    v := stewards.import_lodestar_graph('lodestar-smoke', $g${
+      "worlds":["svc-a","svc-b"],
+      "nodes":[
+        {"id":"svc-a::r::GET /users/{}","world":"svc-a","kind":"http_endpoint","name":"GET /users/{}","metadata":{"method":"GET","path":"/users/{}"}},
+        {"id":"svc-b::c::GET /users/{}","world":"svc-b","kind":"http_client","name":"GET /users/{}","metadata":{"method":"GET","path":"/users/{}"}}
+      ],
+      "edges":[],
+      "cross_edges":[
+        {"src":"svc-b::c::GET /users/{}","dst":"svc-a::r::GET /users/{}","rel":"http_call","protocol":"http","contract_key":"GET /users/{}","confidence":0.85}
+      ]
+    }$g$::jsonb);
+    ASSERT (v->>'worlds')::int = 2, '83: import_lodestar_graph should report 2 worlds';
+    ASSERT (v->>'cross_edges')::int = 1, '83: import_lodestar_graph should land 1 cross-edge';
+    SELECT count(*) INTO v_edges
+      FROM stewards.cross_world_edges ce
+      JOIN stewards.world_entities se ON ce.src_entity = se.entity_id
+      JOIN stewards.worlds sw ON se.world_id = sw.world_id
+     WHERE sw.slug = 'svc-b' AND ce.protocol = 'http' AND ce.contract_key = 'GET /users/{}';
+    ASSERT v_edges >= 1, '83: cross_world_edges should carry the lodestar http_call svc-b -> svc-a';
+    RAISE NOTICE 'OK 83: code-graph ingest — import_lodestar_graph lands a cross-service edge (svc-b -> svc-a on GET /users/{})';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→83) is sound =='

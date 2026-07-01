@@ -857,6 +857,18 @@ extension_sql_file!(
     requires = ["create_spiral_oracle", "create_loreworks"],
 );
 
+// 83: the code-graph ingest (D5) — lands a lodestar (github.com/cpuchip/lodestar)
+// extraction into the world-graph. import_code_graph takes one world's {nodes,edges};
+// import_lodestar_graph takes a whole {worlds,nodes,edges,cross_edges} and stores
+// lodestar's already-computed cross-service edges directly in cross_world_edges
+// (lodestar is the single deterministic extraction authority, no re-resolve in SQL).
+// Reuses world_*_upsert + cross_world_edges, so it requires create_world_graph.
+extension_sql_file!(
+    "../83-code-graph.sql",
+    name = "create_code_graph",
+    requires = ["create_world_graph"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
