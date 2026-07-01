@@ -13,9 +13,15 @@ import ForceGraph3D from '3d-force-graph'
 import SpriteText from 'three-spritetext'
 import { api, type WorldGraphResp, type WorldNode, type WorldNodeDetail, type WorldBrief } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
+import CosmosPanel from './CosmosPanel.vue'
 
 defineOptions({ inheritAttrs: false })
 const store = useStewdioStore()
+
+// view mode: 'world' = this world's entity graph (the original panel); 'cosmos'
+// = the cross-service constellation (CosmosPanel, mounted alongside via v-show so
+// its graph survives a toggle). One toggle, two lenses on the same knowledge.
+const mode = ref<'world' | 'cosmos'>('world')
 
 // node colour by kind — the six world kinds + `concept` (the auto-created edge
 // endpoint fallback from world_edge_upsert).
@@ -395,6 +401,14 @@ onMounted(async () => {
 
 watch(() => store.worldSlug, (s) => { if (s) loadWorld(s) })
 
+// pause this graph's WebGL loop while the cosmos lens is showing (two live
+// force graphs shouldn't both burn GPU); resume + re-fit when we come back.
+watch(mode, (m) => {
+  if (!graph) return
+  if (m === 'cosmos') graph.pauseAnimation()
+  else { graph.resumeAnimation(); nextTick(resize) }
+})
+
 onUnmounted(() => {
   cancelAnimationFrame(resizeRaf)
   ro?.disconnect()
@@ -404,9 +418,18 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full w-full flex flex-col bg-zinc-950 relative overflow-hidden">
-    <!-- toolbar: world picker · search · legend/filter chips · orbit -->
+  <div class="h-full w-full relative bg-zinc-950 overflow-hidden">
+    <!-- WORLD mode — this world's entity graph (the original panel) -->
+    <div v-show="mode === 'world'" class="h-full w-full flex flex-col relative overflow-hidden">
+    <!-- toolbar: mode toggle · world picker · search · legend/filter chips · orbit -->
     <div class="absolute top-1 left-2 right-2 z-20 flex items-center gap-2 flex-wrap text-[11px]">
+      <!-- mode toggle: World ⇄ Cosmos (cross-service) -->
+      <div class="inline-flex rounded overflow-hidden border border-zinc-700 shrink-0">
+        <button class="px-1.5 py-0.5 bg-sky-900/50 text-sky-200"
+                title="this world's entity graph">🌍 World</button>
+        <button class="px-1.5 py-0.5 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border-l border-zinc-700"
+                title="the cross-service constellation" @click="mode = 'cosmos'">✦ Cosmos</button>
+      </div>
       <select
         v-model="store.worldSlug"
         class="bg-zinc-900/80 border border-zinc-800 rounded px-1.5 py-0.5 text-zinc-200 max-w-[180px]"
@@ -625,5 +648,12 @@ onUnmounted(() => {
     </aside>
 
     <div v-if="err" class="absolute bottom-2 left-2 right-2 text-rose-400 text-xs z-20">{{ err }}</div>
+    </div>
+
+    <!-- COSMOS mode — the cross-service constellation (its own graph, kept alive
+         via v-show so a toggle doesn't tear down + reflow the force layout) -->
+    <div v-show="mode === 'cosmos'" class="h-full w-full">
+      <CosmosPanel :mode="mode" @update:mode="mode = $event" />
+    </div>
   </div>
 </template>
