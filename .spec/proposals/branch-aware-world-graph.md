@@ -23,6 +23,24 @@ devs to walk these relationships" = an **MCP/API a dev's IDE or agent calls**, s
 their branch ("what calls this endpoint on my branch? what does my branch change?"), plus
 a ref selector + diff mode on the Cosmos/World views.
 
+**★ The jagged edge (Michael, 2026-07-01) — a core ref-resolution semantic.** Not every
+repo has every branch: a feature branch often touches only a few of the 269 repos. So "the
+graph as-of ref R" is assembled **per repo, with fallback**: use repo's snapshot for R if it
+exists, else fall back to that repo's DEFAULT (main / master / release — whatever the repo's
+default is). A logical ref view is therefore a *set* of per-repo (ref-or-default) snapshots,
+not a single global ref. This is load-bearing for `graph_diff` too (diffing `feature/x`
+against `main` = compare the jagged R-view to the all-defaults view). The snapshot model must
+record each repo's default branch so the fallback is deterministic.
+
+**★ North star (Michael's dream, recorded 2026-07-01): walk the code in VR.** The end state
+isn't a 2D graph — it's *spatial*: each service a place, each external reference / function
+call a doorway with a "walk-out space" around it you can move through and see what it
+connects to. The cosmology metaphor (universe → galaxy → world → moon; orbit-don't-ingest)
+is literally that navigation. We already own a deterministic 3D engine (first-orbit). This
+working-graph is the universe; that engine is how you eventually fly it. Design toward a
+spatial, ref-scoped, walkable code-navigation experience — the graph + the diff + the
+walk-tools are the substrate under it.
+
 **Status:** foundation (ref + repo_origin + `file_path` capture) shipped (PR #22 + lodestar
 `16799c8`) = a stepping stone. The full arc — **re-architect the world-graph as
 snapshot-versioned + graph_diff + ref-scoped queries + the dev-facing walk-tools + a
