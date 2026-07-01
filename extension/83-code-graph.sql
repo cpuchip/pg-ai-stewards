@@ -108,9 +108,11 @@ DECLARE
 BEGIN
     -- Per-world structural import: reuse import_code_graph for nodes + intra-world
     -- edges + metadata (dedup on world+kind+name). Slice the combined graph by world.
+    -- ★ World slugs are PROJECT-SCOPED (project/world): world_upsert dedups on slug
+    -- globally, so two projects that each have a "frontend" would otherwise merge.
     FOR w IN SELECT jsonb_array_elements_text(coalesce(p_graph->'worlds','[]'::jsonb)) LOOP
         PERFORM stewards.import_code_graph(
-            w, p_project,
+            p_project || '/' || w, p_project,
             (SELECT coalesce(jsonb_agg(n),'[]'::jsonb)
                FROM jsonb_array_elements(coalesce(p_graph->'nodes','[]'::jsonb)) n
               WHERE n->>'world' = w),
@@ -133,11 +135,11 @@ BEGIN
 
         SELECT e.entity_id INTO v_src_eid
           FROM stewards.world_entities e JOIN stewards.worlds wo ON e.world_id = wo.world_id
-         WHERE wo.slug = src_node->>'world' AND e.kind = src_node->>'kind' AND e.name = src_node->>'name'
+         WHERE wo.slug = p_project || '/' || (src_node->>'world') AND e.kind = src_node->>'kind' AND e.name = src_node->>'name'
          LIMIT 1;
         SELECT e.entity_id INTO v_dst_eid
           FROM stewards.world_entities e JOIN stewards.worlds wo ON e.world_id = wo.world_id
-         WHERE wo.slug = dst_node->>'world' AND e.kind = dst_node->>'kind' AND e.name = dst_node->>'name'
+         WHERE wo.slug = p_project || '/' || (dst_node->>'world') AND e.kind = dst_node->>'kind' AND e.name = dst_node->>'name'
          LIMIT 1;
         IF v_src_eid IS NULL OR v_dst_eid IS NULL THEN CONTINUE; END IF;
 

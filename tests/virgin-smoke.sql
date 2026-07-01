@@ -3662,9 +3662,9 @@ BEGIN
       FROM stewards.cross_world_edges ce
       JOIN stewards.world_entities se ON ce.src_entity = se.entity_id
       JOIN stewards.worlds sw ON se.world_id = sw.world_id
-     WHERE sw.slug = 'svc-b' AND ce.protocol = 'http' AND ce.contract_key = 'GET /users/{}';
-    ASSERT v_edges >= 1, '83: cross_world_edges should carry the lodestar http_call svc-b -> svc-a';
-    RAISE NOTICE 'OK 83: code-graph ingest — import_lodestar_graph lands a cross-service edge (svc-b -> svc-a on GET /users/{})';
+     WHERE sw.slug = 'lodestar-smoke/svc-b' AND ce.protocol = 'http' AND ce.contract_key = 'GET /users/{}';
+    ASSERT v_edges >= 1, '83: cross_world_edges should carry the lodestar http_call svc-b -> svc-a (project-scoped world slug)';
+    RAISE NOTICE 'OK 83: code-graph ingest — import_lodestar_graph lands a cross-service edge (svc-b -> svc-a on GET /users/{}), worlds project-scoped';
 END $$;
 
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→83) is sound =='
