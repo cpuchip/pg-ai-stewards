@@ -44,6 +44,7 @@ const PROTOCOL_COLOR: Record<string, string> = {
   db:      '#ef4444', // red — strongest coupling
   config:  '#f472b6', // pink
   package: '#facc15', // yellow
+  k8s:     '#326ce5', // kubernetes blue — a declared deploy-time service dependency
 }
 const protocolColor = (p: string) => PROTOCOL_COLOR[p] ?? '#94a3b8'
 
