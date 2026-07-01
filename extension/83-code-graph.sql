@@ -91,10 +91,27 @@ COMMENT ON FUNCTION stewards.import_code_graph(text,text,jsonb,jsonb) IS
 --     "nodes":[{id,world,kind,name,summary?,metadata?}...],
 --     "edges":[{src,dst,rel}...],                     -- intra-world
 --     "cross_edges":[{src,dst,rel,protocol,contract_key,confidence}...] }
+--
+-- ★ Branch-aware capture (#298, legs 1): the two OPTIONAL trailing params stamp git
+-- provenance at import WITHOUT changing world identity (the slug stays HEAD-semantic;
+-- the ref lives in metadata only — the ref-in-slug identity fork + graph_diff are held
+-- for a ratify per .spec/proposals/branch-aware-world-graph.md):
+--   p_ref          — the git ref this extraction represents (default 'HEAD').
+--   p_repo_origins — { "<world>": "<git-remote-url>" } (default '{}'); lodestar's
+--                    world_meta[w].repo_origin feeds this.
+-- Stamped: worlds.metadata.{ref, repo_origin?}; world_entities.metadata.{path, repo_origin?}
+-- where path = the repo-relative FILE path (the node id's 2nd ::-segment) — this is
+-- what unblocks #301 source links.
 -- =====================================================================
+-- Signature widened for branch-aware capture (#298). Drop the old 2-arg form first so
+-- the default-filled 4-arg version isn't ambiguous against a lingering 2-arg function
+-- on an in-place rebuild (a virgin build never has it, so the DROP is a harmless no-op).
+DROP FUNCTION IF EXISTS stewards.import_lodestar_graph(text, jsonb);
 CREATE OR REPLACE FUNCTION stewards.import_lodestar_graph(
-    p_project text,
-    p_graph   jsonb
+    p_project      text,
+    p_graph        jsonb,
+    p_ref          text  DEFAULT 'HEAD',       -- git ref this extraction represents (metadata only)
+    p_repo_origins jsonb DEFAULT '{}'::jsonb   -- { "<world>": "<git-remote-url>" }
 ) RETURNS jsonb LANGUAGE plpgsql AS $fn$
 DECLARE
     w            text;
@@ -154,8 +171,49 @@ BEGIN
         v_ce := v_ce + 1;
     END LOOP;
 
+    -- ★ Branch-aware capture (#298, legs 1): stamp git provenance. Identity is
+    -- unchanged — the ref lives in metadata only (the ref-in-slug fork is held).
+    -- World metadata: ref (always) + repo_origin (only when the caller supplied one
+    -- for that world). Set-based, O(worlds).
+    UPDATE stewards.worlds wo
+       SET metadata = wo.metadata
+                    || jsonb_build_object('ref', p_ref)
+                    || CASE WHEN p_repo_origins ? ws.w
+                            THEN jsonb_build_object('repo_origin', p_repo_origins->>ws.w)
+                            ELSE '{}'::jsonb END
+      FROM (SELECT jsonb_array_elements_text(coalesce(p_graph->'worlds','[]'::jsonb)) AS w) ws
+     WHERE wo.slug = p_project || '/' || ws.w;
+
+    -- Entity metadata (unblocks #301 source links): stamp the repo-relative FILE path
+    -- + the world's repo_origin, keyed by (world_id,kind,name) — the same key v_idmap
+    -- uses — so it's O(n) (one hash join, no per-entity nested scan). The file path is
+    -- the node id's 2nd ::-segment for EVERY kind: files (world::path), decls
+    -- (world::path::name), and contracts (world::path::kind::key).
+    -- ★ Collision guard: import_code_graph stored the HTTP ROUTE under metadata.path
+    -- for http_endpoint/http_client contract nodes. #301 wants metadata.path to mean
+    -- the FILE uniformly across kinds, so we overwrite it with the file path and
+    -- PRESERVE the route under metadata.route (no extracted signal lost). Note the SQL
+    -- resolver resolve_cross_service_http reads metadata->>'path', but it is NOT in the
+    -- lodestar import path (lodestar pre-computes cross_edges, stored directly above).
+    UPDATE stewards.world_entities e
+       SET metadata = e.metadata
+                    || CASE WHEN e.metadata ? 'path'
+                             AND (e.metadata->>'path') IS DISTINCT FROM split_part(nd.id,'::',2)
+                            THEN jsonb_build_object('route', e.metadata->>'path')
+                            ELSE '{}'::jsonb END
+                    || CASE WHEN split_part(nd.id,'::',2) <> ''
+                            THEN jsonb_build_object('path', split_part(nd.id,'::',2))
+                            ELSE '{}'::jsonb END
+                    || CASE WHEN p_repo_origins ? nd.world
+                            THEN jsonb_build_object('repo_origin', p_repo_origins->>nd.world)
+                            ELSE '{}'::jsonb END
+      FROM jsonb_to_recordset(coalesce(p_graph->'nodes','[]'::jsonb))
+             AS nd(id text, world text, kind text, name text)
+      JOIN stewards.worlds wo ON wo.slug = p_project || '/' || nd.world
+     WHERE e.world_id = wo.world_id AND e.kind = nd.kind AND e.name = nd.name;
+
     RETURN jsonb_build_object('project', p_project, 'worlds', v_worlds, 'cross_edges', v_ce);
 END $fn$;
 
-COMMENT ON FUNCTION stewards.import_lodestar_graph(text,jsonb) IS
-'83 (D5 ingest, whole-graph): land a full lodestar extraction {worlds,nodes,edges,cross_edges} — per-world structure via import_code_graph, then lodestar''s already-computed cross-service edges DIRECTLY into cross_world_edges (node-id→entity-id). lodestar is the single deterministic extraction authority; the substrate stores. Feed via: SELECT stewards.import_lodestar_graph(''project'', ''<lodestar JSON>''::jsonb).';
+COMMENT ON FUNCTION stewards.import_lodestar_graph(text,jsonb,text,jsonb) IS
+'83 (D5 ingest, whole-graph): land a full lodestar extraction {worlds,nodes,edges,cross_edges} — per-world structure via import_code_graph, then lodestar''s already-computed cross-service edges DIRECTLY into cross_world_edges (node-id→entity-id). lodestar is the single deterministic extraction authority; the substrate stores. Optional p_ref + p_repo_origins (#298) stamp git provenance into world/entity metadata (world.metadata.{ref,repo_origin}; entity.metadata.{path,repo_origin}) WITHOUT changing world identity — path (node-id 2nd ::-segment) unblocks #301 source links. Feed via: SELECT stewards.import_lodestar_graph(''project'', ''<lodestar JSON>''::jsonb, ''v1.2'', ''{"svc":"https://github.com/x/svc"}''::jsonb).';
