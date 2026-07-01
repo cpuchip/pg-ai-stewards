@@ -97,15 +97,23 @@ CREATE OR REPLACE FUNCTION stewards.import_lodestar_graph(
     p_graph   jsonb
 ) RETURNS jsonb LANGUAGE plpgsql AS $fn$
 DECLARE
-    w         text;
-    v_worlds  int := 0;
-    v_ce      int := 0;
-    ce        jsonb;
-    src_node  jsonb;
-    dst_node  jsonb;
-    v_src_eid bigint;
-    v_dst_eid bigint;
+    w            text;
+    v_worlds     int := 0;
+    v_ce         int := 0;
+    ce           jsonb;
+    v_src_eid    bigint;
+    v_dst_eid    bigint;
+    v_node_world jsonb;  -- node id -> its world (built once; O(1) edge-slicing)
+    v_idmap      jsonb;  -- node id -> entity_id (built once; O(1) cross-edge resolve)
 BEGIN
+    -- ★ Perf (2026-07-01): build two lookup maps ONCE instead of scanning the nodes
+    -- array per edge. The old nested scans were O(worlds×edges×nodes) + O(edges×nodes)
+    -- — fine for a demo, but they timed out importing a 45-service/3200-node monolith.
+
+    -- node id -> world (bare), so edges slice by world with a map lookup, no nested scan.
+    SELECT coalesce(jsonb_object_agg(n->>'id', n->>'world'), '{}'::jsonb) INTO v_node_world
+      FROM jsonb_array_elements(coalesce(p_graph->'nodes','[]'::jsonb)) n;
+
     -- Per-world structural import: reuse import_code_graph for nodes + intra-world
     -- edges + metadata (dedup on world+kind+name). Slice the combined graph by world.
     -- ★ World slugs are PROJECT-SCOPED (project/world): world_upsert dedups on slug
@@ -118,29 +126,24 @@ BEGIN
               WHERE n->>'world' = w),
             (SELECT coalesce(jsonb_agg(e),'[]'::jsonb)
                FROM jsonb_array_elements(coalesce(p_graph->'edges','[]'::jsonb)) e
-              WHERE e->>'src' IN (
-                  SELECT n2->>'id' FROM jsonb_array_elements(coalesce(p_graph->'nodes','[]'::jsonb)) n2
-                  WHERE n2->>'world' = w))
+              WHERE v_node_world ->> (e->>'src') = w)   -- O(1) map lookup, not a nested scan
         );
         v_worlds := v_worlds + 1;
     END LOOP;
 
-    -- Cross-world edges: lodestar already paired producer↔consumer. Resolve each
-    -- endpoint's extractor node-id → (world,kind,name) → entity_id, and store the
-    -- edge verbatim (rel/protocol/contract_key/confidence) in cross_world_edges.
-    FOR ce IN SELECT value FROM jsonb_array_elements(coalesce(p_graph->'cross_edges','[]'::jsonb)) AS t(value) LOOP
-        SELECT n INTO src_node FROM jsonb_array_elements(p_graph->'nodes') n WHERE n->>'id' = ce->>'src' LIMIT 1;
-        SELECT n INTO dst_node FROM jsonb_array_elements(p_graph->'nodes') n WHERE n->>'id' = ce->>'dst' LIMIT 1;
-        IF src_node IS NULL OR dst_node IS NULL THEN CONTINUE; END IF;
+    -- node id -> entity_id, built ONCE via an indexed join (worlds.slug +
+    -- world_entities(world_id,kind,name)); cross-edge resolution is then O(1) per edge.
+    SELECT coalesce(jsonb_object_agg(n->>'id', to_jsonb(e.entity_id)), '{}'::jsonb) INTO v_idmap
+      FROM jsonb_array_elements(coalesce(p_graph->'nodes','[]'::jsonb)) n
+      JOIN stewards.worlds wo ON wo.slug = p_project || '/' || (n->>'world')
+      JOIN stewards.world_entities e ON e.world_id = wo.world_id
+                                    AND e.kind = n->>'kind' AND e.name = n->>'name';
 
-        SELECT e.entity_id INTO v_src_eid
-          FROM stewards.world_entities e JOIN stewards.worlds wo ON e.world_id = wo.world_id
-         WHERE wo.slug = p_project || '/' || (src_node->>'world') AND e.kind = src_node->>'kind' AND e.name = src_node->>'name'
-         LIMIT 1;
-        SELECT e.entity_id INTO v_dst_eid
-          FROM stewards.world_entities e JOIN stewards.worlds wo ON e.world_id = wo.world_id
-         WHERE wo.slug = p_project || '/' || (dst_node->>'world') AND e.kind = dst_node->>'kind' AND e.name = dst_node->>'name'
-         LIMIT 1;
+    -- Cross-world edges: lodestar already paired producer↔consumer. Resolve each
+    -- endpoint's extractor node-id → entity_id via the map, and store the edge verbatim.
+    FOR ce IN SELECT value FROM jsonb_array_elements(coalesce(p_graph->'cross_edges','[]'::jsonb)) AS t(value) LOOP
+        v_src_eid := (v_idmap ->> (ce->>'src'))::bigint;
+        v_dst_eid := (v_idmap ->> (ce->>'dst'))::bigint;
         IF v_src_eid IS NULL OR v_dst_eid IS NULL THEN CONTINUE; END IF;
 
         INSERT INTO stewards.cross_world_edges(src_entity, dst_entity, rel_type, contract_key, protocol, confidence, evidence)

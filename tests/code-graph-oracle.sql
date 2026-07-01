@@ -59,5 +59,55 @@ BEGIN
     RAISE NOTICE 'OK e2e — extract 2 repos -> resolve -> svc-a route reaches svc-b client across worlds';
 END $$;
 
-SELECT 'CODE-GRAPH INGEST GREEN — extract → world-graph → cross-service traversal' AS result;
+-- ===================================================================
+-- ORACLE 3 — import_lodestar_graph (the whole-graph path, 83): a full
+-- lodestar extraction {worlds,nodes,edges,cross_edges} lands per-world
+-- structure under PROJECT-SCOPED slugs + lodestar's already-paired
+-- cross_edges DIRECTLY into cross_world_edges. Exercises the build-once
+-- lookup maps: v_node_world (edge-slicing) + v_idmap (cross-edge resolve).
+-- ===================================================================
+SELECT stewards.import_lodestar_graph('ltg-demo', '{
+  "worlds": ["svc-a","svc-b"],
+  "nodes": [
+    {"id":"a-f",  "world":"svc-a","kind":"file",         "name":"svc.go"},
+    {"id":"a-fn", "world":"svc-a","kind":"function",     "name":"svc.go:Handler"},
+    {"id":"a-ep", "world":"svc-a","kind":"http_endpoint","name":"GET /users","metadata":{"method":"GET","path":"/users/{id}"}},
+    {"id":"b-f",  "world":"svc-b","kind":"file",         "name":"cli.go"},
+    {"id":"b-cl", "world":"svc-b","kind":"http_client",  "name":"call users","metadata":{"method":"GET","path":"/users/1"}}
+  ],
+  "edges": [
+    {"src":"a-f","dst":"a-fn","rel":"contains"},
+    {"src":"a-fn","dst":"a-ep","rel":"contains"},
+    {"src":"b-f","dst":"b-cl","rel":"contains"}
+  ],
+  "cross_edges": [
+    {"src":"a-ep","dst":"b-cl","rel":"serves","protocol":"http","contract_key":"GET /users/{}","confidence":0.9}
+  ]
+}'::jsonb);
+
+DO $$
+DECLARE v_a int; v_b int; v_src bigint; v_dst bigint; v_ok boolean;
+BEGIN
+    -- project-scoped worlds populated (two projects with a shared world name would NOT merge)
+    SELECT count(*) INTO v_a FROM stewards.world_entities e JOIN stewards.worlds w ON e.world_id=w.world_id WHERE w.slug='ltg-demo/svc-a';
+    SELECT count(*) INTO v_b FROM stewards.world_entities e JOIN stewards.worlds w ON e.world_id=w.world_id WHERE w.slug='ltg-demo/svc-b';
+    ASSERT v_a = 3, format('ltg-demo/svc-a should have 3 entities, got %s', v_a);
+    ASSERT v_b = 2, format('ltg-demo/svc-b should have 2 entities, got %s', v_b);
+    -- v_node_world edge-slicing routed the intra-world contains edge to svc-a (not svc-b)
+    ASSERT EXISTS (
+      SELECT 1 FROM stewards.world_edges g JOIN stewards.worlds w ON g.world_id=w.world_id
+        JOIN stewards.world_entities s ON g.src_entity=s.entity_id
+       WHERE w.slug='ltg-demo/svc-a' AND s.name='svc.go:Handler' AND g.rel_type='contains'),
+      'the a-fn -> a-ep contains edge should land in svc-a (edge-slicing via v_node_world)';
+    -- v_idmap resolved both endpoints (node-id -> entity_id); the cross_edge landed verbatim
+    SELECT e.entity_id INTO v_src FROM stewards.world_entities e JOIN stewards.worlds w ON e.world_id=w.world_id WHERE w.slug='ltg-demo/svc-a' AND e.kind='http_endpoint';
+    SELECT e.entity_id INTO v_dst FROM stewards.world_entities e JOIN stewards.worlds w ON e.world_id=w.world_id WHERE w.slug='ltg-demo/svc-b' AND e.kind='http_client';
+    SELECT EXISTS(
+      SELECT 1 FROM stewards.cross_world_edges c
+       WHERE c.src_entity=v_src AND c.dst_entity=v_dst AND c.protocol='http' AND c.evidence='lodestar') INTO v_ok;
+    ASSERT v_ok, 'lodestar cross_edge (svc-a endpoint -> svc-b client) should land in cross_world_edges via v_idmap';
+    RAISE NOTICE 'OK whole-graph — import_lodestar_graph: project-scoped worlds + edge-slicing + cross_edge via build-once maps';
+END $$;
+
+SELECT 'CODE-GRAPH INGEST GREEN — extract → world-graph → cross-service traversal + whole-graph import' AS result;
 ROLLBACK;
