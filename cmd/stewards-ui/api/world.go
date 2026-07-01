@@ -20,6 +20,7 @@ func (d *Deps) registerWorld(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/world/list", d.worldListHandler)
 	mux.HandleFunc("GET /api/world/graph", d.worldGraphHandler)
 	mux.HandleFunc("GET /api/world/node", d.worldNodeHandler)
+	mux.HandleFunc("GET /api/world/cosmos", d.worldCosmosHandler)     // cross-service view: worlds + cross_world_edges + galaxies
 	mux.HandleFunc("GET /api/world/projects", d.worldProjectsHandler) // selectable canon projects (formal + corpus tags)
 	mux.HandleFunc("POST /api/world/build", d.worldBuildHandler)      // self-serve "Build a World"
 }

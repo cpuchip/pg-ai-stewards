@@ -236,3 +236,37 @@ This is a **new standing capability** (the presiding extension's `dominion_in_co
 - **Extractor language coverage** — graphify covers ~25 languages; the cross-service resolvers need per-framework producer/consumer extractors (Express/FastAPI/Spring/gRPC/Kafka…). Start with the stack Michael's platform actually uses; add frameworks as needed (each is a small, testable unit — fan-out shape).
 - **Contract-key false positives** — `/health`, `/ping`, generic topic names cause N×M noise; port glia/GitNexus's noise-filter list.
 - **Re-extraction cost** — incremental (graphify's sha256 + `build_merge`) keeps re-indexing cheap, but cross-service resolution re-runs per project on change; scope it to changed worlds.
+
+---
+
+## 13. Cosmology addendum (the nomenclature + the gravity layer)
+
+**Origin (2026-06-30):** Michael's friend offered a cosmological frame for the hierarchy, and it maps almost exactly onto the ratified model while surfacing three real capabilities (not just names). The motivating pain is concrete: their work platform is **269 repos** — a "ball-of-mud distributed monolith" that *looks like a black hole.* The whole point of deep-loring code is to give an AI harness (and a human) the tools to **see all of it without overwhelming either's context.** This addendum is the picture the build aims at.
+
+### 13.1 Nomenclature — the cosmic ladder names the depths (no structural change)
+
+| cosmic | model | what it is |
+|---|---|---|
+| **universe** | a root project | an org / a coherent body of work |
+| **galaxy** | sub-project | a platform |
+| **star system** | sub-project | a sub-system — a cluster of related services |
+| **world** | a world | a service / repo / bounded context (holds code) |
+| **moon** | entity | a module / file / function inside the service |
+| **multiverse** | the forest of disconnected components | universes with no edges between them (*yet*) |
+
+The `projects.parent_slug` n-level tree IS the ladder; the names are a UX/picker label (an optional `projects.metadata->>'cosmic_level'` or just rendered by depth). Worlds still don't nest (D4); a star-system *project* contains world *services*; a world contains moon *entities*. Same graph, intuitive zoom.
+
+### 13.2 Three capabilities (the part that isn't decoration) — staged AFTER the extractor
+
+Gravity is meaningless on an empty graph, so all three land once D5 (the extractor) has populated `cross_world_edges` from real repos.
+
+- **D6 — Gravity (a relatedness metric).** The pull between two worlds = the *weighted* count of `cross_world_edges` between them, weighted by `rel_type`: a `shares_table` is heavy gravity (tight coupling), a single `http_calls` is light. A world's **mass** = its total inbound+outbound weight — a high-mass world is a hub everything orbits. Implementable as a SQL view over `cross_world_edges` + a `rel_type → weight` config map.
+- **D7 — The black-hole diagnostic (modularity).** Community detection over the gravity graph yields a **modularity score**: a healthy galaxy has clear clusters with sparse inter-cluster links; a ball-of-mud has everything uniformly bound — *a black hole* (you can't extract one service without the whole thing collapsing inward). The tool puts a number on "this is a black hole," names the gravitationally-central worlds (the singularity), and flags the heaviest cross-edges (the accretion disk) as the first decoupling targets.
+- **D8 — Gravity-ranked context render (the navigation — the *purpose*).** "See everything without overwhelming context" = *orbit, don't ingest.* From a starting world, pull in only the gravitationally-nearest entities up to a token budget — the graphify token-budgeted subgraph render, but ranked by **mass** instead of degree, and zoomable by cosmic level (universe → moon). This is the substrate's own context DNA (tool shelf / `compact_context` / page-in) applied to code: a harness flies *through* the 269-repo black hole instead of loading it.
+
+**Multiverse / latent gravity.** Disconnected components = separate universes (a `connected_components` pass over the cross-edge graph). "Things that aren't related but could be" = **latent-edge suggestions** — name-similar contracts across universes that aren't yet linked (a candidate bridge to confirm or dismiss).
+
+### 13.3 Ratification (D6–D8)
+
+A new conceptual + capability layer → `dominion_in_council`. D6–D8 build *on top of* the D1–D5 foundation (now merged) and the extractor, in that order: **extractor populates → gravity measures → modularity diagnoses → the render navigates.** The cosmology is the north star; the extractor is the engine that fills the sky. *Recommend: ratify the nomenclature now (free, clarifying); build D6–D8 once the extractor lands real code worlds to weigh.*
+

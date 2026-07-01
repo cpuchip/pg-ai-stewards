@@ -590,6 +590,10 @@ export const api = {
     getJSON<WorldGraphResp>(`/api/world/graph?slug=${encodeURIComponent(slug)}${includeRefs ? '&include_refs=1' : ''}`),
   worldNode: (slug: string, id: number) =>
     getJSON<WorldNodeDetail>(`/api/world/node?slug=${encodeURIComponent(slug)}&id=${id}`),
+  // Cosmos (cross-service) view: worlds as nodes, cross_world_edges as links,
+  // galaxies = Louvain communities (candidate platforms). '' / 'all' = universe.
+  worldCosmos: (project?: string) =>
+    getJSON<CosmosResp>(`/api/world/cosmos${project && project !== 'all' ? `?project=${encodeURIComponent(project)}` : ''}`),
   workItemCreate: async (req: WorkItemCreateReq): Promise<WorkItemCreateResp> => {
     const r = await fetch('/api/work-items/create', {
       method: 'POST',
@@ -1067,6 +1071,25 @@ export type WorldGraphResp = { nodes: WorldNode[]; links: WorldLink[] }
 export type WorldBrief = { slug: string; name: string; summary?: string; is_private: boolean; entity_count: number; edge_count: number }
 export type WorldEdgeDetail = { rel: string; dir: 'in' | 'out'; other_id: number; other_name: string; evidence?: string }
 export type WorldNodeDetail = WorldNode & { edges: WorldEdgeDetail[] }
+
+// Cosmos (cross-service) view — the WHOLE constellation: each world (service) is
+// a node, each cross_world_edges row a link, and worlds cluster into GALAXIES
+// (Louvain communities = candidate platforms). Backs the World panel's cosmos
+// mode. See api/cosmos.go.
+export type CosmosWorld = {
+  slug: string; label: string; project: string; mass: number
+  // 3d-force-graph mutates these in place during simulation:
+  x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number
+  galaxy?: number // assigned client-side from `galaxies` for node colouring
+}
+export type CosmosEdge = { from: string; to: string; protocol: string; contract_key: string; confidence: number }
+export type CosmosResp = {
+  worlds: CosmosWorld[]
+  edges: CosmosEdge[]
+  galaxies: string[][] // communities, largest first
+  modularity: number
+  black_hole: boolean
+}
 
 
 export type PassRow = {
