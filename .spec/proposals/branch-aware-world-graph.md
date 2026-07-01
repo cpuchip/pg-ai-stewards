@@ -1,20 +1,35 @@
 # Branch-aware world-graph (#298) — design + one decision to make
 
-**★ RATIFIED (Michael, 2026-07-01): "I take your 2 recommendations."**
-1. **Identity model = A (ref-in-slug, default HEAD)** — the model of record for whenever
-   multi-ref coexistence is built.
-2. **The use is snapshot analysis** (digest the 269 repos, see platforms, re-platform) →
-   so **the additive foundation IS the deliverable**: `ref` + `repo_origin` recorded in
-   metadata + `file_path` source-links (legs 1+2, shipped: PR #22 + lodestar `16799c8`,
-   oracle-green). **`graph_diff` + the ref-in-slug *machinery* (legs 3–5) stay deferred as
-   speculative** until a real multi-ref / continuous-diff need shows up — building the
-   identity change now (which ripples into the shipped Cosmos view) would be speculative
-   complexity for a one-time snapshot. `route`/`file_path` naming settled: `file_path` is
-   the uniform pedantic key; `metadata.path` stays the route (a path template isn't a URI).
+**★ REFRAMED (Michael, 2026-07-01) — branch-awareness is CORE, and it's a WORKING tool.**
+My "snapshot analysis / defer the machinery" read was wrong. The real target: **269 repos
+live for years–decades, a permanent soup of branches, hundreds of devs each on their own
+branch (= their current task).** The tool must **show / diff / navigate / walk** the
+cross-service relationships *as-of any ref*, live, so a dev gets their current task done —
+"the difference between a planning tool and a working tool." So `graph_diff` + ref-scoping
++ ref-navigation are **the point, not deferrable.**
 
-Everything below is the original design (kept for when legs 3–5 are wanted).
+**★ The scale flips the identity model.** `ref-in-slug` (`project/world@ref`, my earlier
+rec) was sized for "compare 2 refs"; at hundreds of coexisting branches it explodes world
+rows — WRONG at this scale. The right model is **snapshot-as-first-class**: an indexed
+`graph_snapshot(project, ref, commit_sha, imported_at)` per (repo, ref/commit); entities +
+edges + cross_world_edges belong to a snapshot; ONE stable service identity underneath.
+Then: **show** = latest snapshot for (repo, branch) · **diff** = set-compare two snapshot
+ids · **freshness** = a new snapshot on push (re-index, not mutate) · **navigate** = query
+scoped to a ref. This is how versioned code-graph tools model it, and it's the only shape
+that makes all four cheap.
 
-**Status:** design surfaced for Michael's call (2026-07-01) → ratified above. Ratified *scope* (prior
+**★ The real deliverable surface is bigger than the Stewdio UI.** "provide tools to enable
+devs to walk these relationships" = an **MCP/API a dev's IDE or agent calls**, scoped to
+their branch ("what calls this endpoint on my branch? what does my branch change?"), plus
+a ref selector + diff mode on the Cosmos/World views.
+
+**Status:** foundation (ref + repo_origin + `file_path` capture) shipped (PR #22 + lodestar
+`16799c8`) = a stepping stone. The full arc — **re-architect the world-graph as
+snapshot-versioned + graph_diff + ref-scoped queries + the dev-facing walk-tools + a
+freshness/re-index pipeline** — needs a proper design pass at this scale before building
+(the snapshot model is a real migration of world_entities/world_edges/cross_world_edges).
+The `route`/`file_path` naming stands. Everything below is the original small-scale design,
+superseded by the snapshot model above. Ratified *scope* (prior
 session): "BOTH `project@ref` quick scoping AND `graph_diff(ref_a, ref_b)`, capturing
 repo-origin + ref at import (also unblocks #301 source links)." This note is the
 *how*, plus one genuine fork that building it uncovered.
