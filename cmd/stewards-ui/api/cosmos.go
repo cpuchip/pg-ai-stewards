@@ -26,6 +26,9 @@ import (
 var cwProtocolWeight = map[string]float64{
 	"http": 1.0, "grpc": 1.0, "pubsub": 0.5,
 	"schema": 2.0, "db": 3.0, "config": 1.5, "package": 1.5,
+	// k8s: a declared deploy-time service dependency (Helm values ref) — a direct
+	// runtime bind, on par with a shared schema. Kept in sync with lodestar/gravity.
+	"k8s": 2.0,
 }
 
 func cwWeightOf(protocol string) float64 {
