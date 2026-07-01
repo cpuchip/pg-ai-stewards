@@ -1,6 +1,20 @@
 # Branch-aware world-graph (#298) — design + one decision to make
 
-**Status:** design surfaced for Michael's call (2026-07-01). Ratified *scope* (prior
+**★ RATIFIED (Michael, 2026-07-01): "I take your 2 recommendations."**
+1. **Identity model = A (ref-in-slug, default HEAD)** — the model of record for whenever
+   multi-ref coexistence is built.
+2. **The use is snapshot analysis** (digest the 269 repos, see platforms, re-platform) →
+   so **the additive foundation IS the deliverable**: `ref` + `repo_origin` recorded in
+   metadata + `file_path` source-links (legs 1+2, shipped: PR #22 + lodestar `16799c8`,
+   oracle-green). **`graph_diff` + the ref-in-slug *machinery* (legs 3–5) stay deferred as
+   speculative** until a real multi-ref / continuous-diff need shows up — building the
+   identity change now (which ripples into the shipped Cosmos view) would be speculative
+   complexity for a one-time snapshot. `route`/`file_path` naming settled: `file_path` is
+   the uniform pedantic key; `metadata.path` stays the route (a path template isn't a URI).
+
+Everything below is the original design (kept for when legs 3–5 are wanted).
+
+**Status:** design surfaced for Michael's call (2026-07-01) → ratified above. Ratified *scope* (prior
 session): "BOTH `project@ref` quick scoping AND `graph_diff(ref_a, ref_b)`, capturing
 repo-origin + ref at import (also unblocks #301 source links)." This note is the
 *how*, plus one genuine fork that building it uncovered.
