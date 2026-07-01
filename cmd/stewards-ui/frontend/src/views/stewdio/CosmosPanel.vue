@@ -89,6 +89,31 @@ function galaxyMembers(slug: string): string[] {
   return g >= 0 ? (galaxies.value[g] ?? []) : []
 }
 
+// #301 item 6 — show the real member service names in the platform legend (was
+// just "N services"). A galaxy is a list of world slugs; map each to its display
+// label (the slug minus the project/ prefix, computed server-side in cosmosLabel),
+// falling back to the last path segment for any slug not in the loaded set.
+const labelBySlug = computed(() => {
+  const m = new Map<string, string>()
+  for (const wld of worlds.value) m.set(wld.slug, wld.label)
+  return m
+})
+function labelOf(slug: string): string {
+  return labelBySlug.value.get(slug) ?? slug.split('/').pop() ?? slug
+}
+function previewMembers(slugs: string[], n = 3): string {
+  const labels = slugs.map(labelOf)
+  return labels.length <= n ? labels.join(', ') : labels.slice(0, n).join(', ') + ` +${labels.length - n} more`
+}
+// which platform rows are expanded to their full (scrollable) member list.
+const expandedGalaxies = ref(new Set<number>())
+function toggleGalaxy(gi: number) {
+  const next = new Set(expandedGalaxies.value)
+  if (next.has(gi)) next.delete(gi)
+  else next.add(gi)
+  expandedGalaxies.value = next
+}
+
 function stopOrbit() {
   if (!graph) return
   orbiting.value = false
@@ -169,7 +194,15 @@ function onProject() {
 function resize() {
   if (!graph || !el.value) return
   const r = el.value.getBoundingClientRect()
+  // Hidden (v-show) or unsized: skip — sizing to 0×0 poisons the trackball rect
+  // (see below). The ResizeObserver re-fires with the real size on show.
+  if (r.width === 0 || r.height === 0) return
   graph.width(r.width).height(r.height)
+  // #301 item 2 — TrackballControls caches its screen rect once at construction and
+  // 3d-force-graph never re-runs handleResize; a graph built while hidden (this
+  // panel mounts hidden under v-show) keeps a 0×0 rect → orbit/pan divide by zero →
+  // frozen while clicks still work. Recompute against the live element every resize.
+  ;(graph.controls() as { handleResize?: () => void }).handleResize?.()
 }
 
 onMounted(async () => {
@@ -265,7 +298,13 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="h-full w-full flex flex-col bg-zinc-950 relative overflow-hidden">
+  <div class="h-full w-full flex bg-zinc-950 relative overflow-hidden">
+    <!-- graph column — relative host for the absolute toolbar / legends / overlays;
+         the detail drawer (below) is a flex SIBLING that reflows this column narrower
+         when open (#301 item 3) instead of overlaying and hiding the graph. min-w-0
+         lets this flex column shrink below the canvas's pixel width when the drawer
+         opens (default min-width:auto would pin it and clip instead of reflow). -->
+    <div class="relative flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
     <!-- toolbar: mode toggle · project scope · header stats · orbit -->
     <div class="absolute top-1 left-2 right-2 z-20 flex items-center gap-2 flex-wrap text-[11px]">
       <div class="inline-flex rounded overflow-hidden border border-zinc-700 shrink-0">
@@ -302,8 +341,11 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- the 3D canvas -->
-    <div ref="el" class="flex-1 min-h-0"></div>
+    <!-- the 3D canvas. `isolate z-0` (#301 item 4): trap the WebGL canvas in its own
+         low stacking context so its compositing layer can't paint over the cockpit
+         chrome (the ▦ panels menu / selectors), which dockview's transform/will-change
+         layers would otherwise let it do. -->
+    <div ref="el" class="flex-1 min-h-0 relative z-0 isolate"></div>
 
     <!-- galaxy legend = the candidate platforms (largest first) -->
     <div v-if="galaxies.length" class="absolute left-3 bottom-3 z-10 max-w-[45%]">
@@ -312,12 +354,26 @@ onUnmounted(() => {
               @click="showGalaxyLegend = !showGalaxyLegend">
         {{ showGalaxyLegend ? '▾' : '▸' }} platforms ({{ galaxies.length }})
       </button>
-      <div v-if="showGalaxyLegend" class="mt-1 bg-zinc-900/85 border border-zinc-800 rounded p-2 max-h-44 overflow-auto space-y-1">
-        <div v-for="(g, gi) in galaxies" :key="gi" class="flex items-center gap-1.5 text-[10px] text-zinc-300">
-          <span class="inline-block w-2.5 h-2.5 rounded-full shrink-0" :style="{ backgroundColor: galaxyColor(gi) }"></span>
-          <span class="text-zinc-400">platform {{ gi + 1 }}</span>
-          <span class="text-zinc-600">·</span>
-          <span class="truncate">{{ g.length }} service{{ g.length === 1 ? '' : 's' }}</span>
+      <div v-if="showGalaxyLegend" class="mt-1 bg-zinc-900/85 border border-zinc-800 rounded p-2 max-h-52 overflow-auto space-y-1.5">
+        <!-- #301 item 6 — each platform row shows its real member service names.
+             Click to expand the full (scrollable) list; the preview truncates to
+             "a, b, c +N more" and the tooltip carries every member. -->
+        <div v-for="(g, gi) in galaxies" :key="gi" class="text-[10px]">
+          <button class="flex items-center gap-1.5 w-full text-left hover:text-white" @click="toggleGalaxy(gi)">
+            <span class="inline-block w-2.5 h-2.5 rounded-full shrink-0" :style="{ backgroundColor: galaxyColor(gi) }"></span>
+            <span class="text-zinc-400 shrink-0">platform {{ gi + 1 }}</span>
+            <span class="text-zinc-600 shrink-0">·</span>
+            <span class="text-zinc-500 shrink-0">{{ g.length }} service{{ g.length === 1 ? '' : 's' }}</span>
+            <span class="text-zinc-600 ml-auto shrink-0">{{ expandedGalaxies.has(gi) ? '▾' : '▸' }}</span>
+          </button>
+          <div class="pl-4 text-zinc-300" :title="g.map(labelOf).join(', ')">
+            <template v-if="expandedGalaxies.has(gi)">
+              <div class="mt-0.5 max-h-24 overflow-auto space-y-0.5">
+                <div v-for="s in g" :key="s" class="truncate">{{ labelOf(s) }}</div>
+              </div>
+            </template>
+            <div v-else class="truncate">{{ previewMembers(g) }}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -348,9 +404,13 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- detail drawer -->
+    <div v-if="err" class="absolute bottom-2 left-2 right-2 text-rose-400 text-xs z-20">{{ err }}</div>
+    </div><!-- /graph column -->
+
+    <!-- detail drawer — a flex SIBLING of the graph column (not an absolute overlay),
+         so opening it reflows the graph narrower and keeps it visible (#301 item 3). -->
     <aside v-if="selected"
-           class="absolute top-0 right-0 h-full w-80 bg-zinc-900/95 border-l border-zinc-800 overflow-auto p-3 z-20 text-[13px]">
+           class="w-80 shrink-0 h-full bg-zinc-900/95 border-l border-zinc-800 overflow-auto p-3 text-[13px]">
       <div class="flex items-start justify-between gap-2 mb-2">
         <div class="text-zinc-100 text-base font-medium leading-tight break-all">{{ selected.label }}</div>
         <button class="text-zinc-500 hover:text-zinc-200 shrink-0" title="close" @click="selected = null">✕</button>
@@ -388,12 +448,10 @@ onUnmounted(() => {
               class="flex items-center gap-1.5 text-[12px]"
               :class="s === selected.slug ? 'text-zinc-200 font-medium' : 'text-zinc-400'">
             <span class="w-1.5 h-1.5 rounded-full shrink-0" :style="{ background: galaxyColor(galaxyIndexOf(selected.slug)) }"></span>
-            <span class="truncate">{{ s }}</span>
+            <span class="truncate" :title="s">{{ labelOf(s) }}</span>
           </li>
         </ul>
       </div>
     </aside>
-
-    <div v-if="err" class="absolute bottom-2 left-2 right-2 text-rose-400 text-xs z-20">{{ err }}</div>
   </div>
 </template>

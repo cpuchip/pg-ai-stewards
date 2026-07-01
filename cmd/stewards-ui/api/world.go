@@ -426,11 +426,16 @@ func (d *Deps) worldNodeHandler(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "slug and id required")
 		return
 	}
+	// metadata carries #301 item-1 detail (method/path/file_path/repo_origin for
+	// code entities); world_ref is the world's extraction ref (#298). We surface
+	// them on the detail path only (not on every graph node) so the drawer is rich
+	// without bloating the whole-graph payload.
 	var raw []byte
 	err := d.Pool.QueryRow(ctx,
 		`SELECT jsonb_build_object(
 		    'id', e.entity_id, 'kind', e.kind, 'name', e.name, 'summary', e.summary,
 		    'aliases', e.aliases, 'source_refs', e.source_refs,
+		    'metadata', e.metadata, 'world_ref', w.metadata->>'ref',
 		    'edges', COALESCE((SELECT jsonb_agg(jsonb_build_object(
 		        'rel', g.rel_type,
 		        'dir', CASE WHEN g.src_entity = e.entity_id THEN 'out' ELSE 'in' END,
@@ -447,6 +452,28 @@ func (d *Deps) worldNodeHandler(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, err.Error())
 		return
 	}
+
+	// #301 item 5: build a "↗ source" link server-side (the normalizer is a
+	// unit-tested Go helper — see world_source.go) from the entity's repo_origin +
+	// file_path and the world's ref. Absent provenance → no source_url (the UI just
+	// omits the link). world_ref was only needed to build it, so drop it after.
+	var m map[string]any
+	if json.Unmarshal(raw, &m) == nil {
+		var origin, filePath string
+		if meta, ok := m["metadata"].(map[string]any); ok {
+			origin, _ = meta["repo_origin"].(string)
+			filePath, _ = meta["file_path"].(string)
+		}
+		ref, _ := m["world_ref"].(string)
+		if u := repoBlobURL(origin, ref, filePath); u != "" {
+			m["source_url"] = u
+		}
+		delete(m, "world_ref")
+		if b, mErr := json.Marshal(m); mErr == nil {
+			raw = b
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	_, _ = w.Write(raw)
 }

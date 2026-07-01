@@ -1070,7 +1070,20 @@ export type WorldLink = { source: number | WorldNode; target: number | WorldNode
 export type WorldGraphResp = { nodes: WorldNode[]; links: WorldLink[] }
 export type WorldBrief = { slug: string; name: string; summary?: string; is_private: boolean; entity_count: number; edge_count: number }
 export type WorldEdgeDetail = { rel: string; dir: 'in' | 'out'; other_id: number; other_name: string; evidence?: string }
-export type WorldNodeDetail = WorldNode & { edges: WorldEdgeDetail[] }
+// Entity metadata surfaced on the node-detail path only (#301 item 1). For code
+// worlds this carries method/path (the HTTP route) + the repo-relative file_path
+// + repo_origin; empty ({}) for lore entities. `source_url` is the browsable
+// "↗ source" link the server builds from repo_origin + file_path + the world's
+// ref (#301 item 5); absent when provenance is missing (degrade gracefully).
+export type WorldNodeMeta = {
+  method?: string; path?: string; file_path?: string; repo_origin?: string
+  [k: string]: unknown
+}
+export type WorldNodeDetail = WorldNode & {
+  edges: WorldEdgeDetail[]
+  metadata?: WorldNodeMeta
+  source_url?: string
+}
 
 // Cosmos (cross-service) view — the WHOLE constellation: each world (service) is
 // a node, each cross_world_edges row a link, and worlds cluster into GALAXIES

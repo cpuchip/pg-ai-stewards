@@ -186,13 +186,18 @@ watch(() => store.dev, () => closeDevPanes())
 
 <template>
   <div class="h-full w-full relative">
-    <!-- b3: collapse/expand the leftmost (Work items) column, VS-Code style -->
+    <!-- b3: collapse/expand the leftmost (Work items) column, VS-Code style.
+         z-40 + isolate (#301 item 4): the cockpit chrome must sit ABOVE a panel's
+         WebGL canvas. A canvas is composited on its own layer and dockview promotes
+         its containers (transform/will-change), which can let the canvas paint over
+         plain z-20 chrome; an isolated high-z stacking context keeps the chrome on top
+         (the canvas is also trapped low, see WorldGraphPanel/CosmosPanel). -->
     <button
-      class="absolute top-1 left-2 z-20 text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
+      class="absolute top-1 left-2 z-40 isolate text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
       :title="edgeCollapsed.left ? 'show the left panel' : 'collapse the left panel'"
       @click="toggleEdge('left')">{{ edgeCollapsed.left ? '❯' : '❮' }}</button>
     <!-- windowing manager: open / reopen any pane -->
-    <div class="absolute top-1 right-2 z-20 flex items-center gap-1">
+    <div class="absolute top-1 right-2 z-40 isolate flex items-center gap-1">
       <!-- b3: collapse/expand the rightmost (Chat) column -->
       <button
         class="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"

@@ -76,7 +76,23 @@ const nodeRadius = (n: WorldNode) => Math.cbrt(1 + (n.degree ?? 0)) * NODE_REL_S
 const el = ref<HTMLDivElement>()
 const worlds = ref<WorldBrief[]>([])
 const selected = ref<WorldNodeDetail | WorldNode | null>(null)
-const detail = ref<WorldNodeDetail | null>(null) // lazily-loaded typed edges
+const detail = ref<WorldNodeDetail | null>(null) // lazily-loaded typed edges + metadata
+
+// #301 item 1 — richer node detail. The graph node carries no metadata (we don't
+// bloat every node); the lazily-loaded /node detail does. For a code entity it
+// surfaces the HTTP route (method + path) and the repo-relative file; source_url
+// (item 5) is the browsable "↗ source" link the server builds from repo_origin +
+// file_path + the world's ref. All empty for lore entities → the block hides.
+const nodeMeta = computed(() => detail.value?.metadata ?? null)
+const nodeRoute = computed(() => {
+  const m = nodeMeta.value
+  if (!m) return ''
+  const method = String(m.method ?? '').trim()
+  const path = String(m.path ?? '').trim()
+  return method || path ? `${method} ${path}`.trim() : ''
+})
+const nodeFile = computed(() => String(nodeMeta.value?.file_path ?? '').trim())
+const nodeSourceUrl = computed(() => detail.value?.source_url ?? '')
 const active = ref(new Set<string>())            // kinds currently shown
 const activeProjects = ref(new Set<string>())    // source projects/buckets currently shown (cross-project toggle)
 const query = ref('')
@@ -270,7 +286,19 @@ async function loadWorld(slug: string) {
 function resize() {
   if (!graph || !el.value) return
   const r = el.value.getBoundingClientRect()
+  // Hidden (v-show → display:none) or not yet laid out: skip. Sizing to 0×0 is
+  // pointless AND poisons the trackball rect (see below). The ResizeObserver
+  // re-fires with the real size the moment the panel is shown, self-healing.
+  if (r.width === 0 || r.height === 0) return
   graph.width(r.width).height(r.height)
+  // #301 item 2 — the mouse-freeze fix. TrackballControls caches its screen rect
+  // ONCE at construction (three's TrackballControls.handleResize, called only from
+  // the ctor) and 3d-force-graph never calls it again on resize. So a graph built
+  // or resized while hidden (0×0) keeps a stale/zero screen → the rotate/pan math
+  // divides by screen.width/height = 0 → NaN → orbit frozen, while click raycasting
+  // (which uses the live canvas rect) still works. Recompute it against the now-live
+  // element every resize. Guarded: only trackball/orbit expose handleResize.
+  ;(graph.controls() as { handleResize?: () => void }).handleResize?.()
 }
 
 function toggleBuild() {
@@ -420,7 +448,13 @@ onUnmounted(() => {
 <template>
   <div class="h-full w-full relative bg-zinc-950 overflow-hidden">
     <!-- WORLD mode — this world's entity graph (the original panel) -->
-    <div v-show="mode === 'world'" class="h-full w-full flex flex-col relative overflow-hidden">
+    <div v-show="mode === 'world'" class="h-full w-full flex relative overflow-hidden">
+    <!-- graph column — the relative host for the absolute toolbar / legends / overlays.
+         The detail drawer (below) is a flex SIBLING that reflows this column narrower
+         when open (#301 item 3), instead of overlaying and hiding the graph. min-w-0
+         lets this flex column shrink below the canvas's pixel width when the drawer
+         opens (default min-width:auto would pin it and clip instead of reflow). -->
+    <div class="relative flex-1 min-w-0 min-h-0 flex flex-col overflow-hidden">
     <!-- toolbar: mode toggle · world picker · search · legend/filter chips · orbit -->
     <div class="absolute top-1 left-2 right-2 z-20 flex items-center gap-2 flex-wrap text-[11px]">
       <!-- mode toggle: World ⇄ Cosmos (cross-service) -->
@@ -555,8 +589,12 @@ onUnmounted(() => {
       <div class="text-zinc-600 text-[10px] leading-snug">Upload → it's imported into the project, then the world-build agent extracts entities + relationships. Reuse an existing world name + project to EXPAND it (new lore merges in). Runs as a chat session (opens on the right); the graph fills in — re-pick the world to refresh. Private by default.</div>
     </div>
 
-    <!-- the 3D canvas -->
-    <div ref="el" class="flex-1 min-h-0"></div>
+    <!-- the 3D canvas. `isolate z-0` (#301 item 4): a WebGL canvas is promoted to
+         its own compositing layer, and dockview promotes its containers too (via
+         transform/will-change), which let the canvas layer paint OVER the cockpit
+         chrome (the ▦ panels menu / selectors). Isolating the canvas into its own
+         low stacking context traps it below that chrome. -->
+    <div ref="el" class="flex-1 min-h-0 relative z-0 isolate"></div>
 
     <!-- edge colour legend — what the connecting lines mean (relationship types) -->
     <div v-if="relsPresent.length" class="absolute left-3 bottom-3 z-10 max-w-[55%]">
@@ -582,9 +620,14 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <!-- detail drawer -->
+    <div v-if="err" class="absolute bottom-2 left-2 right-2 text-rose-400 text-xs z-20">{{ err }}</div>
+    </div><!-- /graph column -->
+
+    <!-- detail drawer — a flex SIBLING of the graph column (not an absolute overlay),
+         so opening it reflows the graph narrower and keeps it visible (#301 item 3).
+         The graph's ResizeObserver re-fits the canvas when the column width changes. -->
     <aside v-if="selected"
-           class="absolute top-0 right-0 h-full w-80 bg-zinc-900/95 border-l border-zinc-800 overflow-auto p-3 z-20 text-[13px]">
+           class="w-80 shrink-0 h-full bg-zinc-900/95 border-l border-zinc-800 overflow-auto p-3 text-[13px]">
       <div class="flex items-start justify-between gap-2 mb-2">
         <div class="text-zinc-100 text-base font-medium leading-tight">{{ selected.name }}</div>
         <button class="text-zinc-500 hover:text-zinc-200 shrink-0" title="close" @click="selected = null">✕</button>
@@ -601,6 +644,23 @@ onUnmounted(() => {
 
       <div v-if="selected.aliases && selected.aliases.length" class="text-zinc-500 text-[11px] mb-2">
         aka {{ selected.aliases.join(', ') }}
+      </div>
+
+      <!-- #301 item 1 + 5 — entity details: the HTTP route (method + path) and the
+           repo-relative file for a code entity, plus a "↗ source" link to the file on
+           the branch (item 5). Hidden entirely for lore entities (no such metadata). -->
+      <div v-if="nodeRoute || nodeFile || nodeSourceUrl" class="mb-3 space-y-1 text-[12px]">
+        <div v-if="nodeRoute" class="flex items-baseline gap-1.5">
+          <span class="text-zinc-600 shrink-0">route</span>
+          <code class="text-sky-300 break-all">{{ nodeRoute }}</code>
+        </div>
+        <div v-if="nodeFile" class="flex items-baseline gap-1.5">
+          <span class="text-zinc-600 shrink-0">file</span>
+          <code class="text-zinc-300 break-all">{{ nodeFile }}</code>
+        </div>
+        <a v-if="nodeSourceUrl" :href="nodeSourceUrl" target="_blank" rel="noopener noreferrer"
+           class="inline-flex items-center gap-1 text-emerald-400 hover:text-emerald-300"
+           :title="nodeSourceUrl">↗ source</a>
       </div>
 
       <p v-if="selected.summary" class="text-zinc-300 leading-relaxed mb-4">{{ selected.summary }}</p>
@@ -646,8 +706,6 @@ onUnmounted(() => {
         </div>
       </div>
     </aside>
-
-    <div v-if="err" class="absolute bottom-2 left-2 right-2 text-rose-400 text-xs z-20">{{ err }}</div>
     </div>
 
     <!-- COSMOS mode — the cross-service constellation (its own graph, kept alive
