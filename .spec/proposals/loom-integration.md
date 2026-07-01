@@ -96,7 +96,34 @@ Build Phase 1 and run **one** pull-only dispatch on a small, real, read-mostly w
 Inspect the diff + the `--json` Reply + the stored `session_id`. Bring that result to the
 council moment as the evidence for greenlighting Phase 2.
 
-*loom-side gap to flag to general-workspace:* an optional `--clone <git-url>` convenience
-would fold the provision-the-clone step into loom; not needed to start.
+## Phase 1 viability proof — RESULT (2026-07-01)
+
+Ran the pull-only dispatch on a small real corpus (two lodestar `.go` files) with the
+exact read-mostly shape (`--allowed-tools "Read,Bash,Write,Edit,Glob,Grep"`, **no
+`--mcp-config`** → zero substrate access, `--json`). Outcome:
+
+- **The mechanic works end-to-end.** loom → claude read the code with its own tools →
+  wrote a genuinely accurate `findings.md` back through the `--dir` (the pull channel) →
+  returned a clean `--json` Reply: `{backend:"claude", session_id:"74cc8496…",
+  cost_usd:0.19, turns:5}`. The digestion was *correct* (it identified `NormalizeHTTPKey`
+  as the deterministic oracle and the `CrossEdge.ContractKey` pairing). Read-mostly was
+  honored — both source files unchanged; only the new `findings.md` appeared. **This is
+  exactly what a substrate `loom_dispatch` would receive** (the `session_id` is the
+  durable work-item handle; the dir diff + Reply are the pull channels).
+- **One prereq surfaced for `--isolate`** (the docker-walled variant autonomous dispatch
+  requires): the `loom-claude` image runs claude as **root**, and Claude Code refuses
+  `--dangerously-skip-permissions` under root. `docker/Dockerfile.claude` has no `USER`
+  directive. **Fix (loom-side, general-workspace's stewardship):** add a non-root user to
+  the image (`adduser` + `USER`). Signalled to that lane. The direct-mode proof above
+  validated everything except the wall; the wall itself was already live-verified
+  separately (loom's remember/recall isolate test).
+
+**So Phase 1 is proven modulo the one-line image fix.** Once `loom-claude` runs non-root,
+isolated pull-only dispatch is ready; the write-back hinge (Phase 2) remains the
+`dominion_in_council` gate.
+
+*loom-side gaps to flag to general-workspace:* (1) the non-root `USER` in
+`docker/Dockerfile.claude` (blocks isolated `--skip-permissions`); (2) an optional
+`--clone <git-url>` convenience to fold the provision-the-clone step into loom.
 ```
 ```
