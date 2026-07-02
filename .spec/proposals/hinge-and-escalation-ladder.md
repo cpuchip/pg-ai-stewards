@@ -113,10 +113,32 @@ surface degrades from live card → tray → notification, never silently strand
 
 **`ask_up(question, [min_tier])`**: the current (often weak/local) model consults a
 STRONGER model and gets the answer back to reason with — it does NOT hand off authority
-or produce a side effect. Routing reuses the alias/tier system (`ask_up` resolves a
-model at least one tier above the caller, or a named strong alias). The answer returns
-as a tool result; the asking agent still decides and still hits the tool-effect gate for
-anything dangerous.
+or produce a side effect. The answer returns as a tool result; the asking agent still
+decides and still hits the tool-effect gate for anything dangerous.
+
+**★ The escalation ladder is DATA, not hardcode (Michael, 2026-07-02).** Not everyone
+has Opus to stand in as their Hinge — and we might want a *Fable* hinge now that it's
+available. So the model order lives in a table that can grow or shrink:
+
+```sql
+CREATE TABLE stewards.escalation_ladder (
+    rung        int  PRIMARY KEY,          -- 1 = weakest … N = strongest
+    model_alias text NOT NULL,             -- resolves via 19-models aliases (BYO models)
+    role_hint   text,                      -- e.g. 'local-doer', 'consult', 'hinge'
+    enabled     boolean NOT NULL DEFAULT true
+);
+```
+
+Resolution: when an ask comes in, find the CALLER's rung (its model alias → ladder
+position; unlisted → rung 0) and route to the next enabled rung above (or the first
+rung ≥ `min_tier`). The TOP enabled rung is the default **hinge model** — whoever the
+operator has: Opus, Fable, a strong local MoE, anything. Adopters edit rows, not code;
+`ask_up` and the autopilot reviewer both resolve from the same ladder, so "which model
+is my hinge" is one UPDATE. (Same genericity constraint as the loom hub: no model
+name hardcoded in the mechanism — ours is just one configuration of it.) A seed
+migration inserts a sensible default ladder from the models the install has wired;
+`model_escalation` (06-cost) keeps its role as the per-call failover, distinct from
+this authority ladder.
 
 Because it transfers no authority and causes no external effect, `ask_up` is **safe
 autonomous** (bins 1–2) — gated only by cost/budget, not by council. It is the cheap
