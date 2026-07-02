@@ -101,6 +101,25 @@ const loading = ref(false)
 const orbiting = ref(true)
 const showSearch = ref(false)
 
+// ── huge-world guardrails ─────────────────────────────────────────────────
+// A lodestar-imported platform world can carry 10k+ entities. The showpiece
+// styling is PER-NODE/PER-EDGE expensive: a SpriteText label = one canvas
+// texture per node; linkWidth>0 = one tube MESH per edge; particles+arrows =
+// per-frame CPU work per edge. At that scale the scene saturates the browser's
+// shared GPU process — which every window on the machine (and the DWM
+// compositor: the Start menu!) depends on. Two walls:
+//   1. the server caps the payload to the top-N entities by degree (MAX_NODES),
+//   2. above the LITE thresholds we drop to cheap rendering: GL lines (one
+//      draw call for ALL edges), labels only on the top hubs + hover, faceted
+//      spheres, no particles/arrows, and no blocking warmup ticks.
+const MAX_NODES = 3000            // server-side top-N cap per load
+const LITE_NODES = 1200           // lite rendering above this many nodes…
+const LITE_LINKS = 2000           // …or this many links
+const HUB_LABELS = 120            // in lite mode, only the top-K hubs get labels
+let lite = false                  // current render tier (set per load)
+let hubIds = new Set<number>()    // nodes that keep a SpriteText label in lite mode
+const truncNote = ref('')         // "showing top N of M…" banner text
+
 // "Build a World" — self-serve: name + a canon source (upload a PDF/zip, an
 // existing project, or pasted canon) → dispatch the world-build agent. The same
 // form EXPANDS an existing world: reuse its name + project and upload more.
@@ -260,18 +279,47 @@ function focusNeighbor(id: number) {
   if (n) selectNode(n)
 }
 
+// applyRenderTier flips the expensive showpiece styling on/off for the CURRENT
+// graph size. Must run BEFORE graphData() so the objects are built in the right
+// tier (nodeThreeObject / link geometry are chosen at build time).
+function applyRenderTier(nodes: WorldNode[], linkCount: number) {
+  if (!graph) return
+  lite = nodes.length > LITE_NODES || linkCount > LITE_LINKS
+  hubIds = new Set<number>()
+  if (lite) {
+    // top-K hubs by degree keep their name labels; the rest label on hover.
+    const ranked = [...nodes].sort((a, b) => (b.degree ?? 0) - (a.degree ?? 0))
+    for (const n of ranked.slice(0, HUB_LABELS)) hubIds.add(n.id)
+  }
+  graph
+    .nodeResolution(lite ? 8 : 18)              // faceted spheres are ~5× fewer triangles
+    .linkWidth(lite ? 0 : 1.4)                  // 0 → GL LineSegments: ONE draw call for all edges (>0 = a tube mesh PER edge)
+    .linkOpacity(lite ? 0.35 : 0.7)
+    .linkDirectionalParticles(lite ? 0 : 2)     // particles recompute per-frame per-edge on the CPU
+    .linkDirectionalArrowLength(lite ? 0 : 3.2) // each arrow is its own cone mesh
+    .warmupTicks(lite ? 0 : 60)                 // never BLOCK the main thread pre-settling a big sim
+    .cooldownTime(lite ? 8000 : 4000)
+}
+
 async function loadWorld(slug: string) {
   if (!graph || !slug) return
   err.value = ''
   loading.value = true
   selected.value = null
   detail.value = null
+  truncNote.value = ''
   try {
-    const g: WorldGraphResp = await api.worldGraph(slug, true)
+    const g: WorldGraphResp = await api.worldGraph(slug, true, MAX_NODES)
     nodeById = new Map(g.nodes.map(n => [n.id, n]))
     active.value = new Set(g.nodes.map(n => n.kind)) // all kinds on
     activeProjects.value = new Set(g.nodes.flatMap(n => n.projects ?? [])) // all buckets on
     relsPresent.value = [...new Set(g.links.map(l => l.rel).filter(Boolean))].sort() // legend
+    applyRenderTier(g.nodes, g.links.length)
+    if (g.truncated && g.total_nodes) {
+      truncNote.value = `big world — showing the top ${g.nodes.length.toLocaleString()} of ${g.total_nodes.toLocaleString()} entities (by connections); search covers what's shown`
+    } else if (lite) {
+      truncNote.value = `${g.nodes.length.toLocaleString()} entities — lite rendering (labels on hubs + hover)`
+    }
     graph.graphData(g)
     applyVisibility()
   } catch (e) {
@@ -353,6 +401,11 @@ onMounted(async () => {
     .nodeResolution(18)                  // smooth spheres (default 8 = faceted)
     .nodeLabel((n: WorldNode) => n.name)
     .nodeThreeObject((n: WorldNode) => {
+      // ★ huge-world wall: every SpriteText is its OWN canvas texture on the
+      // GPU. In lite mode only the top hubs get one — the rest are plain
+      // spheres with the built-in hover tooltip (nodeLabel), which costs
+      // nothing until pointed at. Returning undefined = default sphere only.
+      if (lite && !hubIds.has(n.id)) return undefined as unknown as object
       // crisp, high-contrast plate label — legibility is the job now that the
       // bloom is gone. Lightened kind tint + glyph stroke + near-solid plate.
       const s = new SpriteText(n.name)
@@ -606,6 +659,14 @@ onUnmounted(() => {
           <span class="inline-block w-3.5 h-1 rounded-sm shrink-0" :style="{ backgroundColor: relColor(r) }"></span>{{ r }}
         </span>
       </div>
+    </div>
+
+    <!-- huge-world banner: what the cap/lite tier is doing, so a truncated view
+         never masquerades as the whole world -->
+    <div v-if="truncNote" class="absolute top-9 left-2 z-10">
+      <span class="text-[10px] text-amber-300/90 bg-zinc-900/85 border border-amber-800/50 rounded px-1.5 py-0.5">
+        ⚡ {{ truncNote }}
+      </span>
     </div>
 
     <!-- loading / empty overlays -->

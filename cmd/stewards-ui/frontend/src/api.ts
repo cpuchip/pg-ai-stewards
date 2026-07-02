@@ -586,8 +586,8 @@ export const api = {
 
   // Loreworks World panel (Stewdio 3D knowledge graph).
   worldList: () => getJSON<{ items: WorldBrief[] }>('/api/world/list'),
-  worldGraph: (slug: string, includeRefs = true) =>
-    getJSON<WorldGraphResp>(`/api/world/graph?slug=${encodeURIComponent(slug)}${includeRefs ? '&include_refs=1' : ''}`),
+  worldGraph: (slug: string, includeRefs = true, maxNodes = 0) =>
+    getJSON<WorldGraphResp>(`/api/world/graph?slug=${encodeURIComponent(slug)}${includeRefs ? '&include_refs=1' : ''}${maxNodes > 0 ? `&max_nodes=${maxNodes}` : ''}`),
   worldNode: (slug: string, id: number) =>
     getJSON<WorldNodeDetail>(`/api/world/node?slug=${encodeURIComponent(slug)}&id=${id}`),
   // Cosmos (cross-service) view: worlds as nodes, cross_world_edges as links,
@@ -1067,7 +1067,7 @@ export type WorldNode = {
   x?: number; y?: number; z?: number; vx?: number; vy?: number; vz?: number
 }
 export type WorldLink = { source: number | WorldNode; target: number | WorldNode; rel: string }
-export type WorldGraphResp = { nodes: WorldNode[]; links: WorldLink[] }
+export type WorldGraphResp = { nodes: WorldNode[]; links: WorldLink[]; total_nodes?: number; total_edges?: number; truncated?: boolean }
 export type WorldBrief = { slug: string; name: string; summary?: string; is_private: boolean; entity_count: number; edge_count: number }
 export type WorldEdgeDetail = { rel: string; dir: 'in' | 'out'; other_id: number; other_name: string; evidence?: string }
 // Entity metadata surfaced on the node-detail path only (#301 item 1). For code

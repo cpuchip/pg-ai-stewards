@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -308,6 +309,12 @@ func (d *Deps) worldGraphHandler(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "slug required")
 		return
 	}
+	// max_nodes caps a HUGE world to its top-N entities by degree (a
+	// lodestar-imported platform world can carry 10k+ file/function entities —
+	// rendering them all as one scene saturates the browser's shared GPU process
+	// and freezes every window on the machine). 0 = uncapped. The response carries
+	// total_nodes/total_edges + truncated so the UI can say what it's showing.
+	maxNodes := atoiDefault(r.URL.Query().Get("max_nodes"), 0, 0, 1<<20)
 	var raw []byte
 	if err := d.Pool.QueryRow(ctx, `SELECT stewards.world_graph($1)`, slug).Scan(&raw); err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
@@ -315,11 +322,6 @@ func (d *Deps) worldGraphHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(raw) == 0 {
 		writeJSON(w, http.StatusOK, map[string]any{"nodes": []any{}, "links": []any{}})
-		return
-	}
-	if r.URL.Query().Get("include_refs") != "1" {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
-		_, _ = w.Write(raw)
 		return
 	}
 
@@ -333,11 +335,27 @@ func (d *Deps) worldGraphHandler(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	totalNodes, totalEdges := len(g.Nodes), len(g.Links)
+	truncated := maxNodes > 0 && totalNodes > maxNodes
+	if truncated {
+		g.Nodes, g.Links = topNByDegree(g.Nodes, g.Links, maxNodes)
+	}
+	if r.URL.Query().Get("include_refs") != "1" {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"nodes": g.Nodes, "links": g.Links,
+			"total_nodes": totalNodes, "total_edges": totalEdges, "truncated": truncated,
+		})
+		return
+	}
+	// Scope enrichment to the nodes we're actually returning — on a truncated huge
+	// world, scanning ALL of its entities (and LATERAL-joining their source_refs)
+	// is exactly the kind of work the cap exists to avoid.
+	keepIDs := nodeIDs(g.Nodes)
 	refRows, err := d.Pool.Query(ctx,
 		`SELECT e.entity_id, e.source_refs, e.aliases
 		   FROM stewards.world_entities e
 		   JOIN stewards.worlds w ON w.world_id = e.world_id
-		  WHERE w.slug = $1`, slug)
+		  WHERE w.slug = $1 AND e.entity_id = ANY($2)`, slug, keepIDs)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -365,8 +383,8 @@ func (d *Deps) worldGraphHandler(w http.ResponseWriter, r *http.Request) {
 		   JOIN stewards.worlds w ON w.world_id = e.world_id
 		   LEFT JOIN LATERAL jsonb_array_elements(e.source_refs) sr ON true
 		   LEFT JOIN stewards.docs d ON d.slug = sr->>'doc'
-		  WHERE w.slug = $1
-		  GROUP BY e.entity_id`, slug); perr == nil {
+		  WHERE w.slug = $1 AND e.entity_id = ANY($2)
+		  GROUP BY e.entity_id`, slug, keepIDs); perr == nil {
 		defer prows.Close()
 		for prows.Next() {
 			var id int64
@@ -413,7 +431,78 @@ func (d *Deps) worldGraphHandler(w http.ResponseWriter, r *http.Request) {
 		b, _ := json.Marshal(m)
 		enriched = append(enriched, b)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"nodes": enriched, "links": g.Links})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"nodes": enriched, "links": g.Links,
+		"total_nodes": totalNodes, "total_edges": totalEdges, "truncated": truncated,
+	})
+}
+
+// nodeIDs pulls the entity ids out of raw graph nodes (for scoping enrichment).
+func nodeIDs(nodes []json.RawMessage) []int64 {
+	ids := make([]int64, 0, len(nodes))
+	for _, nr := range nodes {
+		var n struct {
+			ID int64 `json:"id"`
+		}
+		if json.Unmarshal(nr, &n) == nil && n.ID != 0 {
+			ids = append(ids, n.ID)
+		}
+	}
+	return ids
+}
+
+// topNByDegree keeps the max most-connected nodes and the links BETWEEN them —
+// the same "orbit the mass, don't ingest everything" move as the gravity render.
+// Degree ranking (not insertion order) keeps the hubs that give a huge world its
+// shape; ties break by original order so the cut is deterministic.
+func topNByDegree(nodes, links []json.RawMessage, max int) ([]json.RawMessage, []json.RawMessage) {
+	type end struct {
+		Source int64 `json:"source"`
+		Target int64 `json:"target"`
+	}
+	ends := make([]end, len(links))
+	deg := map[int64]int{}
+	for i, lr := range links {
+		if json.Unmarshal(lr, &ends[i]) == nil {
+			deg[ends[i].Source]++
+			deg[ends[i].Target]++
+		}
+	}
+	type ranked struct {
+		idx int
+		id  int64
+		d   int
+	}
+	rank := make([]ranked, 0, len(nodes))
+	for i, nr := range nodes {
+		var n struct {
+			ID int64 `json:"id"`
+		}
+		if json.Unmarshal(nr, &n) != nil {
+			continue
+		}
+		rank = append(rank, ranked{idx: i, id: n.ID, d: deg[n.ID]})
+	}
+	sort.SliceStable(rank, func(a, b int) bool { return rank[a].d > rank[b].d })
+	if max > len(rank) {
+		max = len(rank)
+	}
+	keep := make(map[int64]bool, max)
+	sel := append([]ranked(nil), rank[:max]...)
+	// restore original node order so the payload (and force layout seed) is stable
+	sort.Slice(sel, func(a, b int) bool { return sel[a].idx < sel[b].idx })
+	outN := make([]json.RawMessage, 0, max)
+	for _, s := range sel {
+		keep[s.id] = true
+		outN = append(outN, nodes[s.idx])
+	}
+	outL := make([]json.RawMessage, 0, len(links))
+	for i, lr := range links {
+		if keep[ends[i].Source] && keep[ends[i].Target] {
+			outL = append(outL, lr)
+		}
+	}
+	return outN, outL
 }
 
 // worldNodeHandler — one entity's full detail (typed edges + provenance).
