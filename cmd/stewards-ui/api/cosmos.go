@@ -88,11 +88,18 @@ func (d *Deps) worldCosmosHandler(w http.ResponseWriter, r *http.Request) {
 	if project == "all" {
 		project = ""
 	}
+	// include_docs=1 widens beyond the deterministic code-graph: ALSO show
+	// non-lodestar cross-world edges — e.g. doc-world ↔ code-world links (a market
+	// taxonomy entity resolved to the service it touches). This is how a research
+	// corpus (a market world) appears in the same constellation as the services it
+	// describes. Default OFF so the service-to-service view stays clean.
+	includeDocs := r.URL.Query().Get("include_docs") == "1"
 
 	// evidence='lodestar' = the deterministic code-graph cross-service edges
 	// (entity↔entity across worlds). The HTTP resolver's produces/consumes edges
-	// hub through synthetic "<root>-contracts" worlds; excluding them here keeps
-	// the view service-to-service. Kept general: drop the evidence clause to widen.
+	// hub through synthetic "<root>-contracts" worlds; excluding them keeps the
+	// default view service-to-service. include_docs widens to every evidence
+	// EXCEPT those synthetic contract hubs.
 	rows, err := d.Pool.Query(ctx, `
 		SELECT ws.slug, coalesce(ws.project,''),
 		       wd.slug, coalesce(wd.project,''),
@@ -103,10 +110,11 @@ func (d *Deps) worldCosmosHandler(w http.ResponseWriter, r *http.Request) {
 		  JOIN stewards.world_entities de ON de.entity_id = ce.dst_entity
 		  JOIN stewards.worlds ws ON ws.world_id = se.world_id
 		  JOIN stewards.worlds wd ON wd.world_id = de.world_id
-		 WHERE ce.evidence = 'lodestar'
+		 WHERE (ce.evidence = 'lodestar'
+		        OR ($2 AND ws.slug NOT LIKE '%-contracts' AND wd.slug NOT LIKE '%-contracts'))
 		   AND ws.world_id <> wd.world_id
 		   AND ($1 = '' OR (ws.project = $1 AND wd.project = $1))`,
-		project)
+		project, includeDocs)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return

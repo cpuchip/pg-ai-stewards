@@ -592,8 +592,13 @@ export const api = {
     getJSON<WorldNodeDetail>(`/api/world/node?slug=${encodeURIComponent(slug)}&id=${id}`),
   // Cosmos (cross-service) view: worlds as nodes, cross_world_edges as links,
   // galaxies = Louvain communities (candidate platforms). '' / 'all' = universe.
-  worldCosmos: (project?: string) =>
-    getJSON<CosmosResp>(`/api/world/cosmos${project && project !== 'all' ? `?project=${encodeURIComponent(project)}` : ''}`),
+  worldCosmos: (project?: string, includeDocs = false) => {
+    const q = new URLSearchParams()
+    if (project && project !== 'all') q.set('project', project)
+    if (includeDocs) q.set('include_docs', '1')
+    const qs = q.toString()
+    return getJSON<CosmosResp>(`/api/world/cosmos${qs ? `?${qs}` : ''}`)
+  },
   workItemCreate: async (req: WorkItemCreateReq): Promise<WorkItemCreateResp> => {
     const r = await fetch('/api/work-items/create', {
       method: 'POST',

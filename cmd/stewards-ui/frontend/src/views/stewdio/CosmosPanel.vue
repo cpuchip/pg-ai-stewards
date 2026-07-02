@@ -64,6 +64,7 @@ const err = ref('')
 const loading = ref(false)
 const orbiting = ref(true)
 const exploded = ref(true) // spread galaxies to per-cluster anchors so the clusters stay legible under hub gravity
+const includeDocs = ref(false) // widen edges beyond the lodestar code-graph: doc-world links (market taxonomy -> services) join the constellation
 const showGalaxyLegend = ref(true)
 const showProtoLegend = ref(true)
 let loaded = false
@@ -174,7 +175,7 @@ async function loadCosmos() {
   loading.value = true
   selected.value = null
   try {
-    const r = await api.worldCosmos(project.value)
+    const r = await api.worldCosmos(project.value, includeDocs.value)
     // rank each world's galaxy for colouring (galaxies arrive largest-first).
     galaxyOf = new Map()
     r.galaxies.forEach((members, gi) => members.forEach(slug => galaxyOf.set(slug, gi)))
@@ -379,6 +380,17 @@ onUnmounted(() => {
         {{ galaxies.length }} platform{{ galaxies.length === 1 ? '' : 's' }} ·
         Q {{ modularity.toFixed(2) }}
       </span>
+
+      <!-- widen beyond the code-graph: doc-world links (market taxonomy → the
+           services it touches) join the constellation -->
+      <button
+        @click="includeDocs = !includeDocs; loadCosmos()"
+        class="rounded px-1.5 py-0.5 border shrink-0"
+        :class="includeDocs
+          ? 'text-emerald-300 border-emerald-700/60 bg-emerald-900/30'
+          : 'text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border-zinc-800'"
+        :title="includeDocs ? 'hide doc-world links (code-graph only)' : 'show doc-world links — research/market worlds join the constellation'">
+        📄 docs</button>
       <span v-if="blackHole"
             class="rounded px-1.5 py-0.5 border border-rose-700/60 text-rose-300 bg-rose-900/30"
             title="dense yet structureless — a distributed monolith (nothing separates cleanly)">🕳 black hole</span>
