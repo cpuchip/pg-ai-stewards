@@ -63,6 +63,7 @@ const selected = ref<CosmosWorld | null>(null)
 const err = ref('')
 const loading = ref(false)
 const orbiting = ref(true)
+const exploded = ref(true) // spread galaxies to per-cluster anchors so the clusters stay legible under hub gravity
 const showGalaxyLegend = ref(true)
 const showProtoLegend = ref(true)
 let loaded = false
@@ -71,6 +72,8 @@ let loaded = false
 type Graph = any
 let graph: Graph | null = null
 let galaxyOf = new Map<string, number>()
+let galaxyAnchors: { x: number; y: number; z: number }[] = [] // per-galaxy sphere anchors (the explode force)
+let degMap = new Map<string, number>()                        // world slug → # incident cross-service links
 let ro: ResizeObserver | null = null
 let resizeRaf = 0
 
@@ -113,6 +116,11 @@ function toggleGalaxy(gi: number) {
   if (next.has(gi)) next.delete(gi)
   else next.add(gi)
   expandedGalaxies.value = next
+}
+
+function toggleExplode() {
+  exploded.value = !exploded.value
+  graph?.d3ReheatSimulation()
 }
 
 function stopOrbit() {
@@ -173,6 +181,23 @@ async function loadCosmos() {
     worlds.value = r.worlds.map(w => ({ ...w, galaxy: galaxyOf.get(w.slug) ?? -1 }))
     edges.value = r.edges
     galaxies.value = r.galaxies
+    // degree map: a mega-hub's links each pull weakly (below) so it stops collapsing clusters.
+    degMap = new Map()
+    for (const e of r.edges) {
+      degMap.set(e.from, (degMap.get(e.from) ?? 0) + 1)
+      degMap.set(e.to, (degMap.get(e.to) ?? 0) + 1)
+    }
+    // spread each galaxy to its own sphere anchor (golden-angle) → the explode force target.
+    {
+      const G = Math.max(1, r.galaxies.length)
+      const R = 140 + G * 3
+      galaxyAnchors = r.galaxies.map((_, i) => {
+        const t = (i + 0.5) / G
+        const phi = Math.acos(1 - 2 * t)
+        const theta = Math.PI * (1 + Math.sqrt(5)) * i
+        return { x: R * Math.sin(phi) * Math.cos(theta), y: R * Math.cos(phi), z: R * Math.sin(phi) * Math.sin(theta) }
+      })
+    }
     modularity.value = r.modularity
     blackHole.value = r.black_hole
     // build fresh graph objects: nodes need `id`, links need `source`/`target`.
@@ -252,7 +277,34 @@ onMounted(async () => {
     .cooldownTime(4000)
 
   graph.d3Force('charge')?.strength(-140)
-  graph.d3Force('link')?.distance(50).strength(1)
+  // Degree-normalized link strength: a hub's many links each pull WEAKLY (d3's own
+  // default, which the constant strength(1) had defeated) so env/grpc stop collapsing
+  // the clusters into one knot; a lib shared by a few services still pulls its cluster tight.
+  graph.d3Force('link')?.distance(50).strength((l: { source: unknown; target: unknown }) => {
+    const id = (x: unknown) => (typeof x === 'object' && x ? (x as { id: string }).id : (x as string))
+    const s = degMap.get(id(l.source)) ?? 1
+    const t = degMap.get(id(l.target)) ?? 1
+    return 1 / Math.max(1, Math.min(s, t))
+  })
+  // Explode force: nudge each world toward its galaxy's anchor so the clusters physically
+  // separate. Reads exploded/galaxyAnchors each tick, so toggling + reloading needs no re-add.
+  const galaxyForce = () => {
+    let ns: { x: number; y: number; z: number; vx: number; vy: number; vz: number; galaxy?: number }[] = []
+    const f = (alpha: number) => {
+      if (!exploded.value || galaxyAnchors.length === 0) return
+      const k = 0.085 * alpha
+      for (const n of ns) {
+        const a = galaxyAnchors[n.galaxy ?? -1]
+        if (!a) continue
+        n.vx += (a.x - n.x) * k
+        n.vy += (a.y - n.y) * k
+        n.vz += (a.z - n.z) * k
+      }
+    }
+    ;(f as unknown as { initialize: (nodes: unknown[]) => void }).initialize = (nodes) => { ns = nodes as typeof ns }
+    return f
+  }
+  graph.d3Force('galaxy', galaxyForce())
   graph.d3AlphaDecay(0.0228)
 
   const ctrl = graph.controls() as { autoRotate?: boolean; autoRotateSpeed?: number }
@@ -332,8 +384,17 @@ onUnmounted(() => {
             title="dense yet structureless — a distributed monolith (nothing separates cleanly)">🕳 black hole</span>
 
       <button
-        @click="toggleOrbit"
+        @click="toggleExplode"
         class="ml-auto rounded px-1.5 py-0.5 border shrink-0"
+        :class="exploded
+          ? 'text-sky-300 border-sky-700/60 bg-sky-900/30'
+          : 'text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border-zinc-800'"
+        :title="exploded ? 'galaxies spread to their clusters — click to collapse to raw gravity' : 'spread the galaxies apart so the clusters are legible'">
+        {{ exploded ? '✦ galaxies' : '✧ collapse' }}
+      </button>
+      <button
+        @click="toggleOrbit"
+        class="rounded px-1.5 py-0.5 border shrink-0"
         :class="orbiting
           ? 'text-emerald-300 border-emerald-700/60 bg-emerald-900/30'
           : 'text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border-zinc-800'"
