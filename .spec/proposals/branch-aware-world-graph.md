@@ -1,4 +1,12 @@
-# Branch-aware world-graph (#298) — design + one decision to make
+# Branch-aware world-graph (#298) — design
+
+**★ RATIFIED (Michael, 2026-07-02).** The snapshot-versioned Working-Graph is approved
+to build: `graph_snapshot`-as-first-class identity, `graph_diff`, ref-scoping with the
+jagged-edge fallback, and a dev-facing branch-scoped MCP/API + ref-selector/diff on the
+Cosmos view. Next step is the build spec (schema migration + import path re-point +
+diff/walk tools + the freshness/re-index-on-push path), then build — a fresh-strength
+arc, not a one-shot. Pairs the merged lodestar ref-capture (origin+ref+file_path already
+emitted) with the substrate snapshot model.
 
 **★ REFRAMED (Michael, 2026-07-01) — branch-awareness is CORE, and it's a WORKING tool.**
 My "snapshot analysis / defer the machinery" read was wrong. The real target: **269 repos
