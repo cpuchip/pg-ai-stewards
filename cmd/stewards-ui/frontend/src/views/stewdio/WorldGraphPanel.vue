@@ -133,6 +133,7 @@ const buildInstr = ref('')
 const buildFile = ref<File | null>(null)
 const building = ref(false)
 const buildErr = ref('')
+const chatting = ref(false)   // "Chat with this world" dispatch in flight
 // projects available to reference (exclude the primary the user typed).
 const refCandidates = computed(() => projects.value.filter(p => p.name && p.name !== buildProject.value.trim()))
 function onBuildFile(e: Event) {
@@ -387,6 +388,26 @@ async function buildWorld() {
   }
 }
 
+// "Chat with this world" — open a read-only loremaster session grounded in the
+// current world. The first turn runs the loremaster agent (which has world_neighbors
+// for cross-service links); we then open that session in the cockpit chat. Grounded
+// on '__all__' so chatRef is truthy and requestedSession reliably opens the chat —
+// the world grounding itself lives in the session (seeded server-side).
+async function chatThisWorld() {
+  const slug = store.worldSlug
+  if (!slug || chatting.value) return
+  chatting.value = true
+  err.value = ''
+  try {
+    const r = await api.chatWithWorld(slug)
+    store.openChat('', 'all', '', r.session_id)
+  } catch (e) {
+    err.value = String(e)
+  } finally {
+    chatting.value = false
+  }
+}
+
 onMounted(async () => {
   await nextTick()
   if (!el.value) return
@@ -532,6 +553,15 @@ onUnmounted(() => {
         @click="toggleBuild"
         class="rounded px-1.5 py-0.5 border border-emerald-700/60 text-emerald-300 bg-emerald-900/30 hover:bg-emerald-900/50"
         title="build a new world from a source corpus">🌍 build</button>
+
+      <!-- Chat with this world → a read-only loremaster session (asks the graph,
+           incl. cross-service links via world_neighbors) -->
+      <button
+        @click="chatThisWorld"
+        :disabled="chatting || !store.worldSlug"
+        class="rounded px-1.5 py-0.5 border border-sky-700/60 text-sky-300 bg-sky-900/30 hover:bg-sky-900/50 disabled:opacity-50"
+        :title="`chat with ${currentWorld?.name || 'this world'} — ask the loremaster (cross-service links included)`">
+        {{ chatting ? '…' : '💬 Chat' }}</button>
 
       <!-- search → fly-to -->
       <div class="relative">

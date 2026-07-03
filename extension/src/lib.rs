@@ -884,6 +884,23 @@ extension_sql_file!(
     requires = ["create_code_graph", "create_hinge", "create_a2a_engine"],
 );
 
+// 85: cross-world lore neighbors + "Chat with this world". world_neighbors_tool
+// is the cross-world SUPERSET of 57's lore_neighbors — its BFS frontier is
+// world_edges (intra, origin-pinned) UNION 82's cross_world_edges (the service
+// seam), so "what services does this market pain touch?" is finally answerable
+// from the graph. Also grants the read-only lore tools to the cockpit chat agent
+// (the "Chat with this world" button's follow-up turns dispatch as work-item-chat)
+// and re-authors the loremaster prompt to name world_neighbors. create_loreworks_chat
+// (57) + create_world_graph (82) are listed EXPLICITLY (not just transitively via
+// the 84→83→82→…→57 chain): 85 re-authors the loremaster agent 57 owns AND reads
+// cross_world_edges 82 owns, so it MUST sort after both for its UPDATE to win (the
+// under-constrained-sort lesson — see 47/78's headers).
+extension_sql_file!(
+    "../85-world-chat.sql",
+    name = "create_world_chat",
+    requires = ["create_tool_effect_gate", "create_loreworks_chat", "create_world_graph"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
