@@ -4,14 +4,33 @@
 #   docker build -f extension/coder-runtime.Dockerfile -t coder-runtime:latest extension
 #   # then bring the stack up WITH the coder:
 #   docker compose -f docker-compose.yaml -f docker-compose.coder.yaml up -d
+#   # (or set COMPOSE_FILE in .env once so plain `docker compose up -d` includes it)
 #
-# This mounts the HOST docker socket into the bridge so coder-mcp can spawn
-# hardened coder-runtime sandboxes as sibling containers. **The docker socket
-# is host-root-equivalent** — anything that can reach it can control the host
-# daemon (and therefore the host). The default `docker compose up` (without
-# this file) does NOT mount it, so the substrate cannot touch the host daemon
-# unless you opt in here. Read SECURITY.md before enabling this, and prefer a
-# host you are willing to grant that trust (e.g. a dedicated playground box).
+# WHAT THE SOCKET IS NEEDED FOR — mounting the host docker socket lets the
+# bridge spawn hardened sibling containers, which is the substrate's entire
+# "hands" tier. Concretely it unlocks:
+#   * coder / code-pr        — clone, edit, build, test, and PR real repos in
+#                              an ephemeral sandbox (human merge stays the gate)
+#   * doc-build              — themed HTML/PDF artifact builds with real doc
+#                              tooling, model-in-the-loop
+#   * doc-extract            — the trust floor for dropped PDFs/Office/zips:
+#                              extraction runs in a throwaway container, never
+#                              in the bridge
+#   * explore-repos          — research_codebase clones + reads a repo in a
+#                              sandbox instead of embedding it
+# WHY THIS SHAPE IS USEFUL: untrusted work (foreign code, dropped files) runs
+# inside cap-drop=ALL / non-root / no-new-privileges / mem+cpu+pids-capped
+# containers that vanish afterward — the substrate gets working hands without
+# untrusted content ever executing in a long-lived service.
+# THE COST, STATED PLAINLY: **the docker socket is host-root-equivalent** —
+# anything that can reach it controls the host daemon (and so the host). The
+# trust trade is: you grant the BRIDGE host control so that UNTRUSTED work can
+# be contained in sandboxes it spawns. The default `docker compose up`
+# (without this file) does NOT mount it. Read SECURITY.md before enabling,
+# and prefer a host you are willing to grant that trust.
+# WITHOUT IT: chat, pipelines, digesters, search, personas, the Lab, and the
+# wizard all work normally; the four capabilities above fail with a clear
+# "Cannot connect to the Docker daemon" instead.
 #
 # Set CODER_REPO_ALLOWLIST in .env to the repos the coder may clone — it is
 # deny-all by default. GITHUB_TOKEN (also from .env) is resolved bridge-side

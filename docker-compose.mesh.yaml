@@ -1,0 +1,18 @@
+# Opt-in mesh overlay — publish the Stewdio UI on this host's overlay-network
+# (NetBird/WireGuard) address so YOUR OWN enrolled devices (phone, laptop)
+# can reach the cockpit. The base compose binds 127.0.0.1 only; this adds a
+# second binding on the mesh IP without touching the local one.
+#
+#   UI_MESH_IP=<this host's NetBird IP>   # in .env (find it: `netbird status`)
+#   docker compose -f docker-compose.yaml -f docker-compose.mesh.yaml up -d ui
+#   → http://<UI_MESH_IP>:8081 from any mesh peer
+#
+# Trust boundary, stated plainly: Stewdio has NO login of its own. The wall is
+# the mesh — WireGuard peer authentication means only devices enrolled in YOUR
+# mesh account can reach this port. Do not bind 0.0.0.0 and do not port-forward
+# this from the internet; the cockpit can read the whole brain and answer
+# hinge approvals.
+services:
+  ui:
+    ports:
+      - "${UI_MESH_IP:?set UI_MESH_IP in .env to this host's mesh (NetBird) IP}:${UI_PORT:-8081}:8080"
