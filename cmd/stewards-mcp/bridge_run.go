@@ -115,6 +115,11 @@ func runBridgeRun(args []string) error {
 	// .spec/proposals/autonomous-materializer.md.
 	go runMaterializer(rootCtx, pool)
 
+	// D-otel (2026-07-03 audit miss D): OTLP span exporter. Own goroutine,
+	// own poll ticker, same shape as the materializer above. Disabled unless
+	// OTEL_EXPORTER_OTLP_ENDPOINT is set -- see otel_export.go + docs/otel.md.
+	go runOtelExporter(rootCtx, pool)
+
 	// LISTEN on a dedicated pgx connection. Acquire from the pool's
 	// underlying conn pool but pin it (Hijack) for the duration so
 	// pgx's pool doesn't recycle it under us.
@@ -528,4 +533,3 @@ func loadOneServer(ctx context.Context, pool *pgxpool.Pool, name string) (*mcpSe
 	}
 	return &r, nil
 }
-

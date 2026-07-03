@@ -1,0 +1,28 @@
+# Opt-in OTel-export overlay -- adds a local collector and points the
+# bridge's OTEL_EXPORTER_OTLP_ENDPOINT at it, for trying out
+# docs/otel.md's span export without an external backend.
+#
+#   docker compose -f docker-compose.yaml -f docker-compose.otel.yaml up -d --build
+#   docker compose logs -f otel-collector       # watch spans land
+#   docker compose exec bridge stewards-mcp otel-smoke --since 24h --limit 5
+#
+# The stock otel/opentelemetry-collector image + a `debug` exporter config
+# (otel-collector-config.yaml) is enough to SEE spans; it keeps nothing.
+# Point that file's `exporters:` block at a real backend (Honeycomb, Jaeger,
+# Grafana Tempo, ...) when you want to keep the data.
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector:latest
+    container_name: stewards-oss-otel-collector
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol/config.yaml:ro
+    command: ["--config=/etc/otelcol/config.yaml"]
+    restart: unless-stopped
+
+  bridge:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://otel-collector:4318"
+      OTEL_SERVICE_NAME: "${OTEL_SERVICE_NAME:-pg-ai-stewards}"
+    depends_on:
+      otel-collector:
+        condition: service_started

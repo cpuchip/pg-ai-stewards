@@ -1,0 +1,20 @@
+# Minimal OTLP collector config for docker-compose.otel.yaml. Receives OTLP
+# over HTTP on 4318 and prints every span to this container's own logs via
+# the `debug` exporter (`docker compose logs -f otel-collector`). Swap the
+# `exporters:` block for a real backend (Honeycomb, Jaeger, Grafana Tempo,
+# anything OTLP) once you've confirmed spans are landing -- see docs/otel.md.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+exporters:
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [debug]
