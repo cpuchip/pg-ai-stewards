@@ -1,6 +1,13 @@
 # The Hinge tool + the escalation ladder — SPEC (not built)
 
-**Status: SPEC, awaiting Michael's ratify. Do NOT build off this yet.** Drafted
+**Status: RATIFIED (Phase 1) — Michael, 2026-07-03.** Green-lit twice: the 5am "all 5
+worth doing" (Phase 1 = the tool-effect gate + ladder table) and the morning hinge walk
+(4 explicit decisions: ladder seed spread · auto-approve stays nobody · unclassified
+stays ungated · sticky agent family approved). Shipped as 84 (gate, PR #28) + 86
+(sticky family). Phases 2-4 (ask_up / Stewdio ask cards / autopilot) remain UNRATIFIED
+— autopilot is dominion_in_council. ★ Record note: this status line lagged the verbal
+ratification by a day and an architecture audit caught the contradiction — the fix is
+this edit plus the "no build without a status-line update" habit. Drafted
 2026-07-02 from Michael's design + a video study (Nate B Jones "OpenBrain" / the
 Lemonade send-without-approval story) that surfaced the trigger gap. This unifies
 primitives the substrate ALREADY has; it is mostly wiring + one new interceptor +
