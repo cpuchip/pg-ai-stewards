@@ -1663,3 +1663,27 @@ export const hingeApi = {
   verdict: (id: number, decision: 'approve' | 'decline', reason = '') =>
     postJSON<{ verdict: unknown; apply: unknown }>('/api/hinge/verdict', { id, decision, reason }),
 }
+
+// (89) The unified "Needs your answer" surface: every human-blocking item —
+// Hinge reviews (39), the tool-effect gate (84, superset of ToolConfirm
+// above), a paused pipeline stage (04 awaiting_review), an A2A blocking
+// question (69) — in one shape. options=null means free-text (render a text
+// input); a string array means quick-reply buttons (e.g. ["approve","decline"]).
+// Backs the Stewdio bell/tray.
+export type AttentionKind = 'hinge' | 'gate' | 'review' | 'a2a_question' | 'ask'
+export type AttentionItem = {
+  source_kind: AttentionKind
+  source_id: string
+  title: string
+  question: string
+  options: string[] | null
+  created_at: string
+  work_item_id: string | null
+}
+
+export const attentionApi = {
+  list: (limit = 100) => getJSON<AttentionItem[]>(`/api/attention/list?limit=${limit}`),
+  count: () => getJSON<{ count: number }>('/api/attention/count'),
+  answer: (kind: AttentionKind, id: string, answer: string) =>
+    postJSON<unknown>('/api/attention/answer', { kind, id, answer }),
+}

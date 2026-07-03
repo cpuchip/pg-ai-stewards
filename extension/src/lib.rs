@@ -911,6 +911,24 @@ extension_sql_file!(
     requires = ["create_world_chat"],
 );
 
+// 89 — the unified "Needs your answer" surface (ladder Phase 2, partial). Every
+// human-blocking item — 39's Hinge queue, 84's tool-confirm gate, a paused
+// pipeline stage (04 awaiting_review), a 69 A2A blocking question — unions
+// into needs_attention (one shape), attention_count (the badge), and
+// attention_answer (routes to the RIGHT existing resolver per kind:
+// tool_confirm_verdict / hinge_record_verdict / a2a_answer /
+// work_item_dispatch_stage; ask_record_answer is the one genuinely new
+// resolver, for the free-text 'ask' kind). Also lands ask_up: a caller
+// consults the NEXT enabled rung on 84's escalation_ladder via the existing
+// dispatch_chat_turn enqueue (45) — no authority transfer; at/above the top
+// enabled rung it parks a human 'ask' instead of stranding silently. Phase 2
+// minimal per the proposal — no autopilot (Phase 4, council-gated).
+extension_sql_file!(
+    "../89-attention.sql",
+    name = "create_attention",
+    requires = ["create_sticky_agent_family"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
