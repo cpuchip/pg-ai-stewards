@@ -90,6 +90,8 @@ Ordered by "moves 'best metaharness' most," with the autonomy tag for each.
 5. **Composable policy layer (miss C, steals #2-4, #9).** Generalize the tool-effect gate into ALLOW/ASK/DENY with per-user cost, risk-score, PII, and the cost-*downgrade*-gate refinement (block only the expensive models, don't quarantine the work item). → *surface-first; it is the substrate for step 6.*
 6. **Multi-tenancy Phase 1 (miss E).** Owner + per-resource grants + RLS-transparent-for-solo + per-tenant budgets, built on step 5. → *`dominion_in_council`; sequence last.*
 
+**One sequencing tension worth your call (2 vs 5).** The order above leads with the harness executor because it is the literal "meta." A second pass argued the reverse — land the composable policy layer *first* so the wrapped harnesses are *born governed* (every new claude-code/codex executor runs through ALLOW/ASK/DENY from its first dispatch, rather than being retrofitted). Both are defensible: harness-first proves the meta-unlock soonest; policy-first means no ungoverned executor ever exists. My lean is policy-first if you intend the harness executor to be a *default route* (born-governed matters most when it's load-bearing), harness-first if the first dispatch is a bounded one-off proof. Either way the two are adjacent — this is a swap of steps 2 and 5, not a reshuffle of the spine.
+
 Interleaved, off the ranked spine but cheap and worth doing:
 
 - **Track 1 setup wizard (§IV)** — the single largest first-run win; already ratified in `positioning-and-focusing-release` as "the heart of easy to adopt." Rides parallel to 1-3.
