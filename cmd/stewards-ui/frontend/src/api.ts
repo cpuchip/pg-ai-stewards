@@ -1663,3 +1663,44 @@ export const hingeApi = {
   verdict: (id: number, decision: 'approve' | 'decline', reason = '') =>
     postJSON<{ verdict: unknown; apply: unknown }>('/api/hinge/verdict', { id, decision, reason }),
 }
+
+// The Lab (87): declare-once experiments + the standing golden-case
+// regression suite. See extension/87-lab.sql.
+export type LabExperiment = {
+  id: number
+  name: string
+  hypothesis: string
+  status: 'active' | 'paused' | 'concluded'
+  variants: unknown
+  metrics: string[]
+  conclusion: string | null
+  created_at: string
+  run_count: number
+}
+
+export type LabRegressionRun = {
+  run_id: string
+  total: number
+  passed: number
+  failed: number
+  started_at: string
+  finished_at: string
+}
+
+export type LabRegressionCaseResult = {
+  case_id: number
+  case_name: string
+  kind: string
+  pass: boolean
+  detail: string | null
+  ran_at: string
+}
+
+export const labApi = {
+  experiments: () => getJSON<LabExperiment[]>('/api/lab/experiments'),
+  regressionRuns: (limit = 20) =>
+    getJSON<LabRegressionRun[]>(`/api/lab/regression-runs?limit=${limit}`),
+  regressionRunDetail: (runId: string) =>
+    getJSON<LabRegressionCaseResult[]>(`/api/lab/regression-runs/detail?run_id=${encodeURIComponent(runId)}`),
+  runRegressionNow: () => postJSON<LabRegressionRun>('/api/lab/regression-run', {}),
+}

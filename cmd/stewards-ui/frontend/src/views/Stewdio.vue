@@ -17,6 +17,7 @@ import ChatPanel from './stewdio/ChatPanel.vue'
 import SessionsPanel from './stewdio/SessionsPanel.vue'
 import ModelsPanel from './stewdio/ModelsPanel.vue'
 import WorldGraphPanel from './stewdio/WorldGraphPanel.vue'
+import ExperimentsPanel from './stewdio/ExperimentsPanel.vue'
 
 // the shared cockpit store — panels coordinate through it; we read store.dev here
 // to drive the Details toggle (one surface, two depths) + gate the details-only panes.
@@ -92,6 +93,7 @@ const components: Record<string, VueComponent> = {
   sessions: SessionsPanel as unknown as VueComponent,
   models: ModelsPanel as unknown as VueComponent,
   world: WorldGraphPanel as unknown as VueComponent,
+  experiments: ExperimentsPanel as unknown as VueComponent,
 }
 
 // the windowing manager's catalog — every pane the user can open/reopen.
@@ -102,6 +104,7 @@ const PANELS: { id: string; component: string; title: string; dev?: boolean }[] 
   { id: 'sessions', component: 'sessions', title: 'Sessions' },
   { id: 'world', component: 'world', title: 'World' }, // Loreworks 3D knowledge graph — the showpiece, on the everyday surface
   { id: 'models', component: 'models', title: 'Activity', dev: true }, // live models/tokens/dispatch stream → Details only
+  { id: 'experiments', component: 'experiments', title: 'Experiments', dev: true }, // the Lab (87) — A/B rows + the golden-case regression suite
 ]
 // the Activity pane is a details surface; hide it from the launcher unless Details is on.
 const visiblePanels = computed(() => PANELS.filter(p => store.dev || !p.dev))
