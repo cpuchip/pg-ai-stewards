@@ -46,6 +46,7 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 		}, nil)
 		registerDocTools(s, pool)        // doc_search / doc_get / doc_similar / doc_citations
 		registerInspectionTools(s, pool) // read-only work-item / corpus inspection
+		registerModelTools(s, pool)      // list_models / list_connectors — read-only catalog views (90: list_models is in the harness hinge's ratified read set)
 		return s
 	}
 	handler := mcp.NewStreamableHTTPHandler(getServer, nil)
@@ -74,6 +75,18 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 
 // bearerAuth gates the handler on a bearer token (constant-time). Empty token =
 // pass-through (only reached on a loopback bind; see runHTTP).
+//
+// Host normalization (90, token mode only): the go-sdk's StreamableHTTPHandler
+// carries DNS-rebinding protection — a loopback listener 403s any request
+// whose Host header is non-loopback. That is exactly what a docker-walled
+// harness (loom-claude) sends: it reaches this loopback surface via
+// host.docker.internal, so its Host is "host.docker.internal:<port>" and the
+// SDK rejects the hinge with "Forbidden: invalid Host header" (live-diagnosed
+// 2026-07-03). Rebinding protection exists to stop a browser whose DNS was
+// rebound — a caller that CANNOT present a custom Authorization header. Once
+// the constant-time bearer check has passed, Host is not load-bearing, so we
+// normalize it and let the SDK's check see loopback. Tokenless (dev) mode
+// keeps the SDK protection untouched.
 func bearerAuth(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if token != "" {
@@ -82,6 +95,7 @@ func bearerAuth(token string, next http.Handler) http.Handler {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
+			r.Host = "127.0.0.1"
 		}
 		next.ServeHTTP(w, r)
 	})
