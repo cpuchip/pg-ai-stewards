@@ -63,18 +63,9 @@ function fmtDate(s?: string) {
         </div>
       </header>
 
-      <article
-        class="prose prose-invert prose-zinc max-w-none
-               prose-headings:font-semibold prose-headings:tracking-tight
-               prose-h1:text-2xl prose-h2:text-xl prose-h3:text-lg
-               prose-p:text-zinc-200 prose-p:leading-relaxed
-               prose-blockquote:border-l-zinc-700 prose-blockquote:text-zinc-300
-               prose-code:text-zinc-300 prose-code:bg-zinc-900 prose-code:px-1 prose-code:rounded
-               prose-pre:bg-zinc-900 prose-pre:border prose-pre:border-zinc-800
-               prose-a:text-zinc-100 prose-a:underline prose-a:decoration-zinc-600 hover:prose-a:decoration-zinc-300
-               prose-strong:text-zinc-100"
-        v-html="renderedBody"
-      ></article>
+      <!-- doc-theme (THEME, audit §V): the same render-time skin ArtifactPanel
+           uses, replacing this ad hoc prose-* utility soup with one shared class. -->
+      <article class="doc-theme prose prose-invert max-w-none" v-html="renderedBody"></article>
 
       <!-- Citations -->
       <section
