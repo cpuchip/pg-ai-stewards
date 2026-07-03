@@ -3756,4 +3756,61 @@ BEGIN
     RAISE NOTICE 'OK 84: tool-effect gate — external_send WITHHELD (hinge row, not executed); michael-approve runs the STORED call verbatim once (idempotent); read tool passes ungated (inverse); decline does not execute; claude-hinge approve on tool-confirm ESCALATES (escalate-always bound)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→84) is sound =='
+-- 85: cross-world lore neighbors — a 2-world fixture with ONE cross_world_edge
+-- proves world_neighbors crosses the seam when cross=true and STAYS single-world
+-- when cross=false, while 57's lore_neighbors is unchanged (regression guard).
+DO $$
+DECLARE v jsonb; v_a bigint; v_b bigint; v_c bigint;
+BEGIN
+    -- two worlds: a market world + a service world, one intra edge + one cross edge.
+    PERFORM stewards.world_upsert('wn-mkt', 'WN Market',  NULL, NULL, true);
+    PERFORM stewards.world_upsert('wn-svc', 'WN Service', NULL, NULL, true);
+    v_a := stewards.world_entity_upsert('wn-mkt','lore','WN Slow Checkout',   NULL,'{}'::text[],'[]'::jsonb);
+    v_b := stewards.world_entity_upsert('wn-mkt','lore','WN Cart Abandonment',NULL,'{}'::text[],'[]'::jsonb);
+    v_c := stewards.world_entity_upsert('wn-svc','http_endpoint','WN CheckoutService',NULL,'{}'::text[],'[]'::jsonb);
+    PERFORM stewards.world_edge_upsert('wn-mkt','WN Slow Checkout','WN Cart Abandonment','causes','smoke');  -- intra
+    INSERT INTO stewards.cross_world_edges (src_entity, dst_entity, rel_type, protocol, confidence, evidence)
+    VALUES (v_a, v_c, 'touches', 'http', 1.0, 'smoke')                                                       -- cross the seam
+    ON CONFLICT (src_entity, dst_entity, rel_type) DO NOTHING;
+
+    -- structure/registration/grants
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='world_neighbors' AND active AND effect_class='read'),
+        '85: world_neighbors tool_def must ship active + read-effect (never gates)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                    WHERE agent_family='loremaster' AND tool_pattern='world_neighbors' AND action='allow'),
+        '85: loremaster must be granted world_neighbors';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                    WHERE agent_family='work-item-chat' AND tool_pattern='world_neighbors' AND action='allow'),
+        '85: work-item-chat must be granted world_neighbors (cockpit follow-up turns)';
+    ASSERT (SELECT prompt LIKE '%world_neighbors%' FROM stewards.agents WHERE family='loremaster' AND model_match='*'),
+        '85: the loremaster prompt must name world_neighbors (57 re-authored)';
+
+    -- cross=true: crosses the boundary → surfaces the service (its world + crossed flag) AND the intra neighbor
+    v := stewards.world_neighbors_tool(jsonb_build_object('world_slug','wn-mkt','name','WN Slow Checkout','cross',true));
+    ASSERT (v->>'found')::bool = true, '85: the anchor entity must resolve';
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v->'neighbors') n
+                    WHERE n->>'name'='WN CheckoutService' AND n->>'world'='wn-svc' AND (n->>'crossed')::bool = true),
+        '85: world_neighbors(cross=true) must surface the cross-world service neighbor (world=wn-svc, crossed)';
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v->'neighbors') n WHERE n->>'name'='WN Cart Abandonment'),
+        '85: world_neighbors must also carry the intra-world neighbor';
+
+    -- cross=false: single-world only → the intra neighbor stays, the cross neighbor is gone
+    v := stewards.world_neighbors_tool(jsonb_build_object('world_slug','wn-mkt','name','WN Slow Checkout','cross',false));
+    ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v->'neighbors') n WHERE n->>'name'='WN CheckoutService'),
+        '85: world_neighbors(cross=false) must NOT cross the world boundary';
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v->'neighbors') n WHERE n->>'name'='WN Cart Abandonment'),
+        '85: world_neighbors(cross=false) still returns the intra-world neighbor';
+
+    -- REGRESSION: 57's lore_neighbors is untouched — intra-only, never crosses.
+    v := stewards.lore_neighbors_tool(jsonb_build_object('world_slug','wn-mkt','name','WN Slow Checkout'));
+    ASSERT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v->'neighbors') n WHERE n->>'name'='WN CheckoutService'),
+        '85: lore_neighbors must remain single-world (the existing tool is unchanged)';
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v->'neighbors') n WHERE n->>'name'='WN Cart Abandonment'),
+        '85: lore_neighbors still returns the intra-world neighbor';
+
+    -- restore virgin state (deleting the worlds cascades entities → intra + cross edges)
+    DELETE FROM stewards.worlds WHERE slug IN ('wn-mkt','wn-svc');
+    RAISE NOTICE 'OK 85: cross-world neighbors — world_neighbors crosses the seam (cross=true → service in wn-svc, crossed) and stays single-world (cross=false); lore_neighbors unchanged (regression); tool active/read + loremaster & work-item-chat grants + prompt names it';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→85) is sound =='

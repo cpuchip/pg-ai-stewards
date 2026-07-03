@@ -251,6 +251,17 @@ export const api = {
   },
   // selectable canon projects (formal + corpus tags) for the Build a World form
   worldProjects: () => getJSON<{ items: { name: string; doc_count: number }[] }>('/api/world/projects'),
+  // "Chat with this world": open a read-only loremaster session grounded in the
+  // world. The first turn is the loremaster agent (with world_neighbors for
+  // cross-service links); returns the chat session to open in the cockpit.
+  chatWithWorld: async (slug: string): Promise<{ slug: string; session_id: string }> => {
+    const r = await fetch('/api/world/chat', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug }),
+    })
+    if (!r.ok) throw new Error(await r.text())
+    return r.json()
+  },
   studiesSearch: (q: string, opts?: { mode?: string; limit?: number }) => {
     const p = new URLSearchParams({ q })
     if (opts?.mode) p.set('mode', opts.mode)

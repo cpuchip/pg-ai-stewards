@@ -83,7 +83,7 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      77-tool-shelf.sql 78-yt-slide-frames.sql \
      79-bineval.sql 80-rest.sql 81-spiral-oracle.sql \
      82-world-graph.sql 83-code-graph.sql \
-     84-tool-effect-gate.sql ./
+     84-tool-effect-gate.sql 85-world-chat.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,

@@ -24,6 +24,77 @@ func (d *Deps) registerWorld(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/world/cosmos", d.worldCosmosHandler)     // cross-service view: worlds + cross_world_edges + galaxies
 	mux.HandleFunc("GET /api/world/projects", d.worldProjectsHandler) // selectable canon projects (formal + corpus tags)
 	mux.HandleFunc("POST /api/world/build", d.worldBuildHandler)      // self-serve "Build a World"
+	mux.HandleFunc("POST /api/world/chat", d.worldChatHandler)        // "Chat with this world" (loremaster)
+}
+
+// worldChatReq / worldChatResp — "Chat with this world": open a loremaster chat
+// session grounded in one world. slug may come as a query param or a JSON body.
+type worldChatReq struct {
+	Slug string `json:"slug"`
+}
+type worldChatResp struct {
+	Slug      string `json:"slug"`
+	SessionID string `json:"session_id"`
+}
+
+// worldChatHandler — start a read-only LOREMASTER chat grounded in the named world.
+// It dispatches a first turn to the loremaster agent (57) with a self-contained
+// world grounding, so the user can ask about the world's entities and — via
+// world_neighbors (85) — the cross-service links to OTHER worlds. Returns the world
+// slug + the chat session to open in the cockpit (mirrors worldBuildHandler's shape).
+//
+// Contract note (named 2026-07-03): the cockpit's chatSendHandler hardcodes
+// agent_family='work-item-chat' for every FOLLOW-UP turn, so only this FIRST turn
+// runs as the loremaster agent. 85-world-chat.sql bridges that by granting the
+// read-only lore tools (lore_search/lore_entity/lore_neighbors/world_neighbors/
+// world_show) to work-item-chat as well, and the loremaster grounding below is
+// persisted in session history (dispatch_chat_turn seeds it on the empty first
+// turn) so follow-ups stay world-aware and tool-capable. A fuller fix
+// (session-sticky agent family) is deferred — see the PR notes.
+func (d *Deps) worldChatHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	var req worldChatReq
+	if q := strings.TrimSpace(r.URL.Query().Get("slug")); q != "" {
+		req.Slug = q
+	} else if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad request body")
+		return
+	}
+	slug := strings.TrimSpace(req.Slug)
+	if slug == "" {
+		writeErr(w, http.StatusBadRequest, "slug required")
+		return
+	}
+	var name string
+	if err := d.Pool.QueryRow(ctx, `SELECT name FROM stewards.worlds WHERE slug=$1`, slug).Scan(&name); err != nil {
+		writeErr(w, http.StatusNotFound, "unknown world: "+slug)
+		return
+	}
+
+	// A self-contained loremaster grounding — persisted on the first (empty-session)
+	// turn so it carries into follow-up turns even when they dispatch as work-item-chat.
+	grounding := fmt.Sprintf("You are the LOREMASTER of the world %q (%s). Answer questions about THIS world "+
+		"grounded ONLY in what you retrieve — lore_search (find entities by meaning), lore_entity (read one in "+
+		"full), lore_neighbors (walk relationships within the world). For any question that may cross a service "+
+		"or project boundary — \"what services does this touch?\", \"what depends on X?\", \"what does this market "+
+		"pain connect to?\" — use world_neighbors(world_slug=%q, name=<entity>, cross=true), which follows "+
+		"CROSS-SERVICE links into OTHER worlds and reports each neighbor's world. Never invent lore; if the canon "+
+		"is silent, say so plainly. You are read-only.", slug, name, slug)
+	seed := "Introduce yourself as the loremaster of this world in one or two sentences and invite me to ask about " +
+		"its entities and the connections between them (including, for a code/service world, what services a piece " +
+		"touches). Do not call any tools for this greeting."
+	session := fmt.Sprintf("world-chat-%s-%d", slug, time.Now().Unix())
+
+	if _, err := d.Pool.Exec(ctx,
+		`SELECT stewards.dispatch_chat_turn($1, $2, 'loremaster', 'reason', $3)`,
+		session, seed, grounding,
+	); err != nil {
+		writeErr(w, http.StatusInternalServerError, "dispatch world-chat: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, worldChatResp{Slug: slug, SessionID: session})
 }
 
 // worldBuildReq — kick off a world build from the UI. A canon source is required,
