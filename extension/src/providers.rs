@@ -11,6 +11,41 @@
 
 use std::sync::OnceLock;
 
+/// The shared blocking reqwest `Client`, built once per bgworker process and
+/// reused across every outbound call (chat, embeddings, the resource resolver,
+/// the generic `http` tool target, GCP SA token minting). A fresh
+/// `Client::builder().build()` per call — the pre-audit shape — pays a new
+/// TCP/TLS handshake (and, for HTTP/2, a new connection) every single time;
+/// reusing one `Client` gives connection pooling / keep-alive for free.
+///
+/// No client-level timeout is set here on purpose: every call site's timeout
+/// differs (embeddings 120s, chat up to `STEWARDS_CHAT_TIMEOUT_SECONDS`, GCP SA
+/// mint 20s, the resolver 30s, the generic http tool 60s). Apply the timeout
+/// per request via `RequestBuilder::timeout(..)` — it overrides any client
+/// default, so a shared client with no default and per-call timeouts is
+/// behaviorally identical to today's per-call `Client::builder().timeout(..)`,
+/// minus the rebuilt connection.
+static HTTP_CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+
+/// The shared blocking HTTP client (see `HTTP_CLIENT`). Callers set their own
+/// per-request timeout via `RequestBuilder::timeout(..)`.
+///
+/// `.build()` with no client-level config is infallible in practice — it only
+/// errors if the TLS backend can't initialize or the system proxy config can't
+/// load, the same failure mode `reqwest::blocking::Client::new()` treats as
+/// fatal (it `.expect()`s internally). Matching that convention rather than
+/// threading a `Result` through every call site that only ever handled the
+/// "can't happen once TLS works" case anyway.
+pub(crate) fn http_client() -> &'static reqwest::blocking::Client {
+    HTTP_CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .build()
+            .expect("reqwest::blocking::Client::builder().build() with no client-level config \
+                     (TLS backend / system proxy config init failed — same fatal condition \
+                     reqwest::blocking::Client::new() panics on)")
+    })
+}
+
 /// Snapshot of one provider's metadata, minus the secret. Returned
 /// from `stewards.providers_loaded()`.
 #[derive(Clone, Debug)]

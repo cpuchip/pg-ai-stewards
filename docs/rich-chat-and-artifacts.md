@@ -44,7 +44,7 @@ can't run a local model, register **Vertex Gemini (no-train)** as the provider.
   backoff instead of failing the stage (tunable `STEWARDS_HTTP_RETRY_MAX` /
   `STEWARDS_HTTP_RETRY_BASE_MS`).
 
-Authored chain is now **00→52**; `tests/virgin-smoke.sql` asserts through **OK 42**.
+Authored chain is now **00→86**; `tests/virgin-smoke.sql` asserts through **OK 88**.
 
 ---
 
@@ -54,12 +54,12 @@ Everything runs from the repo root. `STEWARDS_PG_CONTAINER`/container names assu
 the compose project `pg-ai-stewards-oss` (containers `stewards-oss-pg` etc.).
 
 ### 1. Build the images
-The Postgres image bakes the **whole authored chain (00→52)** — a fresh clone +
+The Postgres image bakes the **whole authored chain (00→86)** — a fresh clone +
 build gets the gate, doc-build, everything. The two sandbox runtimes are separate
 images you build once.
 
 ```bash
-docker compose build                 # pg (chain 00→52) + bridge + ui + persona-host
+docker compose build                 # pg (chain 00→86) + bridge + ui + persona-host
 docker build -f extension/coder-runtime.Dockerfile -t coder-runtime:latest extension   # doc-build sandbox (doc toolchain)
 docker build -f extension/doc-extract.Dockerfile   -t doc-extract:latest   .           # doc-extract sandbox (upload handling)
 ```
@@ -128,16 +128,25 @@ docker compose \
 > bridge so the sandbox tools can spawn sibling containers. If you later recreate
 > a service with fewer `-f` flags (e.g. `docker compose up -d --force-recreate
 > bridge` after a rebuild), the bridge **silently loses the socket** and
-> doc-build/doc-extract fail with `Cannot connect to the Docker daemon`. Always
-> repeat the SAME `-f` overlay flags on any `up`/recreate. Make a shell alias:
+> doc-build/doc-extract fail with `Cannot connect to the Docker daemon`.
+>
+> The socket is **host-root-equivalent** (read `SECURITY.md`), so it is
+> deliberately **not** in the base `docker-compose.yaml` — a stranger's first
+> `docker compose up` must not silently grant that trust. Once *you've* decided
+> to opt in, though, "remember the same `-f` flags forever" is a standing trap.
+> Fix it once, durably: set `COMPOSE_FILE` in your `.env` (see
+> `.env.example`) to the exact set of files you want —
 > ```bash
-> alias stew='docker compose -f docker-compose.yaml -f docker-compose.coder.yaml -f docker-compose.doc-extract.yaml -f docker-compose.gemini-vertex.yaml'
-> stew up -d                 # bring up / recreate, overlays intact
+> COMPOSE_FILE=docker-compose.yaml:docker-compose.coder.yaml:docker-compose.doc-extract.yaml:docker-compose.gemini-vertex.yaml
 > ```
-> The docker socket is **host-root-equivalent** — prefer a box you trust (read
-> `SECURITY.md`). If compose complains about a duplicate `/var/run/docker.sock`
-> mount, comment out the socket line in ONE of the coder / doc-extract overlays
-> (either provides it). doc-build does not need `coder-worktrees`; only `code-pr`
+> — and every subsequent `docker compose up -d` / `--force-recreate`, with
+> **zero `-f` flags**, includes exactly those files. The overlay can no longer
+> be dropped by a forgotten flag, because there's no flag left to forget. (A
+> shell alias works too if you'd rather keep `.env` free of compose config:
+> `alias stew='docker compose -f docker-compose.yaml -f docker-compose.coder.yaml -f docker-compose.doc-extract.yaml -f docker-compose.gemini-vertex.yaml'`.)
+> If compose complains about a duplicate `/var/run/docker.sock` mount, comment
+> out the socket line in ONE of the coder / doc-extract overlays (either
+> provides it). doc-build does not need `coder-worktrees`; only `code-pr`
 > (repo cloning) does.
 
 ### 5. Register the sandbox + image tools
@@ -159,7 +168,7 @@ Idempotent; fetches each public-domain source and persists `book_text`/`book_chu
 
 ### 7. Verify
 ```bash
-# the authored chain is sound on a virgin boot (00→52, through OK 42):
+# the authored chain is sound on a virgin boot (00→86, through OK 88):
 docker exec -i stewards-oss-pg psql -U stewards -d stewards -v ON_ERROR_STOP=1 < tests/virgin-smoke.sql
 
 # providers loaded (the startup log shows auth=google_sa for Vertex, no key material):

@@ -2,7 +2,7 @@
 -- tests/virgin-smoke.sql — the authoritative virgin-boot test
 -- =====================================================================
 -- Run against a FRESH Postgres (pgvector image) with the pg_ai_stewards
--- extension installed. Proves the authored chain (00→19) installs cleanly
+-- extension installed. Proves the authored chain (00→86) installs cleanly
 -- and the clean-room invariants hold. Uses plpgsql ASSERT so a regression
 -- makes psql exit non-zero (CI goes red), not just print.
 --
@@ -3833,6 +3833,69 @@ BEGIN
         '86: the 85 work-item-chat bridge grants must be retired (loremaster follow-ups dispatch as loremaster)';
     DELETE FROM stewards.sessions WHERE id = 'vs-86-chat';
     RAISE NOTICE 'OK 86: sticky agent family — fallback + recorded-family resolution + the 85 bridge retired';
+END $$;
+
+-- 87: M1 (audit-synthesis §II) — pin the FINAL body of the most-re-authored
+-- functions. Several names are re-authored via CREATE OR REPLACE across up to
+-- five chain files; only the LAST authoring file's body survives a real
+-- install, and no runtime tool enforces that file order (migration-manifest.txt
+-- is consumed only by the CI parity harness — see the audit's §IV landmine).
+-- Each assertion below checks a substring that exists ONLY in the true final
+-- author's body, so a reordered/dropped chain file that revives an older
+-- version goes red here instead of silently shipping stale behavior.
+DO $$
+BEGIN
+    ASSERT (SELECT prosrc LIKE '%reflect_guard_autoresume_tick%' FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'stewards' AND p.proname = 'watchman_scheduler_fire'),
+        'watchman_scheduler_fire final body must be 28''s (carries the reflect_guard_autoresume_tick call; re-authored 03->18->22->23->28)';
+
+    ASSERT (SELECT prosrc LIKE '%pick_alias_member%' FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'stewards' AND p.proname = 'work_item_dispatch_stage'),
+        'work_item_dispatch_stage final body must be 31''s (carries the model-alias pick_alias_member path; re-authored 04->19->20->31)';
+
+    ASSERT (SELECT prosrc LIKE '%route_on_max_hops%' FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'stewards' AND p.proname = 'work_item_advance'),
+        'work_item_advance final body must be 42''s (carries route_on + its hop cap; re-authored 04->08->20->42)';
+
+    ASSERT (SELECT prosrc LIKE '%tool_shelf_on%' FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'stewards' AND p.proname = 'compose_tools'),
+        'compose_tools final body must be 77''s (gates reveal_tool/pin_tool/unpin_tool on tool_shelf_on; re-authored 16->24->26->77)';
+
+    ASSERT (SELECT prosrc LIKE '%render_folded_tools_block%' FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'stewards' AND p.proname = 'compose_system_prompt'),
+        'compose_system_prompt final body must be 77''s (appends the Tool Shelf catalog via render_folded_tools_block; re-authored 09->74->77)';
+
+    ASSERT (SELECT prosrc LIKE '%content_parts%' FROM pg_proc p
+             JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname = 'stewards' AND p.proname = 'compose_messages'),
+        'compose_messages final body must be 47''s (passes a content_parts row through verbatim; re-authored 15b->47)';
+
+    RAISE NOTICE 'OK 87: M1 — final bodies pinned for the 6 most re-authored functions (watchman_scheduler_fire=28, work_item_dispatch_stage=31, work_item_advance=42, compose_tools=77, compose_system_prompt=77, compose_messages=47)';
+END $$;
+
+-- 88: house rule (audit-synthesis §II) — every SECURITY DEFINER function in
+-- `stewards` must pin `search_path`. No chain file declares DEFINER today
+-- (everything runs SECURITY INVOKER, the Postgres default), so this is a
+-- forward guard: an unpinned definer is the same privilege-escalation seam
+-- as the A1 target_table finding (a caller-controlled search_path can redirect
+-- an unqualified name to an object the caller owns). Vacuously true today;
+-- goes red the day someone adds a definer function without pinning the path.
+DO $$
+DECLARE n int;
+BEGIN
+    SELECT count(*) INTO n
+      FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+     WHERE ns.nspname = 'stewards'
+       AND p.prosecdef
+       AND NOT EXISTS (SELECT 1 FROM unnest(coalesce(p.proconfig, '{}')) c WHERE c LIKE 'search_path=%');
+    ASSERT n = 0,
+        format('%s SECURITY DEFINER function(s) in stewards lack a pinned search_path', n);
+    RAISE NOTICE 'OK 88: house rule — every SECURITY DEFINER function in stewards pins search_path (0 today; the chain runs invoker-only)';
 END $$;
 
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→86) is sound =='

@@ -8,7 +8,7 @@
 //! pgrx-rust skill, plain `mod tools;` in lib.rs is sufficient — no
 //! `pub use` re-export needed for `pub(crate)` items.
 
-use crate::providers::RESOLVER_CONFIG;
+use crate::providers::{http_client, RESOLVER_CONFIG};
 use crate::types::WorkOutcome;
 use pgrx::bgworkers::*;
 use pgrx::prelude::*;
@@ -96,12 +96,11 @@ pub(crate) fn resolve_ref(payload: &serde_json::Value) -> Result<WorkOutcome, St
         format!("{}{}", template, encoded)
     };
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("http client build: {}", e))?;
+    let client = http_client();
 
-    let mut req = client.get(&url);
+    let mut req = client
+        .get(&url)
+        .timeout(std::time::Duration::from_secs(30));
     if let Some(tok) = &cfg.token {
         req = req.bearer_auth(tok);
     }
@@ -645,14 +644,12 @@ fn exec_http_tool(
         .unwrap_or("POST")
         .to_uppercase();
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .map_err(|e| format!("http client build: {}", e))?;
+    let client = http_client();
+    let timeout = std::time::Duration::from_secs(60);
 
     let mut req = match method.as_str() {
-        "POST" => client.post(url).json(args),
-        "GET"  => client.get(url),
+        "POST" => client.post(url).timeout(timeout).json(args),
+        "GET"  => client.get(url).timeout(timeout),
         other  => return Err(format!("unsupported http method: {}", other)),
     };
 

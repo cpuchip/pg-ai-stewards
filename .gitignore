@@ -1,5 +1,6 @@
 **/.claude/cache/
 *.exe
+*.exe~
 *.log
 bin/
 # playwright-cli scratch (browser snapshots/screenshots from UI verification)
@@ -17,3 +18,5 @@ scratch/
 # committed default stays socket-free.
 docker-compose.override.yaml
 docker-compose.override.yml
+# hinge-review scratch (per-review working files; not durable content)
+scripts/hinge-review/hinge/*-body.txt
