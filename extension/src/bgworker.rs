@@ -13,7 +13,7 @@
 //! Extracted from lib.rs as Phase 3c.3.6 v4 (2026-05-08).
 
 use crate::providers::{
-    ProviderRegistry, ResolverConfig, PROVIDER_REGISTRY, RESOLVER_CONFIG,
+    http_client, ProviderRegistry, ResolverConfig, PROVIDER_REGISTRY, RESOLVER_CONFIG,
 };
 use crate::tools::{resolve_ref, tool_dispatch};
 use crate::types::WorkOutcome;
@@ -1605,6 +1605,61 @@ fn dispatch(
     }
 }
 
+/// The static allowlist of embed-target tables — exactly the ones carrying
+/// embedding/embedded_at/embedded_model columns. `enqueue` is PUBLIC-executable
+/// and `target_table` is interpolated into an identifier position in the
+/// Phase-3 UPDATE, so this is the audit-A1 injection seam: anything not on
+/// this list must be refused before the HTTP embed call is even spent.
+const EMBED_TARGETS: [&str; 5] = [
+    "book_chunks",
+    "brain_entries",
+    "docs",
+    "engram_embeddings",
+    "messages",
+];
+
+/// Pure check for the A1 injection guard — no pgrx types, so it's a plain
+/// `#[test]`-able unit independent of a live Postgres (see `embed_target_tests`
+/// below). Case-sensitive, exact-match against `EMBED_TARGETS`; anything else
+/// (an unknown table, an injection payload, an empty string, a case variant)
+/// is rejected.
+fn embed_target_allowed(target_table: &str) -> bool {
+    EMBED_TARGETS.contains(&target_table)
+}
+
+#[cfg(test)]
+mod embed_target_tests {
+    use super::{embed_target_allowed, EMBED_TARGETS};
+
+    #[test]
+    fn allows_every_allowlisted_table() {
+        for t in EMBED_TARGETS {
+            assert!(embed_target_allowed(t), "expected {:?} to be allowed", t);
+        }
+    }
+
+    #[test]
+    fn rejects_a_system_catalog() {
+        assert!(!embed_target_allowed("pg_authid"));
+    }
+
+    #[test]
+    fn rejects_an_injection_payload() {
+        assert!(!embed_target_allowed("evil; DROP TABLE x;--"));
+    }
+
+    #[test]
+    fn rejects_empty_string() {
+        assert!(!embed_target_allowed(""));
+    }
+
+    #[test]
+    fn rejects_a_case_variant() {
+        // exact-match, not case-insensitive — "Docs" must NOT alias "docs".
+        assert!(!embed_target_allowed("Docs"));
+    }
+}
+
 /// Call an OpenAI-compatible /v1/embeddings endpoint and format the
 /// response as a Postgres `vector` text literal (e.g. "[0.1,0.2,...]").
 fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome, String> {
@@ -1636,14 +1691,10 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
     // Validate against the static allowlist of embed-target tables (exactly
     // the ones carrying embedding/embedded_at/embedded_model columns).
     // Failing here also fails FAST — before the HTTP embed call is spent.
-    const EMBED_TARGETS: [&str; 5] = [
-        "book_chunks",
-        "brain_entries",
-        "docs",
-        "engram_embeddings",
-        "messages",
-    ];
-    if !EMBED_TARGETS.contains(&target_table.as_str()) {
+    // The check itself is `embed_target_allowed` (below) — a pure fn with no
+    // pgrx types, so it's unit-testable without a live Postgres (the
+    // grindable regression oracle for this fix; audit A1 follow-up).
+    if !embed_target_allowed(&target_table) {
         return Err(format!(
             "embed: target_table {:?} is not an allowed embed target {:?}",
             target_table, EMBED_TARGETS
@@ -1713,16 +1764,16 @@ pub(crate) fn embed_one(
         body["dimensions"] = serde_json::json!(expected_dim);
     }
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(120))
-        .build()
-        .map_err(|e| format!("http client build: {}", e))?;
+    let client = http_client();
 
     // Bearer minted once, reused across retries (same as chat).
     let bearer: Option<String> = provider.bearer_token()?;
     let resp = send_with_retry(
         || {
-            let mut req = client.post(&url).json(&body);
+            let mut req = client
+                .post(&url)
+                .timeout(std::time::Duration::from_secs(120))
+                .json(&body);
             if let Some(token) = &bearer {
                 req = req.bearer_auth(token);
             }
@@ -1944,10 +1995,7 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(600);
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .build()
-        .map_err(|e| format!("http client build: {}", e))?;
+    let client = http_client();
 
     // Mint the bearer once (the SA token is cached anyway) so it's reused across
     // retries; propagate an SA-mint error before entering the retry loop.
@@ -1956,7 +2004,10 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
     // instead of failing the whole tool-loop stage.
     let resp = send_with_retry(
         || {
-            let mut req = client.post(&url).json(body);
+            let mut req = client
+                .post(&url)
+                .timeout(std::time::Duration::from_secs(timeout_secs))
+                .json(body);
             if is_anthropic {
                 // Anthropic format auths via x-api-key + a version header, not Bearer.
                 if let Some(key) = &provider.api_key {

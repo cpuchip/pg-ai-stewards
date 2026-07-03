@@ -12,6 +12,7 @@
 //! token are NEVER logged, printed, or embedded in error strings. Errors carry
 //! only the failing step + the provider/credentials *path*, never key material.
 
+use crate::providers::http_client;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -137,12 +138,10 @@ fn mint(credentials_file: &str, now: u64) -> Result<(String, u64), String> {
     let assertion = jsonwebtoken::encode(&header, &claims, &key)
         .map_err(|e| format!("gcp_sa: jwt sign failed: {}", e))?;
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| format!("gcp_sa: http client build: {}", e))?;
+    let client = http_client();
     let resp = client
         .post(&sa.token_uri)
+        .timeout(std::time::Duration::from_secs(20))
         .form(&[
             ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
             ("assertion", assertion.as_str()),

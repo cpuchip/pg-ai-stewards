@@ -35,6 +35,20 @@ core. The ledger keeps core and overlay entries distinct.
 | `init/00-extensions.sql` | First-boot initdb hook: `CREATE EXTENSION` vector, age, pg_ai_stewards |
 | `Dockerfile` | Two-stage build: cargo-pgrx against PG18 → pgvector/AGE runtime image |
 
+## House rule — `SECURITY DEFINER` must pin `search_path`
+
+Every function has run `SECURITY INVOKER` (the Postgres default) since
+extraction — none of the chain files declare `SECURITY DEFINER` today.
+If one is ever added (a legitimate cross-tenant rollup, an audited
+privilege carve-out), it **must** carry `SET search_path = stewards,
+pg_catalog, pg_temp` in the same `CREATE OR REPLACE FUNCTION`. A definer
+function without a pinned path is a privilege-escalation seam of the
+same family as the A1 `target_table` injection finding (a caller
+manipulating `search_path` can redirect an unqualified reference to a
+function/table it owns). `tests/virgin-smoke.sql` asserts this
+invariant holds (0 unpinned `prosecdef` functions in `stewards`), so
+the check regresses loudly if it is ever violated.
+
 ## Provenance
 
 Extracted 2026-06-12 from the private workspace where the substrate

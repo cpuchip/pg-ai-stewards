@@ -1055,20 +1055,13 @@ fn embed_query_impl(
 // ---------------------------------------------------------------------------
 // Tests (run with `cargo pgrx test`)
 // ---------------------------------------------------------------------------
-
-#[cfg(any(test, feature = "pg_test"))]
-#[pg_schema]
-mod tests {
-    use pgrx::prelude::*;
-
-    #[pg_test]
-    fn version_returns_pkg_version() {
-        let got = Spi::get_one::<&str>("SELECT stewards.version()")
-            .expect("SPI succeeded")
-            .expect("non-null result");
-        assert_eq!(got, "0.1.0");
-    }
-}
+// (audit-synthesis-2026-07 §II: a stale `mod tests` hardcoding
+// `stewards.version()` == "0.1.0" lived here — dead code, never run by CI
+// (no `cargo pgrx test` step exists in .github/workflows/ci.yml), and stale
+// against Cargo.toml's actual version. Deleted rather than bumped in place —
+// a hardcoded-version assertion drifts every release; if pg_test coverage of
+// `version()` is wanted again, assert it equals `env!("CARGO_PKG_VERSION")`,
+// not a literal.)
 
 #[cfg(test)]
 pub mod pg_test {
