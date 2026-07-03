@@ -53,6 +53,16 @@ func main() {
 		return
 	}
 
+	// `harness-smoke` — the real-path proof driver for harness_run (90): the
+	// exact dispatch + ledger code the MCP tool runs, from the shell. Mirrors
+	// coder-mcp's --smoke discipline.
+	if len(os.Args) > 1 && os.Args[1] == "harness-smoke" {
+		if err := runHarnessSmoke(os.Args[2:]); err != nil {
+			log.Fatalf("harness-smoke: %v", err)
+		}
+		return
+	}
+
 	// CLI flags. DSN can also come from STEWARDS_DSN env var (same as
 	// stewards-cli) so the .mcp.json config can stay terse.
 	var dsn string
@@ -124,8 +134,9 @@ func main() {
 	registerBrainstormTools(srv, pool)
 	registerModelTools(srv, pool)
 	registerRedlineTools(srv, pool)
-	registerImageTools(srv, pool) // generate_image (Gemini Nano Banana → chat attachment); NOT on the read-only HTTP profile
-	registerA2ATools(srv, pool)   // A2A / Open Engine — hand work to / claim work from other agents
+	registerImageTools(srv, pool)  // generate_image (Gemini Nano Banana → chat attachment); NOT on the read-only HTTP profile
+	registerA2ATools(srv, pool)    // A2A / Open Engine — hand work to / claim work from other agents
+	registerHarnessTools(srv, pool) // harness_run (90) — loom Phase-1 dispatch; NOT on the read-only HTTP profile
 
 	log.Printf("server starting on stdio (mcp protocol)")
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {

@@ -3835,4 +3835,64 @@ BEGIN
     RAISE NOTICE 'OK 86: sticky agent family — fallback + recorded-family resolution + the 85 bridge retired';
 END $$;
 
+
+-- 90: harness executor (loom Phase 1) — registration + walls. Read-mostly by
+-- construction: harness-pilot is the ONLY grant holder, work-item-chat carries
+-- an explicit deny, and harness-review routes explicitly only.
+DO $$
+DECLARE v_stages jsonb;
+BEGIN
+    -- the tool ships active, routed at the bridge's own stdio surface, session-injected
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs
+                    WHERE name='harness_run' AND active
+                      AND execute_target->>'kind'='mcp_proxy'
+                      AND execute_target->>'server'='pg-ai-stewards'
+                      AND execute_target->>'tool'='harness_run'
+                      AND (execute_target->>'inject_session')::bool),
+        '90: harness_run must ship active as mcp_proxy -> pg-ai-stewards with inject_session';
+    ASSERT (SELECT effect_class FROM stewards.tool_defs WHERE name='harness_run') = 'unclassified',
+        '90: harness_run stays unclassified (agentic execution fits none of 84''s dangerous classes; the header carries the reasoning, gate_unclassified is the operator''s strict switch)';
+
+    -- the dispatch ledger (session_id = the durable resume handle)
+    ASSERT to_regclass('stewards.harness_runs') IS NOT NULL,
+        '90: the harness_runs ledger must exist';
+
+    -- the grant wall: harness-pilot holds it; NOBODY else does; the cockpit
+    -- chat carries the explicit deny (the ratified "no existing family" line).
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                    WHERE agent_family='harness-pilot' AND tool_pattern='harness_run' AND action='allow'),
+        '90: harness-pilot must hold the harness_run grant';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                        WHERE agent_family <> 'harness-pilot' AND tool_pattern='harness_run' AND action='allow'),
+        '90: NO family besides harness-pilot may hold harness_run (deny-by-default, asserted)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                    WHERE agent_family='work-item-chat' AND tool_pattern='harness_run' AND action='deny'),
+        '90: work-item-chat must carry the explicit harness_run deny';
+
+    -- the pilot agent + the explicit-routing pipeline seed
+    ASSERT EXISTS (SELECT 1 FROM stewards.agents
+                    WHERE family='harness-pilot' AND model_match='*' AND active),
+        '90: the harness-pilot agent row must ship active';
+    SELECT stages INTO v_stages FROM stewards.pipelines WHERE family='harness-review';
+    ASSERT v_stages IS NOT NULL AND jsonb_array_length(v_stages) = 1
+       AND v_stages->0->>'agent_family' = 'harness-pilot',
+        '90: harness-review must be a single-stage pipeline dispatching harness-pilot';
+    ASSERT (SELECT (metadata->>'no_default_routing')::bool FROM stewards.pipelines WHERE family='harness-review'),
+        '90: harness-review must declare no_default_routing (Phase 3 tier routing is council-gated)';
+
+    -- inject_session survives a refresh-tools style execute_target rewrite
+    -- (52's trigger, re-authored by 90 to cover harness_run)
+    UPDATE stewards.tool_defs
+       SET execute_target = jsonb_build_object('kind','mcp_proxy','server','pg-ai-stewards','tool','harness_run')
+     WHERE name='harness_run';
+    ASSERT (SELECT (execute_target->>'inject_session')::bool FROM stewards.tool_defs WHERE name='harness_run'),
+        '90: inject_session must survive a refresh-tools execute_target rewrite';
+    -- restore the authored target (the UPDATE above was the probe)
+    UPDATE stewards.tool_defs
+       SET execute_target = jsonb_build_object('kind','mcp_proxy','server','pg-ai-stewards','tool','harness_run','inject_session',true)
+     WHERE name='harness_run';
+
+    RAISE NOTICE 'OK 90: harness executor — harness_run registered (unclassified, session-injected, sticky), ledger present, harness-pilot alone holds the grant (work-item-chat explicit deny), harness-review routes explicitly only';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→86) is sound =='

@@ -911,6 +911,22 @@ extension_sql_file!(
     requires = ["create_world_chat"],
 );
 
+// 90 — the harness executor (loom Phase 1, ratified 2026-07-03): harness_run
+// tool_def (mcp_proxy → the bridge's own stdio surface; the Go handler execs
+// `loom run --isolate`), the harness_runs dispatch ledger (session_id = the
+// durable resume handle), the harness-pilot family (sole grant holder;
+// work-item-chat carries an explicit deny), and the explicit-routing-only
+// harness-review pipeline. Read-mostly: write-back + default routing are
+// dominion_in_council gates, deliberately absent. Re-authors 52's
+// inject_session trigger fn (adds harness_run) and tags 84's effect_class,
+// both satisfied transitively via the 86→85→84→…→52 chain.
+// (87–89 are sibling-build slots; the integrator re-stitches requires.)
+extension_sql_file!(
+    "../90-harness-executor.sql",
+    name = "create_harness_executor",
+    requires = ["create_sticky_agent_family"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

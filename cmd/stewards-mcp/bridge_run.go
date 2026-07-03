@@ -226,7 +226,9 @@ var slowTools = func() map[string]bool {
 		}
 		return m
 	}
-	return map[string]bool{"doc_extract": true, "doc_import_corpus": true}
+	// harness_run (90) is a whole agent run — minutes are legitimate, so it
+	// rides the slow window like the bulk extract/import tools.
+	return map[string]bool{"doc_extract": true, "doc_import_corpus": true, "harness_run": true}
 }()
 
 func slowToolNames() []string {
