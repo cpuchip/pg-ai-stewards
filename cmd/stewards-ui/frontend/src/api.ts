@@ -629,6 +629,33 @@ export const api = {
   // Role aliases → provider/model members (Stewdio Models panel).
   modelAliases: () => getJSON<{ aliases: AliasRow[] }>('/api/models/aliases'),
 
+  // 88/#256 setup wizard — providers, keys, budgets. The API never returns
+  // key material: is_set booleans only, and save answers with the
+  // test-on-save verdict (a live GET /models against the provider).
+  credentials: () => getJSON<CredentialsResp>('/api/credentials'),
+  credentialSave: (req: CredentialSaveReq) =>
+    postJSON<CredentialSaveResp>('/api/credentials', req),
+  credentialDelete: async (name: string, purge = false): Promise<{ deleted: boolean }> => {
+    const r = await fetch(`/api/credentials/${encodeURIComponent(name)}${purge ? '?purge=1' : ''}`,
+      { method: 'DELETE' })
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`
+      try { const b = await r.json(); if (b?.error) msg = b.error } catch { /* ignore */ }
+      throw new Error(msg)
+    }
+    return r.json()
+  },
+  credentialModels: (name: string) =>
+    getJSON<{ models: string[] }>(`/api/credentials/${encodeURIComponent(name)}/models`),
+  modelRegister: (req: { provider: string; model: string; api_format?: string; input_micro_per_mtok?: number; output_micro_per_mtok?: number }) =>
+    postJSON<{ registered: boolean; priced_now: boolean; has_pricing: boolean }>('/api/models/register', req),
+  aliasSet: (req: { alias: string; provider: string; model: string; priority?: number }) =>
+    postJSON<{ ok: boolean }>('/api/models/aliases', req),
+  aliasDelete: (req: { alias: string; provider: string; model: string }) =>
+    postJSON<{ deleted: boolean }>('/api/models/aliases/delete', req),
+  modelProbe: (req: { provider: string; model: string }) =>
+    postJSON<{ work_queue_id: number }>('/api/models/probe', req),
+
   // Stewdio chat-with-a-work-item (P1). chatSend appends a turn + dispatches it;
   // the reply is streamed separately via EventSource('/api/chat/stream?session_id=').
   // rich-docs P2: attachment_ids inject uploaded media as subject material.
@@ -731,6 +758,47 @@ export type AliasRow = {
   priority: number
   usable?: boolean
   notes?: string
+}
+
+// 88/#256 setup wizard.
+export type CredentialRow = {
+  provider: string
+  base_url: string
+  kind: string
+  default_model?: string
+  is_set: boolean
+  credential_name?: string
+  last_verified_at?: string
+  note?: string
+  pg_decrypt?: string // 'ok' = the pg dispatcher can decrypt; '' = keyless
+  budget_micro?: number
+  budget_cadence?: string
+  budget_spent_micro?: number
+}
+
+export type CredentialsResp = {
+  master_key_set: boolean
+  master_key_error?: string
+  items: CredentialRow[]
+}
+
+export type CredentialSaveReq = {
+  provider: string
+  secret?: string
+  base_url?: string
+  kind?: string
+  default_model?: string
+  note?: string
+  budget_usd_per_day?: number
+}
+
+export type CredentialSaveResp = {
+  stored: boolean
+  verified: boolean
+  verify_error?: string
+  models?: string[]
+  pg_decrypt?: string
+  provider_live: boolean
 }
 
 export type BrainstormLensRow = {

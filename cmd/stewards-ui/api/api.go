@@ -57,6 +57,7 @@ func Register(mux *http.ServeMux, deps *Deps) {
 	deps.registerHinge(mux)
 	deps.registerLab(mux)
 	deps.registerAttention(mux)
+	deps.registerCredentials(mux) // 88/#256: the setup wizard (keys + models + budgets)
 }
 
 // writeJSON marshals v to JSON, sets the Content-Type header, and

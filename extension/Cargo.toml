@@ -32,6 +32,11 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 # Sync API — fits the blocking bgworker (no tokio). use_pem (default) reads the
 # SA's PEM private key.
 jsonwebtoken = "9"
+# 88 in-app credentials: decrypt stewards.credentials secrets at dispatch
+# (AES-256-GCM, RustCrypto — pure Rust, no libssl) keyed by the base64
+# STEWARDS_MASTER_KEY env var. The Go cockpit is the encrypting twin.
+aes-gcm = "0.10"
+base64 = "0.22"
 
 [dev-dependencies]
 pgrx-tests = "=0.18.0"

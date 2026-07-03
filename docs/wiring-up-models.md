@@ -6,6 +6,30 @@ usable, and what they cost). This page gets you from a fresh install to "agents
 can actually call a model," with four concrete examples — including free ones so
 you can try the harness with zero spend.
 
+## The easy path: the in-app setup wizard
+
+Everything below still works, but you no longer need it for the common case.
+Put ONE variable in `.env` before bringing the stack up:
+
+```
+STEWARDS_MASTER_KEY=<openssl rand -base64 32>
+```
+
+then open the UI → **Providers & models**. The wizard does the rest: pick a
+preset (opencode zen / gemini / LM Studio / …), paste a key, and Save —
+the key is **tested on save** (a live `GET /models`), AES-256-GCM encrypted
+into `stewards.credentials` (never echoed back; the API exposes only an
+`is_set` boolean), and it **dispatches immediately — no restart**. From the
+model list that comes back you assign the role aliases (reason / ingest /
+critic / vision), set optional prices, and give the provider a **daily budget**
+(opencode zen defaults to $5/day — enough to run Claude sonnet with a ceiling).
+A per-row `pg ✓` badge confirms the Postgres dispatcher itself can decrypt the
+key (`stewards.credential_decrypt_check`), not just the cockpit.
+
+Precedence: a wizard-stored credential **wins** over an env var of the same
+provider name, so the wizard is also how you rotate a key without touching
+`.env`. Keyless local providers (LM Studio) need no master key — dials only.
+
 ## The two pieces
 
 1. **Providers** are bootstrapped from environment variables at Postgres

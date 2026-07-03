@@ -1660,16 +1660,35 @@ mod embed_target_tests {
     }
 }
 
-/// Call an OpenAI-compatible /v1/embeddings endpoint and format the
-/// response as a Postgres `vector` text literal (e.g. "[0.1,0.2,...]").
-fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome, String> {
-    let provider = PROVIDER_REGISTRY
+/// Resolve a provider at dispatch time: the 88 credential overlay first (a
+/// wizard-saved key must beat a stale env key), then the boot-time env
+/// registry. Dispatch runs OUTSIDE any transaction (phase 2), so the overlay
+/// read opens its own short one — one indexed SELECT against the view, noise
+/// next to the HTTP call that follows. An unusable DB row (bad ciphertext,
+/// credential with no dials anywhere) is a loud Err, not a silent fallback to
+/// the key the operator just tried to replace.
+fn resolve_dispatch_provider(provider_name: &str) -> Result<crate::providers::Provider, String> {
+    let overlay: Result<Option<crate::providers::Provider>, String> =
+        BackgroundWorker::transaction(|| crate::providers::merged_provider_spi(provider_name));
+    match overlay {
+        Ok(Some(p)) => return Ok(p),
+        Ok(None) => {}
+        Err(e) => return Err(e),
+    }
+    PROVIDER_REGISTRY
         .get()
         .ok_or_else(|| "provider registry not initialized".to_string())?
         .providers
         .iter()
         .find(|p| p.name == provider_name)
-        .ok_or_else(|| format!("unknown provider: {}", provider_name))?;
+        .cloned()
+        .ok_or_else(|| format!("unknown provider: {}", provider_name))
+}
+
+/// Call an OpenAI-compatible /v1/embeddings endpoint and format the
+/// response as a Postgres `vector` text literal (e.g. "[0.1,0.2,...]").
+fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome, String> {
+    let provider = resolve_dispatch_provider(provider_name)?;
 
     let text = payload
         .get("text")
@@ -1713,7 +1732,7 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
     // HTTP + parse + dim-check now lives in embed_one (shared with the
     // synchronous stewards.embed_query() pg_extern). The async work path keeps
     // its pgvector-text formatting + work-queue write below.
-    let embedding = embed_one(provider, text, model, expected_dim)?;
+    let embedding = embed_one(&provider, text, model, expected_dim)?;
 
     // Build pgvector's text format: "[v1,v2,...]". No spaces.
     let mut s = String::with_capacity(embedding.len() * 12);
@@ -1901,13 +1920,9 @@ fn send_with_retry(
 }
 
 fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome, String> {
-    let provider = PROVIDER_REGISTRY
-        .get()
-        .ok_or_else(|| "provider registry not initialized".to_string())?
-        .providers
-        .iter()
-        .find(|p| p.name == provider_name)
-        .ok_or_else(|| format!("unknown provider: {}", provider_name))?;
+    // 88: overlay-aware resolution — a wizard-added provider (or a rotated
+    // key) dispatches without a restart. Env registry is the fallback.
+    let provider = resolve_dispatch_provider(provider_name)?;
 
     let session_id = payload
         .get("session_id")
