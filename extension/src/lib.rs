@@ -901,6 +901,16 @@ extension_sql_file!(
     requires = ["create_tool_effect_gate", "create_loreworks_chat", "create_world_graph"],
 );
 
+// 86 — session-sticky agent family: sessions.agent_family + the COALESCE lookup the
+// chat handlers use, so a session opened AS a specialized agent (85's loremaster)
+// stays that agent on follow-up turns. Also retires 85's bridge grants off
+// work-item-chat, so it must sort after create_world_chat.
+extension_sql_file!(
+    "../86-sticky-agent-family.sql",
+    name = "create_sticky_agent_family",
+    requires = ["create_world_chat"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

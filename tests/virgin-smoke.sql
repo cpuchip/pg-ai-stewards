@@ -3779,9 +3779,8 @@ BEGIN
     ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
                     WHERE agent_family='loremaster' AND tool_pattern='world_neighbors' AND action='allow'),
         '85: loremaster must be granted world_neighbors';
-    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
-                    WHERE agent_family='work-item-chat' AND tool_pattern='world_neighbors' AND action='allow'),
-        '85: work-item-chat must be granted world_neighbors (cockpit follow-up turns)';
+    -- (85 granted work-item-chat the lore tools as a follow-up-turn bridge;
+    -- 86's sticky agent family retires that bridge — asserted in the OK-86 block.)
     ASSERT (SELECT prompt LIKE '%world_neighbors%' FROM stewards.agents WHERE family='loremaster' AND model_match='*'),
         '85: the loremaster prompt must name world_neighbors (57 re-authored)';
 
@@ -3810,7 +3809,30 @@ BEGIN
 
     -- restore virgin state (deleting the worlds cascades entities → intra + cross edges)
     DELETE FROM stewards.worlds WHERE slug IN ('wn-mkt','wn-svc');
-    RAISE NOTICE 'OK 85: cross-world neighbors — world_neighbors crosses the seam (cross=true → service in wn-svc, crossed) and stays single-world (cross=false); lore_neighbors unchanged (regression); tool active/read + loremaster & work-item-chat grants + prompt names it';
+    RAISE NOTICE 'OK 85: cross-world neighbors — world_neighbors crosses the seam (cross=true → service in wn-svc, crossed) and stays single-world (cross=false); lore_neighbors unchanged (regression); tool active/read + loremaster grant + prompt names it';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→85) is sound =='
+
+-- 86: session-sticky agent family — the lookup resolves the recorded family with the
+-- work-item-chat fallback; the opener's setter records it; 85's bridge grants are gone.
+DO $$
+DECLARE v text;
+BEGIN
+    -- fallback: an unknown/ordinary session resolves to the cockpit default
+    ASSERT stewards.chat_agent_family('vs-86-no-such-session') = 'work-item-chat',
+        '86: unknown session must fall back to work-item-chat';
+    -- sticky: a session recorded as loremaster resolves as loremaster
+    INSERT INTO stewards.sessions (id, kind) VALUES ('vs-86-chat', 'chat');
+    PERFORM stewards.session_set_agent_family('vs-86-chat', 'loremaster');
+    ASSERT stewards.chat_agent_family('vs-86-chat') = 'loremaster',
+        '86: a recorded family must be sticky for follow-up turns';
+    -- the 85 bridge is retired: work-item-chat holds NO lore-tool grants
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                        WHERE agent_family='work-item-chat'
+                          AND tool_pattern IN ('lore_search','lore_entity','lore_neighbors','world_neighbors','world_show')),
+        '86: the 85 work-item-chat bridge grants must be retired (loremaster follow-ups dispatch as loremaster)';
+    DELETE FROM stewards.sessions WHERE id = 'vs-86-chat';
+    RAISE NOTICE 'OK 86: sticky agent family — fallback + recorded-family resolution + the 85 bridge retired';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→86) is sound =='

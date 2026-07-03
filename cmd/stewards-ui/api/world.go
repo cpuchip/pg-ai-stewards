@@ -8,6 +8,7 @@ package api
 
 import (
 	"context"
+	"log"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -43,14 +44,11 @@ type worldChatResp struct {
 // world_neighbors (85) — the cross-service links to OTHER worlds. Returns the world
 // slug + the chat session to open in the cockpit (mirrors worldBuildHandler's shape).
 //
-// Contract note (named 2026-07-03): the cockpit's chatSendHandler hardcodes
-// agent_family='work-item-chat' for every FOLLOW-UP turn, so only this FIRST turn
-// runs as the loremaster agent. 85-world-chat.sql bridges that by granting the
-// read-only lore tools (lore_search/lore_entity/lore_neighbors/world_neighbors/
-// world_show) to work-item-chat as well, and the loremaster grounding below is
-// persisted in session history (dispatch_chat_turn seeds it on the empty first
-// turn) so follow-ups stay world-aware and tool-capable. A fuller fix
-// (session-sticky agent family) is deferred — see the PR notes.
+// Session-sticky agent family (86, ratified 2026-07-03): after the first dispatch
+// creates the session row, agent_family='loremaster' is recorded on it; the cockpit's
+// follow-up turns resolve the family via stewards.chat_agent_family(sid), so the
+// WHOLE session dispatches as the loremaster (85's work-item-chat bridge grants are
+// retired). The grounding below still persists in session history for world-awareness.
 func (d *Deps) worldChatHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -74,7 +72,7 @@ func (d *Deps) worldChatHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// A self-contained loremaster grounding — persisted on the first (empty-session)
-	// turn so it carries into follow-up turns even when they dispatch as work-item-chat.
+	// turn so follow-up turns (dispatching as loremaster via the 86 sticky family) stay world-aware.
 	grounding := fmt.Sprintf("You are the LOREMASTER of the world %q (%s). Answer questions about THIS world "+
 		"grounded ONLY in what you retrieve — lore_search (find entities by meaning), lore_entity (read one in "+
 		"full), lore_neighbors (walk relationships within the world). For any question that may cross a service "+
@@ -93,6 +91,14 @@ func (d *Deps) worldChatHandler(w http.ResponseWriter, r *http.Request) {
 	); err != nil {
 		writeErr(w, http.StatusInternalServerError, "dispatch world-chat: "+err.Error())
 		return
+	}
+	// Record the sticky family (86): the dispatch above created the session row;
+	// from here every follow-up turn resolves to 'loremaster' via
+	// chat_agent_family(). Best-effort — a failure leaves a turn-1-only session,
+	// the pre-86 behavior, not a broken one.
+	if _, err := d.Pool.Exec(ctx,
+		`SELECT stewards.session_set_agent_family($1, 'loremaster')`, session); err != nil {
+		log.Printf("api: world-chat sticky family (session=%s): %v", session, err)
 	}
 	writeJSON(w, http.StatusOK, worldChatResp{Slug: slug, SessionID: session})
 }

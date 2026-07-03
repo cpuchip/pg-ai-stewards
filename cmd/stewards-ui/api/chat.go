@@ -159,7 +159,7 @@ func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
 	var wqID int64
 	if provider != "" && len(req.AttachmentIDs) == 0 {
 		if err := d.Pool.QueryRow(ctx,
-			`SELECT stewards.dispatch_chat_pinned($1, $2, 'work-item-chat', $3, $4, $5)`,
+			`SELECT stewards.dispatch_chat_pinned($1, $2, stewards.chat_agent_family($1), $3, $4, $5)`,
 			sid, req.Message, model, provider, grounding,
 		).Scan(&wqID); err != nil {
 			log.Printf("api: chat dispatch pinned (session=%s, model=%s, provider=%s): %v", sid, model, provider, err)
@@ -175,7 +175,7 @@ func (d *Deps) chatSendHandler(w http.ResponseWriter, r *http.Request) {
 	// scoped, base64 built server-side) and dispatch_chat_turn auto-selects the
 	// `vision` alias. No attachments → NULL → the text-only path (unchanged).
 	if err := d.Pool.QueryRow(ctx,
-		`SELECT stewards.dispatch_chat_turn($1, $2, 'work-item-chat', $3, $4,
+		`SELECT stewards.dispatch_chat_turn($1, $2, stewards.chat_agent_family($1), $3, $4,
 		          CASE WHEN $5::bigint[] IS NULL OR cardinality($5::bigint[]) = 0 THEN NULL
 		               ELSE stewards.chat_attachment_parts($5::bigint[], $1) END)`,
 		sid, req.Message, model, grounding, req.AttachmentIDs,
@@ -1029,11 +1029,11 @@ func (d *Deps) chatRegenerateHandler(w http.ResponseWriter, r *http.Request) {
 	var wqID int64
 	if provider != "" {
 		err = d.Pool.QueryRow(ctx,
-			`SELECT stewards.dispatch_chat_pinned($1, $2, 'work-item-chat', $3, $4, NULL)`,
+			`SELECT stewards.dispatch_chat_pinned($1, $2, stewards.chat_agent_family($1), $3, $4, NULL)`,
 			req.SessionID, lastUserContent, model, provider).Scan(&wqID)
 	} else {
 		err = d.Pool.QueryRow(ctx,
-			`SELECT stewards.dispatch_chat_turn($1, $2, 'work-item-chat', $3, NULL, NULL)`,
+			`SELECT stewards.dispatch_chat_turn($1, $2, stewards.chat_agent_family($1), $3, NULL, NULL)`,
 			req.SessionID, lastUserContent, model).Scan(&wqID)
 	}
 	if err != nil {
