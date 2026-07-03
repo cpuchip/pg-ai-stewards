@@ -4002,4 +4002,185 @@ BEGIN
     RAISE NOTICE 'OK 91: core-compat guard — wide-open + tight-bracket + segment-padded ranges pass; below-minimum raises; at/above-ceiling raises; unparseable raises (installed=%)', v_installed;
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→87, 91) is sound =='
+-- ---------------------------------------------------------------------
+-- 89: the unified "Needs your answer" surface (needs_attention unions the 5
+-- real pending sets), attention_count matches a direct count, attention_answer
+-- routes each kind to the resolver it ALREADY has, and ask_up proves both
+-- ladder branches (higher-rung consult job vs. top-rung human ask).
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_rung_low   int;
+    v_rung_top   int;
+    v_rung_unknown int;
+    wi_low       uuid;
+    wi_top       uuid;
+    v_ask_low    jsonb;
+    v_ask_top    jsonb;
+    v_ask_session text;
+    v_ask_wq     bigint;
+    v_ask_hinge_id bigint;
+    v_gate       jsonb;
+    v_gate_id    bigint;
+    v_hinge_id3  bigint;
+    v_a2a_wi     uuid;
+    v_review_wi  uuid;
+    v_before     int;
+    v_after      int;
+    v_resp       jsonb;
+BEGIN
+    -- ── seed the ladder (empty in core; the smoke seeds its own rungs) ──
+    INSERT INTO stewards.escalation_ladder (rung, model_alias, role_hint) VALUES
+        (501, 'attn89-mid',    'local-doer'),
+        (900, 'attn89-strong', 'hinge')
+    ON CONFLICT (rung) DO NOTHING;
+
+    wi_low := stewards.work_item_create('a2a-handoff', jsonb_build_object('title','attn89 low-rung caller'), NULL, 'attn89-smoke');
+    UPDATE stewards.work_items SET model_override = 'attn89-mid' WHERE id = wi_low;
+    wi_top := stewards.work_item_create('a2a-handoff', jsonb_build_object('title','attn89 top-rung caller'), NULL, 'attn89-smoke');
+    UPDATE stewards.work_items SET model_override = 'attn89-strong' WHERE id = wi_top;
+
+    -- ── escalation_ladder_current_rung: resolves model_override, unknown->0 ──
+    v_rung_low     := stewards.escalation_ladder_current_rung(wi_low);
+    v_rung_top     := stewards.escalation_ladder_current_rung(wi_top);
+    v_rung_unknown := stewards.escalation_ladder_current_rung(gen_random_uuid());
+    ASSERT v_rung_low = 501, format('89: caller at attn89-mid must resolve rung 501 (got %s)', v_rung_low);
+    ASSERT v_rung_top = 900, format('89: caller at attn89-strong must resolve rung 900 (got %s)', v_rung_top);
+    ASSERT v_rung_unknown = 0, '89: an unknown work_item must resolve rung 0';
+
+    -- ── ask_up branch (a): a higher enabled rung exists -> dispatch a
+    --    one-shot consult job. NO authority transfer, NO hinge/ask row.
+    v_ask_low := stewards.ask_up(wi_low, 'attn89 test question A (should consult up)', '{}'::jsonb);
+    ASSERT v_ask_low->>'escalated_to' = 'consult',
+        format('89: ask_up from rung 501 (a higher rung exists) must consult, not escalate to human (got %s)', v_ask_low->>'escalated_to');
+    ASSERT (v_ask_low->>'rung')::int = 900, '89: ask_up must route to the NEXT enabled rung above the caller (900)';
+    ASSERT v_ask_low->>'model_alias' = 'attn89-strong', '89: ask_up must name the target rung''s model_alias';
+    v_ask_session := v_ask_low->>'session_id';
+    v_ask_wq      := (v_ask_low->>'work_queue_id')::bigint;
+    ASSERT v_ask_session IS NOT NULL AND v_ask_wq IS NOT NULL, '89: ask_up (consult branch) must return a session_id + work_queue_id (a real dispatched job)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.work_queue WHERE id = v_ask_wq AND kind = 'chat'),
+        '89: ask_up (consult branch) must have enqueued a real kind=chat work_queue job';
+    ASSERT EXISTS (SELECT 1 FROM stewards.messages WHERE session_id = v_ask_session AND role = 'user' AND content LIKE 'attn89 test question A%'),
+        '89: the consult session must carry the question as a user turn';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.hinge_reviews WHERE kind = 'ask' AND payload->>'work_item_id' = wi_low::text),
+        '89: the consult branch (rung 1) must NOT create a human ask — no authority transfer, nothing for Michael to see yet';
+
+    -- ── ask_up branch (b): caller already AT the top enabled rung -> no
+    --    higher rung exists -> park a human 'ask' (surfaces in needs_attention).
+    v_ask_top := stewards.ask_up(wi_top, 'attn89 test question B (top rung, needs a human)', '{}'::jsonb);
+    ASSERT v_ask_top->>'escalated_to' = 'human',
+        format('89: ask_up from the TOP enabled rung must escalate to a human ask (got %s)', v_ask_top->>'escalated_to');
+    v_ask_hinge_id := (v_ask_top->>'hinge_id')::bigint;
+    ASSERT EXISTS (SELECT 1 FROM stewards.hinge_reviews WHERE id = v_ask_hinge_id AND kind = 'ask' AND status = 'pending'),
+        '89: ask_up (top-rung branch) must enqueue a pending kind=ask hinge review';
+
+    -- ── seed the remaining 4 kinds ───────────────────────────────────────
+    -- gate: reuse 84's gate_probe_tool/gate_probe_fire (already classified
+    -- external_send earlier in this same script) — tags this call attn89 so
+    -- cleanup and assertions can target it precisely.
+    v_gate := stewards.tool_confirm_gate(
+        'gate_probe_tool', jsonb_build_object('x','attn89'),
+        '{"kind":"sql_fn","schema":"stewards","name":"gate_probe_fire"}'::jsonb,
+        'attn89-agent', 'attn89-session');
+    v_gate_id := (v_gate->>'hinge_id')::bigint;
+
+    -- hinge: any OTHER review kind (not tool-confirm, not ask).
+    v_hinge_id3 := stewards.hinge_enqueue('attn89-review-kind', 'attn89 hinge probe', '{}'::jsonb, 'attn89-smoke');
+
+    -- a2a_question: the real INPUT_REQUIRED path (register->submit->claim->needs_input).
+    PERFORM stewards.a2a_register('attn89-worker', 'attn89 worker');
+    PERFORM stewards.a2a_register('attn89-owner',  'attn89 owner');
+    v_resp := stewards.a2a_submit('attn89-worker', 'attn89 a2a task', jsonb_build_object('outcome','say hi'), 'attn89-owner');
+    v_a2a_wi := (v_resp->>'work_item_id')::uuid;
+    PERFORM stewards.a2a_claim(v_a2a_wi, 'attn89-worker');
+    PERFORM stewards.a2a_needs_input(v_a2a_wi, 'attn89: formal or casual?');
+
+    -- review: a paused pipeline stage with NO question (ack-to-continue).
+    v_review_wi := stewards.work_item_create('a2a-handoff', jsonb_build_object('title','attn89 review probe'), NULL, 'attn89-smoke');
+    UPDATE stewards.work_items SET status = 'awaiting_review' WHERE id = v_review_wi;
+
+    -- ── needs_attention: every seeded kind must appear, correctly shaped ──
+    ASSERT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='gate' AND source_id=v_gate_id::text AND options ? 'approve'),
+        '89: the seeded gate item must appear in needs_attention with approve/decline options';
+    ASSERT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='ask' AND source_id=v_ask_hinge_id::text AND options IS NULL),
+        '89: the seeded ask item must appear in needs_attention as free-text (options NULL)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='hinge' AND source_id=v_hinge_id3::text),
+        '89: the seeded hinge item must appear in needs_attention';
+    ASSERT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='a2a_question' AND source_id=v_a2a_wi::text AND question='attn89: formal or casual?'),
+        '89: the seeded a2a_question item must appear with the EXACT blocking question';
+    ASSERT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='review' AND source_id=v_review_wi::text AND options IS NULL),
+        '89: the seeded review item must appear in needs_attention as free-text (ack-to-continue, not a Q&A)';
+
+    -- attention_count must match a direct count of the view (no drift between them).
+    ASSERT (stewards.attention_count()->>'count')::int = (SELECT count(*) FROM stewards.needs_attention),
+        '89: attention_count() must match a direct count of needs_attention';
+    -- needs_attention_list (the jsonb-agg wrapper the Go API scans) must carry every row.
+    ASSERT jsonb_array_length(stewards.needs_attention_list(10000)) = (SELECT count(*) FROM stewards.needs_attention),
+        '89: needs_attention_list must carry every needs_attention row (jsonb-agg wrapper matches the view)';
+
+    -- ── attention_answer: route each kind to its REAL resolver, then the
+    --    item must drop out of needs_attention (inverse hypothesis: seeded
+    --    -> visible -> answered -> gone). ─────────────────────────────────
+
+    -- gate -> tool_confirm_verdict (84): executes the STORED call verbatim.
+    SELECT count(*) INTO v_before FROM stewards.gate_probe;
+    PERFORM stewards.attention_answer('gate', v_gate_id::text, 'approve');
+    SELECT count(*) INTO v_after FROM stewards.gate_probe;
+    ASSERT v_after = v_before + 1,
+        format('89: attention_answer(gate,approve) must execute the stored call via tool_confirm_verdict/tool_confirm_apply (probe rows %s -> %s)', v_before, v_after);
+    ASSERT (SELECT status FROM stewards.hinge_reviews WHERE id=v_gate_id) = 'applied',
+        '89: attention_answer(gate,approve) must leave the review applied';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='gate' AND source_id=v_gate_id::text),
+        '89: an applied gate item must drop out of needs_attention';
+
+    -- hinge -> hinge_record_verdict (39), reviewer=michael (final).
+    PERFORM stewards.attention_answer('hinge', v_hinge_id3::text, 'decline');
+    ASSERT (SELECT status FROM stewards.hinge_reviews WHERE id=v_hinge_id3) = 'declined',
+        '89: attention_answer(hinge,decline) must route through hinge_record_verdict';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='hinge' AND source_id=v_hinge_id3::text),
+        '89: a declined hinge item must drop out of needs_attention';
+
+    -- a2a_question -> a2a_answer (69): clears the block, resumes the worker.
+    PERFORM stewards.attention_answer('a2a_question', v_a2a_wi::text, 'Casual, attn89.');
+    ASSERT (SELECT a2a_question FROM stewards.work_items WHERE id=v_a2a_wi) IS NULL,
+        '89: attention_answer(a2a_question) must clear a2a_question via the real a2a_answer';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='a2a_question' AND source_id=v_a2a_wi::text),
+        '89: an answered a2a_question must drop out of needs_attention';
+
+    -- review -> work_item_dispatch_stage (04): re-dispatches the paused stage.
+    v_resp := stewards.attention_answer('review', v_review_wi::text, '');
+    ASSERT (v_resp->>'dispatched')::bool = true AND v_resp->>'work_queue_id' IS NOT NULL,
+        '89: attention_answer(review) must re-dispatch the paused stage via work_item_dispatch_stage';
+    ASSERT (SELECT status FROM stewards.work_items WHERE id=v_review_wi) = 'in_progress',
+        '89: a re-dispatched review item must leave awaiting_review';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='review' AND source_id=v_review_wi::text),
+        '89: a resumed review item must drop out of needs_attention';
+
+    -- ask -> ask_record_answer (89, the one genuinely new resolver).
+    v_resp := stewards.attention_answer('ask', v_ask_hinge_id::text, 'attn89: casual is fine.');
+    ASSERT (v_resp->>'ok')::bool = true AND v_resp->>'answer' = 'attn89: casual is fine.',
+        '89: attention_answer(ask) must record the free-text answer via ask_record_answer';
+    ASSERT (SELECT status FROM stewards.hinge_reviews WHERE id=v_ask_hinge_id) = 'applied',
+        '89: an answered ask must be marked applied';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='ask' AND source_id=v_ask_hinge_id::text),
+        '89: an answered ask must drop out of needs_attention';
+
+    -- ── restore virgin state ─────────────────────────────────────────────
+    DELETE FROM stewards.messages WHERE session_id = v_ask_session;
+    DELETE FROM stewards.work_queue WHERE payload->>'session_id' = v_ask_session;
+    DELETE FROM stewards.sessions WHERE id = v_ask_session;
+    DELETE FROM stewards.work_queue wq WHERE wq.payload->>'_work_item_id' = v_review_wi::text;
+    DELETE FROM stewards.messages m USING stewards.work_items wi
+      WHERE wi.id = v_review_wi AND m.session_id = ANY(wi.session_ids);
+    DELETE FROM stewards.sessions s USING stewards.work_items wi
+      WHERE wi.id = v_review_wi AND s.id = ANY(wi.session_ids);
+    DELETE FROM stewards.agent_notes WHERE recipient LIKE 'attn89-%' OR sender LIKE 'attn89-%';
+    DELETE FROM stewards.work_items WHERE id IN (wi_low, wi_top, v_a2a_wi, v_review_wi);
+    DELETE FROM stewards.a2a_agents WHERE agent_id LIKE 'attn89-%';
+    DELETE FROM stewards.hinge_reviews WHERE id IN (v_gate_id, v_hinge_id3, v_ask_hinge_id);
+    DELETE FROM stewards.escalation_ladder WHERE rung IN (501, 900);
+
+    RAISE NOTICE '89: OK — needs_attention unions gate/ask/hinge/a2a_question/review; attention_count matches; needs_attention_list mirrors the view; attention_answer routes each kind to its REAL resolver (tool_confirm_verdict/hinge_record_verdict/a2a_answer/work_item_dispatch_stage/ask_record_answer) and each resolved item drops out; ask_up proves both ladder branches (higher-rung -> a real consult job, top-rung -> a human ask)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→89, 91) is sound =='
