@@ -716,11 +716,13 @@ fn process_one_pending() -> bool {
                     embedding_text,
                     dimensions,
                 }) => {
-                    // Write vector back to the target row. We hard-code
-                    // brain_entries for now; messages comes when chat
-                    // step lands. The cast to vector(N) validates
-                    // dimensions; mismatch raises a Postgres error
-                    // that the outer match converts to row error.
+                    // Write the vector back to the target row. target_table was
+                    // validated against the EMBED_TARGETS allowlist at parse time
+                    // in embed() — never reaches this identifier position raw.
+                    // The cast to vector(N) validates dimensions; a mismatch
+                    // raises a Postgres error the outer match converts to a row
+                    // error. (The old "hard-code brain_entries" comment was stale
+                    // and misleading — the audit's A1 flagged both.)
                     let update_target = format!(
                         "UPDATE stewards.{} \
                          SET embedding = $2::vector({}), \
@@ -1627,6 +1629,26 @@ fn embed(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome
         .and_then(|v| v.as_str())
         .ok_or_else(|| "payload.target_table missing".to_string())?
         .to_string();
+    // ★ Injection guard (audit A1): target_table is interpolated into an
+    // identifier position in the Phase-3 UPDATE, and `enqueue` is
+    // PUBLIC-executable — so an arbitrary payload string here would run
+    // attacker SQL at WORKER privilege (SPI accepts multiple statements).
+    // Validate against the static allowlist of embed-target tables (exactly
+    // the ones carrying embedding/embedded_at/embedded_model columns).
+    // Failing here also fails FAST — before the HTTP embed call is spent.
+    const EMBED_TARGETS: [&str; 5] = [
+        "book_chunks",
+        "brain_entries",
+        "docs",
+        "engram_embeddings",
+        "messages",
+    ];
+    if !EMBED_TARGETS.contains(&target_table.as_str()) {
+        return Err(format!(
+            "embed: target_table {:?} is not an allowed embed target {:?}",
+            target_table, EMBED_TARGETS
+        ));
+    }
     let target_id = payload
         .get("target_id")
         .and_then(|v| v.as_str())
