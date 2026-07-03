@@ -930,6 +930,17 @@ extension_sql_file!(
     requires = ["create_sticky_agent_family"],
 );
 
+// 91 — the compat contract's runtime guard (audit §IV Track 2, first step):
+// stewards.assert_core_compat(range) raises if the installed core's extversion
+// falls outside a downstream overlay's `-- requires-core: <range>` header,
+// else returns true. Read-only / additive (two new functions, no re-authoring
+// of anything upstream) — chain-order only, no functional dependency on 87-90.
+extension_sql_file!(
+    "../91-core-compat.sql",
+    name = "create_core_compat",
+    requires = ["create_lab"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
