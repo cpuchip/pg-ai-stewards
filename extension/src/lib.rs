@@ -911,6 +911,25 @@ extension_sql_file!(
     requires = ["create_world_chat"],
 );
 
+// 87 — the Lab (audit #1): stewards.experiments/experiment_runs (declare-once
+// A/B rows + the runs that fill them; dispatch is future work) and
+// stewards.golden_cases/lab_regression_run() (a deterministic, synchronous
+// regression suite over the substrate's own invariants — sql_assert /
+// function_result case kinds today, LLM-dispatch kinds addable later without
+// a schema change). A failed run alerts via 39-hinge (kind=lab-regression-
+// failure) AND the always-queryable lab_regression_failures view. Ships the
+// nightly-run MACHINERY (a 'lab-regression' pipeline + agent + tool) but NOT
+// a scheduled_pipelines row (that stays operator data — see the file's own
+// header). Also registers the two experiments from
+// .spec/proposals/lab-and-wiki.md (Fable-hinge A/B; opposed-mandate panels).
+// requires create_sticky_agent_family (86) — installs at the tail of the
+// chain; reuses hinge_enqueue (39), pipelines (04), tool_defs/agents (schema.rs).
+extension_sql_file!(
+    "../87-lab.sql",
+    name = "create_lab",
+    requires = ["create_sticky_agent_family"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

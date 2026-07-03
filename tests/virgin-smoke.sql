@@ -3835,4 +3835,50 @@ BEGIN
     RAISE NOTICE 'OK 86: sticky agent family — fallback + recorded-family resolution + the 85 bridge retired';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→86) is sound =='
+-- 87: the Lab — tables exist, >=6 golden cases seeded, lab_regression_run()
+-- executes and passes GREEN on virgin (the suite must start green), the
+-- nightly-run machinery is registered (pipeline+agent+tool — deliberately
+-- NOT a scheduled_pipelines row, see 87's own header + the OK-4 clean-room
+-- assertion above), and the 2 named experiments are registered.
+DO $$
+DECLARE v jsonb; n int;
+BEGIN
+    -- structure
+    ASSERT (SELECT count(*) FROM information_schema.tables
+             WHERE table_schema='stewards' AND table_name IN
+                   ('experiments','experiment_runs','golden_cases','lab_regression_results')) = 4,
+        '87: experiments/experiment_runs/golden_cases/lab_regression_results must all exist';
+
+    -- >= 6 enabled golden cases seeded
+    SELECT count(*) INTO n FROM stewards.golden_cases WHERE enabled;
+    ASSERT n >= 6, format('87: expected >=6 enabled golden_cases, found %s', n);
+
+    -- lab_regression_run() executes and is GREEN on a virgin container —
+    -- the suite must start green, not merely "runs without erroring".
+    v := stewards.lab_regression_run();
+    ASSERT (v->>'total')::int >= 6, format('87: lab_regression_run total should be >=6, got %s', v->>'total');
+    ASSERT (v->>'failed')::int = 0,
+        format('87: lab_regression_run must be GREEN on virgin (failed=%s) — see stewards.lab_regression_failures', v->>'failed');
+    ASSERT (v->>'passed')::int = (v->>'total')::int,
+        '87: passed must equal total on a green virgin run';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.lab_regression_failures),
+        '87: lab_regression_failures must be empty after a green run';
+
+    -- the nightly-run machinery (NOT a scheduled_pipelines row — that stays
+    -- operator data per 18-scheduler + the OK-4 clean-room block above).
+    ASSERT EXISTS (SELECT 1 FROM stewards.pipelines WHERE family='lab-regression'),
+        '87: the lab-regression pipeline must be registered';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name='lab_regression_run' AND active),
+        '87: the lab_regression_run tool must be registered + active';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                    WHERE agent_family='lab-regression' AND tool_pattern='lab_regression_run' AND action='allow'),
+        '87: the lab-regression agent must be granted lab_regression_run';
+
+    -- the 2 named experiments
+    SELECT count(*) INTO n FROM stewards.experiments WHERE name IN ('fable-hinge-ab','opposed-mandate-panels');
+    ASSERT n = 2, format('87: expected 2 registered experiments (fable-hinge-ab, opposed-mandate-panels), found %s', n);
+
+    RAISE NOTICE 'OK 87: the Lab — experiments/golden_cases/lab_regression_results exist; % golden cases GREEN on virgin (0 failures); nightly-run machinery (pipeline+tool+agent grant) registered; 2 experiments (fable-hinge-ab, opposed-mandate-panels) registered', v->>'total';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→87) is sound =='
