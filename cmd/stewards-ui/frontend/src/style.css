@@ -14,3 +14,139 @@
   --muted-foreground: 240 5% 64.9%;
   --border: 240 3.7% 15.9%;
 }
+
+/* =====================================================================
+   Document theme — render-time skin for markdown docs/artifacts (THEME,
+   audit §V). Content stays plain markdown; this is ONLY presentation,
+   applied via the `.doc-theme` class on the wrapper that already carries
+   Tailwind Typography's `prose`/`prose-invert`. Every doc-rendering surface
+   (Stewdio's ArtifactPanel, /studies/:slug's StudyDetail) picks this up by
+   adding one class — no author remembers a per-doc style again.
+
+   Feel-word: Michael's "readable, quiet, Tufte" — calm for prose. Knobs
+   turned vs. the ad hoc prose-* utility soup this replaces: one accent
+   (sky, already the app's link color — no new hue), a serif face for body
+   copy only (the one visual cue that marks "you are reading a document,
+   not operating the cockpit"), decisive heading jumps with space-before >
+   space-after, quiet hairline tables (no zebra), calm code blocks (no
+   quote-mark decoration), blockquotes read as margin notes (smaller,
+   italic, one hairline rule) rather than a loud colored callout box.
+
+   Specificity note: Tailwind Typography wraps its own selectors in :where()
+   for exactly this reason (keeps them at (0,1,0) so a plain override class
+   wins by source order) — placing this block after the Tailwind import is
+   what makes these rules win the cascade without !important anywhere.
+
+   Tokens are namespaced --doc-* (not the app's --background/--foreground
+   shadcn tokens) so a future theme system can retarget just the document
+   surface: swap these custom properties under a `[data-theme=...] .doc-theme`
+   selector without touching anything else. Dark-only for now, matching the
+   app itself (index.html hardcodes bg-zinc-950 — there is no light mode to
+   respect yet); the variable indirection is the seam for when there is. */
+.doc-theme {
+  --doc-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --doc-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --doc-ink: #f4f4f5;       /* headings, strong — zinc-100 */
+  --doc-body: #d4d4d8;      /* paragraph text — zinc-300 */
+  --doc-soft: #a1a1aa;      /* captions, table headers — zinc-400 */
+  --doc-faint: #71717a;     /* the quietest role — zinc-500 */
+  --doc-line: #27272a;      /* the one hairline — zinc-800 */
+  --doc-surface: #18181b;   /* code/pre background — zinc-900 */
+  --doc-accent: #38bdf8;    /* sky-400 — the app's existing link accent, reused */
+
+  max-width: 65ch;
+  margin-inline: auto;
+  font-family: var(--doc-serif);
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--doc-body);
+}
+
+.doc-theme :where(h1, h2, h3, h4) {
+  font-family: var(--doc-serif);
+  font-weight: 600;
+  color: var(--doc-ink);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+/* space-before > space-after: a heading introduces what follows it, so it
+   tucks close to its own section and stands apart from the one before. */
+.doc-theme :where(h1) { font-size: 1.75em; margin: 2.5em 0 0.5em; }
+.doc-theme :where(h2) { font-size: 1.375em; margin: 2.25em 0 0.5em; }
+.doc-theme :where(h3) { font-size: 1.125em; margin: 1.75em 0 0.4em; }
+.doc-theme :where(h4) { font-size: 1em; margin: 1.5em 0 0.4em; }
+.doc-theme :where(h1, h2, h3, h4):first-child { margin-top: 0; }
+
+.doc-theme :where(p, ul, ol) { margin: 0.9em 0; }
+.doc-theme :where(li) { margin: 0.3em 0; }
+.doc-theme :where(li)::marker { color: var(--doc-faint); }
+
+.doc-theme :where(a) {
+  color: var(--doc-accent);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--doc-accent) 40%, transparent);
+  text-underline-offset: 2px;
+}
+.doc-theme :where(a:hover) { text-decoration-color: var(--doc-accent); }
+
+/* blockquotes read as margin notes: quieter and smaller than body copy, one
+   hairline rule, no colored callout box. */
+.doc-theme :where(blockquote) {
+  margin: 1.25em 0;
+  padding-left: 1em;
+  border-left: 1px solid var(--doc-line);
+  font-size: 0.9375em;
+  font-style: italic;
+  color: var(--doc-soft);
+}
+.doc-theme :where(blockquote p) { margin: 0.4em 0; }
+
+/* code calm: monospace, muted surface, one hairline border, no bold weight
+   and no quote-mark decoration (Typography adds "" around inline code by
+   default — that reads as noise here). */
+.doc-theme :where(code) {
+  font-family: var(--doc-mono);
+  font-size: 0.875em;
+  font-weight: 400;
+  color: var(--doc-body);
+  background: var(--doc-surface);
+  border: 1px solid var(--doc-line);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.doc-theme :where(code)::before,
+.doc-theme :where(code)::after { content: none; }
+.doc-theme :where(pre) {
+  background: var(--doc-surface);
+  border: 1px solid var(--doc-line);
+  border-radius: 8px;
+  padding: 1em 1.25em;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+.doc-theme :where(pre code) { background: none; border: none; padding: 0; }
+
+/* quiet tables: no zebra, hairline rules only, tabular numerals so numbers
+   actually line up in columns. */
+.doc-theme :where(table) {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9375em;
+  margin: 1.5em 0;
+}
+.doc-theme :where(th, td) {
+  padding: 0.5em 0.75em;
+  border-bottom: 1px solid var(--doc-line);
+  text-align: left;
+}
+.doc-theme :where(th) {
+  font-weight: 600;
+  color: var(--doc-soft);
+  border-bottom: 1px solid var(--doc-soft);
+}
+.doc-theme :where(tr:last-child td) { border-bottom: none; }
+
+.doc-theme :where(hr) { border: none; border-top: 1px solid var(--doc-line); margin: 2.5em 0; }
+.doc-theme :where(img) { max-width: 100%; border-radius: 8px; }
+.doc-theme :where(strong) { color: var(--doc-ink); font-weight: 600; }

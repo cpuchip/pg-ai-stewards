@@ -1,0 +1,151 @@
+/* =====================================================================
+   doc-theme.css — the render-time skin for doc-build's generated HTML /
+   PDF artifacts (THEME, audit §V). Baked into the coder-runtime image at
+   /opt/doc-theme.css (coder-runtime.Dockerfile) and INLINED by the build
+   stage (extension/50-doc-build.sql) into every generated HTML artifact's
+   <head>, so a generated report inherits it without the model remembering
+   to write CSS from scratch each time — content stays whatever markdown/
+   HTML the model produced; this file is only presentation.
+
+   Self-contained on purpose: no @import, no external font, no network
+   fetch. An exported artifact is a single portable file (or a single
+   wkhtmltopdf input) that has to look right wherever it is opened —
+   downloaded to a laptop, printed, or read on a phone with no connectivity.
+
+   Same visual language as the in-app document theme (cmd/stewards-ui/
+   frontend/src/style.css's `.doc-theme`): serif prose, ~65ch measure,
+   decisive heading jumps with space-before > space-after, quiet hairline
+   tables (no zebra), calm code blocks, blockquotes as margin notes. This
+   is a page-level default (`html, body { ... }`) rather than a scoped
+   class, since a doc-build artifact IS the whole document, not a panel
+   inside a larger app.
+
+   Light by default — most of these artifacts are meant to be read on
+   paper or exported to PDF via wkhtmltopdf, and print physically assumes
+   dark ink on a light ground. A `prefers-color-scheme: dark` override
+   covers the case where the raw .html file is opened directly in a
+   browser set to dark. `@media print` trims shadows/backgrounds that
+   would waste toner and keeps tables/blockquotes from splitting badly
+   across a page break. */
+
+:root {
+  --doc-serif: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --doc-mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  --doc-bg: #fbfaf8;
+  --doc-ink: #1c1b1a;       /* headings, strong */
+  --doc-body: #2c2a28;      /* paragraph text */
+  --doc-soft: #6b6863;      /* captions, table headers */
+  --doc-faint: #93908a;     /* the quietest role */
+  --doc-line: #ddd9d2;      /* the one hairline */
+  --doc-surface: #f1efea;   /* code/pre background */
+  --doc-accent: #1d6fa5;    /* one accent — links only, print-safe on white */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --doc-bg: #18181b;
+    --doc-ink: #f4f4f5;
+    --doc-body: #d4d4d8;
+    --doc-soft: #a1a1aa;
+    --doc-faint: #71717a;
+    --doc-line: #303034;
+    --doc-surface: #232327;
+    --doc-accent: #56b6e6;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--doc-bg);
+  color: var(--doc-body);
+}
+
+body {
+  font-family: var(--doc-serif);
+  font-size: 16px;
+  line-height: 1.6;
+  max-width: 65ch;
+  margin: 3rem auto;
+  padding: 0 1.5rem;
+}
+
+h1, h2, h3, h4 {
+  font-family: var(--doc-serif);
+  font-weight: 600;
+  color: var(--doc-ink);
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+/* space-before > space-after: a heading introduces what follows it, so it
+   tucks close to its own section and stands apart from the one before. */
+h1 { font-size: 1.875em; margin: 0 0 0.6em; }
+h2 { font-size: 1.375em; margin: 2.25em 0 0.5em; }
+h3 { font-size: 1.125em; margin: 1.75em 0 0.4em; }
+h4 { font-size: 1em; margin: 1.5em 0 0.4em; }
+h1:first-child, h2:first-child, h3:first-child, h4:first-child { margin-top: 0; }
+
+p, ul, ol { margin: 0.9em 0; }
+li { margin: 0.3em 0; }
+li::marker { color: var(--doc-faint); }
+
+a { color: var(--doc-accent); text-decoration: underline; text-underline-offset: 2px; }
+
+/* blockquotes read as margin notes: quieter and smaller than body copy, one
+   hairline rule, no colored callout box. */
+blockquote {
+  margin: 1.25em 0;
+  padding-left: 1em;
+  border-left: 1px solid var(--doc-line);
+  font-size: 0.9375em;
+  font-style: italic;
+  color: var(--doc-soft);
+}
+blockquote p { margin: 0.4em 0; }
+
+/* code calm: monospace, muted surface, one hairline border, normal weight. */
+code {
+  font-family: var(--doc-mono);
+  font-size: 0.875em;
+  font-weight: 400;
+  color: var(--doc-body);
+  background: var(--doc-surface);
+  border: 1px solid var(--doc-line);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+pre {
+  background: var(--doc-surface);
+  border: 1px solid var(--doc-line);
+  border-radius: 8px;
+  padding: 1em 1.25em;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+pre code { background: none; border: none; padding: 0; }
+
+/* quiet tables: no zebra, hairline rules only, tabular numerals so numbers
+   actually line up in columns. */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.9375em;
+  margin: 1.5em 0;
+}
+th, td { padding: 0.5em 0.75em; border-bottom: 1px solid var(--doc-line); text-align: left; }
+th { font-weight: 600; color: var(--doc-soft); border-bottom: 1px solid var(--doc-soft); }
+tr:last-child td { border-bottom: none; }
+
+hr { border: none; border-top: 1px solid var(--doc-line); margin: 2.5em 0; }
+img { max-width: 100%; border-radius: 8px; }
+strong { color: var(--doc-ink); font-weight: 600; }
+
+@media print {
+  body { max-width: none; margin: 0; padding: 0 0.25in; }
+  table, blockquote, pre, img { break-inside: avoid; }
+  h1, h2, h3, h4 { break-after: avoid; }
+  a { color: var(--doc-ink); text-decoration: underline; } /* printed ink, not screen accent */
+}

@@ -66,6 +66,16 @@ RUN ln -sf /usr/local/go/bin/go /usr/local/bin/go \
 RUN useradd -m -u 1000 -s /bin/bash coder \
     && mkdir -p /work /home/coder/go \
     && chown -R coder:coder /work /home/coder
+
+# THEME (audit §V): the render-time skin for doc-build's HTML/PDF output.
+# Baked in at a well-known path so the build stage's prompt (extension/
+# 50-doc-build.sql) can `cat` it and inline the contents into a generated
+# HTML artifact's <head> instead of the model inventing ad hoc CSS each
+# time. World-readable -- the sandbox's non-root `coder` user only needs
+# read access.
+COPY doc-theme.css /opt/doc-theme.css
+RUN chmod 0644 /opt/doc-theme.css
+
 USER coder
 WORKDIR /work
 

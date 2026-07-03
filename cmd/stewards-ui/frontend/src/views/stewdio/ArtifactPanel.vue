@@ -156,7 +156,7 @@ onUnmounted(stopPoll)
            class="text-[11px] text-zinc-500 hover:text-sky-400">▶ open on YouTube</a>
       </div>
 
-      <div class="prose prose-invert prose-sm max-w-none" v-html="md.render(doc.body || '')" @click="onLink"></div>
+      <div class="doc-theme prose prose-invert max-w-none" v-html="md.render(doc.body || '')" @click="onLink"></div>
     </div>
 
     <!-- O1: a stored binary object — paint the original back (image / PDF pages /
