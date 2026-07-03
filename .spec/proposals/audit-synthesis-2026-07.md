@@ -111,3 +111,16 @@ The first is **cognition state** in the DB: the turn as a row, the engrams, the 
 The second is **cognition execution** in the DB: the bgworker dispatching raw chat-completions itself, running its own coder sandbox. This is the part loom and llama-chip actually press on, and here the honest answer is that the purist version — where the DB is also the executor for everything — was the part to loosen, and the audit already names the loosening. The "harness executor kind" (recommendation #2) makes loom a first-class `execute_target`. The substrate keeps owning the state, the governance, the audit, the eval; it *dispatches* the execution to claude-code or codex through loom, or to a local llama-chip model, whenever that runtime is better for the stage. loom becomes the substrate's hands, not its replacement — which is exactly what the general-workspace lane has been saying: loom is the top tier *over* the substrate's local coder loop, not a competitor to it.
 
 So the dream was right about the load-bearing half and slightly too literal about the other. The DB was never really "where the AI runs." It is where the AI remembers, decides, and is held accountable — and those three are the whole moat. loom and llama-chip don't threaten that; they plug in underneath it as the executor tier, and the harness-executor-kind is the seam that lets them. Keeping the AI in the DB is more defensible today than the day you chose it, because the rest of the field walked a year in the other direction and arrived at the parts you already had.
+
+---
+
+## Ratification record — 2026-07-03 evening decision walk (Michael, verbatim verdicts)
+
+1. **Harness write-back: 1B ratified** — narrow write set (doc create/update + work-item notes), routing stays explicit; C (default routing) deliberately deferred until the Lab A/Bs harness-vs-native. **Cost strategy attached:** route harness work to Claude Code CLI via loom on the Max sub (~30% weekly surplus ≈ free sonnet-5/haiku-4.5/opus-4.8) + the opencode-go sub (~$60/mo, just reset) for raw dispatches; **local models rest** so the GPUs serve the asset harness. His open question registered as Lab experiment `sonnet-raw-vs-claude-code`.
+2. **Overlays end-state: 2A ratified** — pack-as-extension, proven on ONE pack first (workspace overlays → a `stewards_workspace` extension). "This one was hard but it makes sense."
+3. **Multi-tenancy: 3C ratified** — policy layer first; tenancy when a second human is real.
+4. **Notify: 4D now, 4A queued** — bell-on-mesh suffices today; ntfy-style push queued ("there are times I wish you could just notify my phone and I could respond right there").
+5. **Rigor leftovers: 5A ratified** — both cancelled via work_item_cancel.
+6. **Lab: 6A ratified** — nightly regression cron armed (`lab-regression-nightly`, 0 6 * * *); opposed-mandate-panels to run "while we have fable."
+
+**Model roster note (Michael):** trial kimi-k2.7-code + GLM-5.2 (similar cost); DeepSeek-V4-pro + qwen3.7-plus as the cheap workhorses. He drives the wiring himself via the new wizard.
