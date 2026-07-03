@@ -1,29 +1,34 @@
-// harness_run — the Phase-1 harness executor (loom integration, ratified
-// 2026-07-03). Dispatches a stage's task to a FULL Claude Code harness as a
-// subprocess (`loom run`), the tier above the substrate's native loop for
-// hard, multi-file, corpus-grounded work. The native loop stays fully capable;
-// this is a tier, not a replacement.
+// harness_run — the harness executor (loom integration; Phase 1 ratified
+// 2026-07-03, write-back addendum "1B" ratified 2026-07-03 same day).
+// Dispatches a stage's task to a FULL Claude Code harness as a subprocess
+// (`loom run`), the tier above the substrate's native loop for hard,
+// multi-file, corpus-grounded work. The native loop stays fully capable; this
+// is a tier, not a replacement.
 //
 // The two walls, handed per dispatch (the presiding covenant made operational):
 //   - filesystem: --isolate — claude runs in a docker sandbox (loom-claude,
 //     non-root `node`) and sees ONLY the bind-mounted workdir (/work) + the
 //     read-only credentials + the mounted claude-home. --isolate is what makes
 //     --skip-permissions (headless) safe.
-//   - capability: --allowed-tools scoped to the RATIFIED READ-ONLY set, and —
-//     when the operator wires the hinge (STEWARDS_HARNESS_MCP_URL) — an
-//     --mcp-config pointing at the substrate's Arc C HTTP surface, which
-//     structurally carries ONLY the read profile (doc_* / inspection /
-//     model-catalog). a2a_submit / spawn_subagent / doc writes / coder_* are
-//     not on that surface at all: the wall is the server, not the model's
-//     politeness.
+//   - capability: --allowed-tools scoped to the ratified set, and — when the
+//     operator wires the hinge (STEWARDS_HARNESS_MCP_URL) — an --mcp-config
+//     pointing at the substrate's Arc C HTTP surface, which structurally
+//     carries ONLY the read profile (doc_* / inspection / model-catalog) PLUS
+//     (1B) the narrow write set: doc_create/append_section/patch/read/
+//     finalize/current (build + pool ONE document) and a2a_note/note_clear
+//     (leave a work-item note). a2a_submit / a2a_claim / a2a_receipt /
+//     spawn_subagent / coder_* are NOT on that surface at all: the wall is
+//     the server, not the model's politeness.
 //
-// Phase 1 is PULL-only and read-mostly per .spec/proposals/loom-integration.md:
-// no write-back into the substrate, no default routing — both are
-// dominion_in_council gates. The Reply's session_id is the durable resume
-// handle; every dispatch is ledgered on stewards.harness_runs (90) the way
-// coder_export_artifact ledgers its artifacts on chat_attachments.
+// Read-mostly per .spec/proposals/loom-integration.md, narrowed by 1B: the
+// harness can deliver a document + a note, nothing else — no default routing
+// (only the harness-pilot family holds any grant; harness-review requires
+// explicit pipeline_family routing). Wider write-back and default routing
+// remain dominion_in_council gates. The Reply's session_id is the durable
+// resume handle; every dispatch is ledgered on stewards.harness_runs (90) the
+// way coder_export_artifact ledgers its artifacts on chat_attachments.
 //
-// Deployment note (Phase 1): harness_run execs the `loom` binary, which execs
+// Deployment note: harness_run execs the `loom` binary, which execs
 // `docker run` with HOST paths — so this tool works where stewards-mcp runs
 // with loom + docker + a claude subscription available (the host). The
 // containerized bridge image does not carry loom yet; a dispatch routed there
@@ -45,6 +50,8 @@
 //                                    a dedicated home connects cleanly. Auth is
 //                                    unaffected — loom layers the user's
 //                                    .credentials.json read-only regardless.
+//                                    Seed a fresh home with `stewards-mcp
+//                                    harness-home-init` (harness_home_init.go).
 //   STEWARDS_HARNESS_MCP_URL       — the substrate MCP HTTP endpoint AS SEEN
 //                                    FROM THE CONTAINER (e.g.
 //                                    http://host.docker.internal:8092/mcp).
@@ -75,9 +82,9 @@ import (
 )
 
 // The ratified read-only substrate toolset (council 2026-06-30). EXPLICITLY
-// NOT here: a2a_submit, spawn_subagent, start_task, doc writes/imports,
-// coder_*. The Arc C HTTP profile doesn't carry those either — the allowlist
-// and the server surface agree.
+// NOT here: a2a_submit, spawn_subagent, start_task, coder_*. The Arc C HTTP
+// profile doesn't carry those either — the allowlist and the server surface
+// agree.
 var harnessSubstrateReadTools = []string{
 	"mcp__pg-ai-stewards__doc_search",
 	"mcp__pg-ai-stewards__doc_get",
@@ -88,9 +95,54 @@ var harnessSubstrateReadTools = []string{
 	"mcp__pg-ai-stewards__list_models",
 }
 
+// The ratified NARROW write set (1B, 2026-07-03): build + pool ONE document,
+// and leave a work-item note. This is the whole write-back grant — no
+// a2a_submit/a2a_claim/a2a_receipt/a2a_register/a2a_inbox/a2a_answer/
+// a2a_needs_input, no spawn_subagent, no coder_*. See doc_write.go's header
+// for why doc_create/etc. needed new MCP wiring (they existed only as
+// internal tool_defs before this) and a2a.go's registerA2ANoteTools for why
+// the note verbs are split out of the full a2a surface.
+var harnessSubstrateWriteTools = []string{
+	"mcp__pg-ai-stewards__doc_create",
+	"mcp__pg-ai-stewards__doc_append_section",
+	"mcp__pg-ai-stewards__doc_patch",
+	"mcp__pg-ai-stewards__doc_read",
+	"mcp__pg-ai-stewards__doc_finalize",
+	"mcp__pg-ai-stewards__doc_current",
+	"mcp__pg-ai-stewards__a2a_note",
+	"mcp__pg-ai-stewards__a2a_note_clear",
+}
+
 // Claude Code's own read tools — the workdir is the corpus; reading it is the
-// whole point. No Bash (it writes), no Write/Edit (read-mostly Phase 1).
+// whole point. No Bash (it writes to the filesystem, not the substrate), no
+// Write/Edit (a harness delivers its document THROUGH the write set above —
+// stewards.docs, not loose files an operator has to go find in /work).
 var harnessClaudeReadTools = []string{"Read", "Glob", "Grep"}
+
+// harnessModelAliases is the ratified small model roster harness_run may pick
+// (loom-integration cost strategy, 2026-07-03): sonnet-5 for the default
+// balance of cost and capability, haiku-4.5 for cheap/bulk, opus-4.8 when a
+// dispatch is worth it. Claude Code's own --model flag already accepts these
+// short aliases directly (loom passes Model straight through — see claudeArgs
+// in cpuchip/loom's claude.go) — no translation needed, just a guardrail so a
+// typo doesn't silently reach the CLI as some other string.
+var harnessModelAliases = map[string]bool{"sonnet": true, "haiku": true, "opus": true}
+
+// resolveHarnessModel is the single source of truth for "what model does
+// this dispatch ask for" — used by runHarness (to build --model), and by
+// persistHarnessRun/the tool output (to record/report it), so the ledger
+// never disagrees with what was actually dispatched.
+func resolveHarnessModel(backend, model string) string {
+	backend = strings.TrimSpace(backend)
+	if backend == "" {
+		backend = "claude"
+	}
+	model = strings.ToLower(strings.TrimSpace(model))
+	if model == "" && backend == "claude" {
+		return "sonnet"
+	}
+	return model
+}
 
 // containerClaudeDir is where the loom-claude image homes claude (non-root
 // `node` user, per the 2026-07-01 fix). --mcp-config paths are container
@@ -112,6 +164,7 @@ type HarnessRunInput struct {
 	Prompt         string `json:"prompt" jsonschema:"the task for the harness — the full prompt Claude Code receives (the workdir is its corpus; the prompt is the task)"`
 	Workdir        string `json:"workdir,omitempty" jsonschema:"optional HOST directory bind-mounted as the harness's working dir (/work) — the code/context it reads with its own tools. Default: an empty scratch dir."`
 	Backend        string `json:"backend,omitempty" jsonschema:"loom backend (default claude)"`
+	Model          string `json:"model,omitempty" jsonschema:"sonnet | haiku | opus — the Claude model the harness runs as (default sonnet). Passed straight through to loom's --model, which forwards it to claude -p --model. haiku for cheap/bulk, opus when the dispatch is worth it."`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"wall-clock cap for the whole dispatch (default 600, max 3600)"`
 	// session_id is injected by the dispatcher (52's inject_session, extended
 	// to harness_run in 90) — the substrate session the run is ledgered under.
@@ -125,6 +178,7 @@ type HarnessRunOutput struct {
 	CostUSD          float64 `json:"cost_usd"`
 	Turns            int     `json:"turns"`
 	Backend          string  `json:"backend"`
+	Model            string  `json:"model,omitempty"`
 	LedgerID         int64   `json:"ledger_id,omitempty"`
 	WorkItemID       string  `json:"work_item_id,omitempty"`
 }
@@ -178,6 +232,7 @@ func makeHarnessRun(pool *pgxpool.Pool) func(
 		}
 
 		ledgerID, workItem := persistHarnessRun(pool, in, reply, "done")
+		model := resolveHarnessModel(in.Backend, in.Model)
 
 		out := HarnessRunOutput{
 			Text:             reply.Text,
@@ -185,12 +240,13 @@ func makeHarnessRun(pool *pgxpool.Pool) func(
 			CostUSD:          reply.CostUSD,
 			Turns:            reply.Turns,
 			Backend:          reply.Backend,
+			Model:            model,
 			LedgerID:         ledgerID,
 			WorkItemID:       workItem,
 		}
 
-		header := fmt.Sprintf("[harness_run complete — backend=%s session=%s cost=$%.4f turns=%d",
-			reply.Backend, reply.SessionID, reply.CostUSD, reply.Turns)
+		header := fmt.Sprintf("[harness_run complete — backend=%s model=%s session=%s cost=$%.4f turns=%d",
+			reply.Backend, model, reply.SessionID, reply.CostUSD, reply.Turns)
 		if ledgerID > 0 {
 			header += fmt.Sprintf(" ledger=%d", ledgerID)
 		}
@@ -213,6 +269,16 @@ func runHarness(ctx context.Context, in *HarnessRunInput) (loomReply, string, er
 	if backend == "" {
 		backend = "claude"
 	}
+	// Model aliases (sonnet/haiku/opus) are Claude Code's own short --model
+	// values (loom passes Model straight through unvalidated — see
+	// claudeArgs in cpuchip/loom's claude.go). Default + validate only for
+	// the claude backend; a non-claude backend (local models, out of scope
+	// for this ratified change) keeps its own default unless the caller
+	// explicitly names one.
+	if m := strings.ToLower(strings.TrimSpace(in.Model)); m != "" && backend == "claude" && !harnessModelAliases[m] {
+		return loomReply{}, "", fmt.Errorf("harness_run: 'model' must be one of sonnet, haiku, opus (got %q)", in.Model)
+	}
+	model := resolveHarnessModel(backend, in.Model)
 	timeout := in.TimeoutSeconds
 	if timeout <= 0 {
 		timeout = harnessDefaultTimeoutSeconds
@@ -268,6 +334,9 @@ func runHarness(ctx context.Context, in *HarnessRunInput) (loomReply, string, er
 		"--dir", workdir,
 		"--claude-home", claudeHome,
 	}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
 
 	if mcpURL != "" {
 		// The hinge: generate the mcp-config INSIDE claude-home so the
@@ -292,7 +361,14 @@ func runHarness(ctx context.Context, in *HarnessRunInput) (loomReply, string, er
 	if allowed == "" {
 		tools := append([]string{}, harnessClaudeReadTools...)
 		if mcpURL != "" {
+			// 1B: the narrow write set rides along with the read set whenever
+			// the hinge is wired — the Arc C server structurally carries both
+			// (http.go), so there is no separate "read-only harness" mode to
+			// preserve here. An operator wanting a strictly read-only dispatch
+			// sets STEWARDS_HARNESS_ALLOWED_TOOLS explicitly (this branch is
+			// skipped entirely) or leaves STEWARDS_HARNESS_MCP_URL unset.
 			tools = append(tools, harnessSubstrateReadTools...)
+			tools = append(tools, harnessSubstrateWriteTools...)
 		}
 		allowed = strings.Join(tools, ",")
 	}
@@ -402,6 +478,7 @@ func persistHarnessRun(pool *pgxpool.Pool, in HarnessRunInput, reply loomReply, 
 	if backend == "" {
 		backend = "claude"
 	}
+	model := resolveHarnessModel(backend, in.Model)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -409,11 +486,11 @@ func persistHarnessRun(pool *pgxpool.Pool, in HarnessRunInput, reply loomReply, 
 	var workItem string
 	err := pool.QueryRow(ctx, `
 		INSERT INTO stewards.harness_runs
-		    (session_id, work_item_id, backend, workdir, prompt,
+		    (session_id, work_item_id, backend, model, workdir, prompt,
 		     harness_session_id, cost_usd, turns, status, error)
-		VALUES ($1, stewards.session_work_item($1), $2, $3, $4, $5, $6, $7, $8, nullif($9,''))
+		VALUES ($1, stewards.session_work_item($1), $2, $3, $4, $5, $6, $7, $8, $9, nullif($10,''))
 		RETURNING id, coalesce(work_item_id::text, '')`,
-		nullableString(strings.TrimSpace(in.SessionID)), backend,
+		nullableString(strings.TrimSpace(in.SessionID)), backend, nullableString(model),
 		nullableString(strings.TrimSpace(in.Workdir)), in.Prompt,
 		nullableString(reply.SessionID), reply.CostUSD, reply.Turns, status, reply.Error,
 	).Scan(&id, &workItem)
@@ -433,6 +510,7 @@ func runHarnessSmoke(args []string) error {
 	fs := flag.NewFlagSet("harness-smoke", flag.ContinueOnError)
 	prompt := fs.String("prompt", "", "the task for the harness (required)")
 	workdir := fs.String("workdir", "", "host dir mounted as the harness's working dir")
+	model := fs.String("model", "", "sonnet | haiku | opus (default sonnet)")
 	session := fs.String("session", "harness-smoke", "substrate session id to ledger the run under")
 	dsnFlag := fs.String("dsn", "", "Postgres DSN for the ledger (default $STEWARDS_DSN; empty = no ledger)")
 	timeout := fs.Int("timeout", harnessDefaultTimeoutSeconds, "dispatch timeout in seconds")
@@ -467,6 +545,7 @@ func runHarnessSmoke(args []string) error {
 	in := HarnessRunInput{
 		Prompt:         *prompt,
 		Workdir:        *workdir,
+		Model:          *model,
 		TimeoutSeconds: *timeout,
 		SessionID:      *session,
 	}

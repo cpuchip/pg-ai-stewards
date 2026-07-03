@@ -63,6 +63,16 @@ func main() {
 		return
 	}
 
+	// `harness-home-init` — seed STEWARDS_HARNESS_CLAUDE_HOME with a
+	// CLAUDE.md + settings.json (harness_home_init.go). Idempotent; run it
+	// once per box (or after a fresh claude-home wipe).
+	if len(os.Args) > 1 && os.Args[1] == "harness-home-init" {
+		if err := runHarnessHomeInit(os.Args[2:]); err != nil {
+			log.Fatalf("harness-home-init: %v", err)
+		}
+		return
+	}
+
 	// `otel-smoke` -- the real-path proof driver for the OTel exporter (miss
 	// D): the exact fetch + span-build + OTLP-POST code otel_export.go's
 	// background poller runs, invoked directly so a collector/endpoint can
@@ -136,6 +146,7 @@ func main() {
 	// Register tools. Each handler closes over the pool so it can run
 	// queries; the pool is already context-aware and goroutine-safe.
 	registerDocTools(srv, pool)
+	registerDocWriteTools(srv, pool, "stdio-main") // doc_create/append/patch/read/finalize/current (90) — one stable draft namespace for this long-lived stdio process
 	registerInspectionTools(srv, pool)
 	registerEscalationTools(srv, pool)
 	registerExpandTools(srv, pool)
@@ -146,8 +157,8 @@ func main() {
 	registerBrainstormTools(srv, pool)
 	registerModelTools(srv, pool)
 	registerRedlineTools(srv, pool)
-	registerImageTools(srv, pool)  // generate_image (Gemini Nano Banana → chat attachment); NOT on the read-only HTTP profile
-	registerA2ATools(srv, pool)    // A2A / Open Engine — hand work to / claim work from other agents
+	registerImageTools(srv, pool)   // generate_image (Gemini Nano Banana → chat attachment); NOT on the read-only HTTP profile
+	registerA2ATools(srv, pool)     // A2A / Open Engine — hand work to / claim work from other agents
 	registerHarnessTools(srv, pool) // harness_run (90) — loom Phase-1 dispatch; NOT on the read-only HTTP profile
 
 	log.Printf("server starting on stdio (mcp protocol)")

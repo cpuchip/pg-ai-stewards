@@ -4227,7 +4227,9 @@ END $$;
 -- construction: harness-pilot is the ONLY grant holder, work-item-chat carries
 -- an explicit deny, and harness-review routes explicitly only.
 DO $$
-DECLARE v_stages jsonb;
+DECLARE
+    v_stages jsonb;
+    v_write_tool text;
 BEGIN
     -- the tool ships active, routed at the bridge's own stdio surface, session-injected
     ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs
@@ -4279,7 +4281,35 @@ BEGIN
        SET execute_target = jsonb_build_object('kind','mcp_proxy','server','pg-ai-stewards','tool','harness_run','inject_session',true)
      WHERE name='harness_run';
 
-    RAISE NOTICE 'OK 90: harness executor — harness_run registered (unclassified, session-injected, sticky), ledger present, harness-pilot alone holds the grant (work-item-chat explicit deny), harness-review routes explicitly only';
+    -- 1B write-back addendum: the model-passthrough ledger column, and the
+    -- harness-pilot write-set grants (doc build/finalize + a2a_note) laid
+    -- ALONGSIDE the harness_run grant above — never replacing it, never
+    -- handed to any other family.
+    ASSERT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='stewards' AND table_name='harness_runs' AND column_name='model'),
+        '90 (1B): harness_runs must carry a model column (the --model passthrough ledger)';
+    ASSERT (SELECT args_schema->'properties' ? 'model' FROM stewards.tool_defs WHERE name='harness_run'),
+        '90 (1B): harness_run''s args_schema must advertise the model property';
+
+    FOR v_write_tool IN SELECT unnest(ARRAY[
+            'doc_create','doc_append_section','doc_patch','doc_read','doc_finalize','doc_current',
+            'a2a_note','a2a_note_clear'])
+    LOOP
+        ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                        WHERE agent_family='harness-pilot' AND tool_pattern = v_write_tool AND action='allow'),
+            format('90 (1B): harness-pilot must hold the write-set grant for %s', v_write_tool);
+    END LOOP;
+    -- the harness_run wall from above must still stand: no OTHER family
+    -- picked up harness_run as a side effect of the write-set grants, and
+    -- work-item-chat's explicit deny is untouched.
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                        WHERE agent_family <> 'harness-pilot' AND tool_pattern='harness_run' AND action='allow'),
+        '90 (1B): the write-back addendum must not loosen the harness_run wall — still NO family besides harness-pilot';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                    WHERE agent_family='work-item-chat' AND tool_pattern='harness_run' AND action='deny'),
+        '90 (1B): work-item-chat''s explicit harness_run deny must still stand';
+
+    RAISE NOTICE 'OK 90: harness executor — harness_run registered (unclassified, session-injected, sticky, model-passthrough), ledger present (+model column), harness-pilot alone holds harness_run (work-item-chat explicit deny) plus the narrow write-set grant (doc build/finalize + a2a_note), harness-review routes explicitly only';
 END $$;
 
 -- 92: M1 (audit-synthesis §II) — pin the FINAL body of the most-re-authored

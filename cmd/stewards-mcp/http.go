@@ -2,21 +2,34 @@
 // at the substrate's tools over the network, instead of only an in-box stdio
 // `claude mcp add`. The security model IS the feature:
 //
-//   - READ-ONLY tool profile only (doc_* + inspection) — never the write/spawn/
-//     coder tools the stdio surface carries. A remote caller can browse + search
-//     our knowledge, not mutate it or spawn work.
+//   - Mostly READ-ONLY tool profile (doc_* + inspection + model catalog) — never
+//     a2a_submit/spawn/coder tools. A remote caller can browse + search our
+//     knowledge and, since 90's write-back addendum (ratified 1B, 2026-07-03),
+//     BUILD AND POOL A DOCUMENT + LEAVE A NOTE via the narrow set below — still
+//     never mutate anything else or spawn work.
 //   - Bearer-token auth (constant-time compare). No token + non-loopback bind is
 //     refused loudly; localhost dev may run tokenless.
 //   - Local-bound first (the ratified posture): default to 127.0.0.1; flip to the
-//     mesh once proven. Coder/write tools never join this profile without an
-//     explicit, separate decision.
+//     mesh once proven.
+//
+// The narrow write set (90): doc_create / doc_append_section / doc_patch /
+// doc_read / doc_finalize / doc_current (the "doc create/update" verbs 34
+// already built, newly wired to an MCP surface — see doc_write.go's header)
+// plus a2a_note / a2a_note_clear (the "leave a work-item note" verb, split out
+// of the full a2a surface — see registerA2ANoteTools in a2a.go). Deliberately
+// ABSENT: a2a_submit/a2a_claim/a2a_receipt/a2a_register/a2a_inbox/a2a_answer/
+// a2a_needs_input, spawn_subagent, harness_run itself, every coder_* tool —
+// the wall is that they are simply not registered on this server, not a
+// prompt asking the caller to behave.
 //
 // Transport: the go-sdk's StreamableHTTPHandler (one POST endpoint at /mcp).
 package main
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"log"
 	"net"
 	"net/http"
@@ -38,15 +51,25 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 		log.Printf("WARNING: no STEWARDS_MCP_HTTP_TOKEN — the HTTP MCP surface is UNAUTHENTICATED (localhost only).")
 	}
 
-	// Each MCP session gets a fresh server carrying ONLY the read-only profile.
+	// Each MCP session gets a fresh server. getServer runs once per NEW MCP
+	// session (the go-sdk reuses the returned server for the rest of that
+	// session — see streamable.go's "OK for getServer to return the same
+	// server multiple times" / the sessInfo==nil branch), so a fresh random
+	// sessionID minted here is stable for one caller's whole connection —
+	// e.g. one harness dispatch's entire lifetime — and private to it. That
+	// gives doc_create/append/patch/finalize (doc_write.go) a natural,
+	// per-dispatch draft namespace with zero cross-dispatch bleed, no new
+	// plumbing required.
 	getServer := func(_ *http.Request) *mcp.Server {
 		s := mcp.NewServer(&mcp.Implementation{
-			Name:    "pg-ai-stewards (remote, read-only)",
+			Name:    "pg-ai-stewards (remote, read-mostly)",
 			Version: version,
 		}, nil)
 		registerDocTools(s, pool)        // doc_search / doc_get / doc_similar / doc_citations
 		registerInspectionTools(s, pool) // read-only work-item / corpus inspection
 		registerModelTools(s, pool)      // list_models / list_connectors — read-only catalog views (90: list_models is in the harness hinge's ratified read set)
+		registerDocWriteTools(s, pool, "arc-c-"+newHTTPSessionID())
+		registerA2ANoteTools(s, pool) // a2a_note / a2a_note_clear ONLY — never a2a_submit/claim/receipt/etc.
 		return s
 	}
 	handler := mcp.NewStreamableHTTPHandler(getServer, nil)
@@ -65,7 +88,7 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 		defer c()
 		_ = httpSrv.Shutdown(sctx)
 	}()
-	log.Printf("remote MCP (read-only: doc_*, inspection) on http://%s/mcp (auth=%v)", addr, token != "")
+	log.Printf("remote MCP (read: doc_*/inspection/models; narrow write: doc build/finalize + a2a_note) on http://%s/mcp (auth=%v)", addr, token != "")
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}
@@ -99,6 +122,20 @@ func bearerAuth(token string, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// newHTTPSessionID mints a short random hex id for one Arc C MCP connection —
+// used only to scope doc_write.go's draft namespace per-caller (not a
+// security boundary; the security boundary is which tools are registered at
+// all, per this file's header).
+func newHTTPSessionID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand failing is exceptional; fall back to a fixed
+		// (still-private-enough, single-process) value rather than panic.
+		return "fallback"
+	}
+	return hex.EncodeToString(b[:])
 }
 
 // isLoopback reports whether addr binds only the loopback interface.

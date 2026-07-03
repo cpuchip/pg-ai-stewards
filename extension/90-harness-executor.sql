@@ -174,5 +174,71 @@ ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
     produces_maturity = EXCLUDED.produces_maturity, notes = EXCLUDED.notes;
 
 -- =====================================================================
+-- §5 — write-back addendum (ratified "1B", 2026-07-03): "harness write-back
+-- with a NARROW write set." This is a small, idempotent addition to the file
+-- ABOVE rather than a new chain number, since 90 is already the harness file
+-- and re-applying it whole is the documented live-install path.
+--
+-- What "the write set" actually is (verified against the live tool surface,
+-- not guessed): 34-doc-builder.sql already built doc_create / doc_append_
+-- section / doc_patch / doc_read / doc_finalize / doc_current as
+-- stewards.tool_defs rows — but only the substrate's OWN internal per-
+-- pipeline tool-calling loop could ever reach them; no MCP server exposed
+-- them. cmd/stewards-mcp/doc_write.go is the missing wiring: real MCP tools
+-- calling these SAME SQL functions, now reachable from the harness's Arc C
+-- HTTP hinge (cmd/stewards-mcp/http.go) and the STEWARDS_HARNESS_ALLOWED_
+-- TOOLS default (harness.go's harnessSubstrateWriteTools). a2a_note /
+-- a2a_note_clear already existed as real MCP tools (69-a2a-engine.sql +
+-- a2a.go) but only bundled with the FULL a2a surface (a2a_submit, a2a_claim,
+-- a2a_receipt, ...); registerA2ANoteTools (a2a.go) splits them out so the
+-- harness hinge can carry "leave a note" without "hand off/claim/receipt
+-- work." No new SQL functions, no new semantics — a second, narrower front
+-- door onto code that already worked.
+--
+-- Two DIFFERENT walls, both updated here for consistency (do not conflate
+-- them): (a) agent_tool_perms below governs what the SUBSTRATE'S OWN
+-- internal dispatch loop lets the harness-pilot family's thin pilot model
+-- call THROUGH THE SUBSTRATE (today, by its own prompt in §3, that pilot
+-- calls harness_run and nothing else — these grants are forward-looking
+-- consistency, not a currently-exercised path). (b) the ACTUAL loom-
+-- dispatched Claude Code harness reaches the substrate ONLY through the Arc C
+-- HTTP MCP surface (http.go) + whatever --allowed-tools names (harness.go) —
+-- an entirely separate mechanism this file's rows do not touch.
+-- =====================================================================
+
+-- the model-passthrough ledger column (harness.go's HarnessRunInput.Model /
+-- resolveHarnessModel — sonnet|haiku|opus, default sonnet for the claude
+-- backend). Nullable: rows ledgered before this column existed have no value.
+ALTER TABLE stewards.harness_runs ADD COLUMN IF NOT EXISTS model text;
+COMMENT ON COLUMN stewards.harness_runs.model IS
+'90 (1B): the Claude Code --model alias this dispatch ran as (sonnet|haiku|opus). NULL for runs ledgered before model passthrough shipped.';
+
+-- keep the tool_defs args_schema (the substrate-facing JSON schema for
+-- harness_run, used when the substrate calls a model through its own
+-- function-calling loop) in sync with the Go MCP tool's actual input.
+UPDATE stewards.tool_defs
+   SET args_schema = '{"type":"object","required":["prompt"],"additionalProperties":false,"properties":{"prompt":{"type":"string","description":"The task for the harness — the full prompt Claude Code receives (the workdir is its corpus; the prompt is the task)."},"workdir":{"type":"string","description":"Optional HOST directory bind-mounted as the harness''s working dir (/work) — the code/context it reads. Default: an empty scratch dir."},"backend":{"type":"string","description":"loom backend (default claude)."},"model":{"type":"string","enum":["sonnet","haiku","opus"],"description":"Claude model alias to run as (default sonnet). haiku for cheap/bulk, opus when the dispatch is worth it."},"timeout_seconds":{"type":"integer","description":"Wall-clock cap for the whole dispatch (default 600, max 3600)."}}}'::jsonb
+ WHERE name = 'harness_run';
+
+-- the narrow write-set grants for harness-pilot (see the header note above:
+-- this governs the SUBSTRATE'S internal loop, not the external harness's Arc
+-- C reach). Idempotent; source='manual' so a broadcast/reimport never
+-- silently overrides an explicit decision here.
+INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source)
+SELECT 'harness-pilot', v.tool, 'allow', 'manual'
+  FROM unnest(ARRAY[
+        'doc_create', 'doc_append_section', 'doc_patch', 'doc_read', 'doc_finalize', 'doc_current',
+        'a2a_note', 'a2a_note_clear'
+       ]) AS v(tool)
+ON CONFLICT (agent_family, tool_pattern) DO UPDATE
+   SET action = EXCLUDED.action,
+       source = COALESCE(EXCLUDED.source, stewards.agent_tool_perms.source);
+
+DO $$
+BEGIN
+    RAISE NOTICE 'OK 90 (1B addendum): write-back — doc_write.go + registerA2ANoteTools wired onto the Arc C hinge and the harness default allowed-tools; harness_runs.model ledgers the passthrough; harness-pilot holds the narrow write-set grant (doc build/finalize + a2a_note) alongside its existing harness_run grant';
+END $$;
+
+-- =====================================================================
 -- End of 90-harness-executor.sql
 -- =====================================================================
