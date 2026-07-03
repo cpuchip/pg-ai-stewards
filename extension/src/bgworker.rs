@@ -1982,6 +1982,22 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
             if tools_disabled {
                 m.remove("tools");
             }
+            // `tool_choice` without a non-empty `tools` array is a 400 on
+            // Alibaba/qwen (invalid_parameter_error) though other providers
+            // tolerate it. The combo arises when a hard tool-round cap sets
+            // tools_disabled + tool_choice='none' (80-rest final form): the
+            // strip above removes tools but the choice key survived. Omitting
+            // both is equivalent everywhere — no tools means no tool calls —
+            // so drop tool_choice whenever tools is absent or empty.
+            let tools_empty = m
+                .get("tools")
+                .and_then(|v| v.as_array())
+                .map(|a| a.is_empty())
+                .unwrap_or(true);
+            if tools_empty {
+                m.remove("tools");
+                m.remove("tool_choice");
+            }
             m.insert("stream".to_string(), serde_json::Value::Bool(true));
             m.insert(
                 "stream_options".to_string(),
