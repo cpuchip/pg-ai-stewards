@@ -49,7 +49,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/projects',   name: 'projects',   component: Projects, meta: { title: 'Projects' } },
   { path: '/scheduled',  name: 'scheduled',  component: Scheduled, meta: { title: 'Scheduled' } },
   { path: '/brainstorm', name: 'brainstorm', component: Brainstorm, meta: { title: 'Brainstorm' } },
-  { path: '/models',     name: 'models',     component: Models, meta: { title: 'Models catalog' } },
+  { path: '/models',     name: 'models',     component: Models, meta: { title: 'Providers & models' } },
   { path: '/stewdio',    name: 'stewdio',    component: Stewdio, meta: { title: 'Stewdio' } },
 ]
 

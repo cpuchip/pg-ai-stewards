@@ -3835,4 +3835,106 @@ BEGIN
     RAISE NOTICE 'OK 86: sticky agent family — fallback + recorded-family resolution + the 85 bridge retired';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→86) is sound =='
+
+-- 88: in-app credentials + daily budgets — the encrypted store never echoes a
+-- secret (is_set boolean only); rotation clears verification; dials land in
+-- config and the credential_providers view joins them with the newest
+-- ciphertext (the Rust overlay's read surface); provider_spend_caps grows the
+-- COMPUTED daily window (yesterday's spend is invisible to a 'daily' cap and
+-- visible to a prepaid one — no reset job to test because there isn't one).
+DO $$
+BEGIN
+    -- structure + the never-echo contract: credential_status exists and has
+    -- no secret-ish column in its OUT row (the ciphertext must not surface)
+    ASSERT to_regclass('stewards.credentials') IS NOT NULL,
+        '88: credentials table must exist';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname = 'stewards' AND p.proname = 'credential_status'),
+        '88: credential_status() must exist';
+    ASSERT NOT EXISTS (
+        SELECT 1
+          FROM pg_proc p
+          JOIN pg_namespace n ON n.oid = p.pronamespace
+         CROSS JOIN LATERAL unnest(coalesce(p.proargnames, '{}'::text[])) AS argname
+         WHERE n.nspname = 'stewards' AND p.proname = 'credential_status'
+           AND argname ILIKE '%secret%'),
+        '88: credential_status must never expose a secret column (is_set boolean only)';
+
+    -- round-trip with dummy ciphertext bytes (SQL stores bytea; it never
+    -- sees plaintext — encryption is the Go cockpit's job)
+    PERFORM stewards.credential_set('vs-88-zen', 'vs88_zen', '\x0102030405'::bytea, 'smoke');
+    ASSERT (SELECT is_set FROM stewards.credential_status() WHERE name = 'vs-88-zen'),
+        '88: a stored credential must report is_set = true';
+    ASSERT (SELECT last_verified_at IS NULL FROM stewards.credential_status() WHERE name = 'vs-88-zen'),
+        '88: a fresh credential is UNVERIFIED until test-on-save passes';
+    PERFORM stewards.credential_mark_verified('vs-88-zen');
+    ASSERT (SELECT last_verified_at IS NOT NULL FROM stewards.credential_status() WHERE name = 'vs-88-zen'),
+        '88: credential_mark_verified must stamp last_verified_at';
+    -- rotation clears verification (the replacement key has passed no probe)
+    PERFORM stewards.credential_set('vs-88-zen', 'vs88_zen', '\x0607'::bytea);
+    ASSERT (SELECT last_verified_at IS NULL FROM stewards.credential_status() WHERE name = 'vs-88-zen'),
+        '88: rotating a key must clear last_verified_at';
+
+    -- dials -> config -> the overlay view joins dials + newest ciphertext
+    PERFORM stewards.provider_dials_set('vs88_zen', 'https://example.invalid/v1', 'openai', 'vs-model');
+    ASSERT (SELECT base_url = 'https://example.invalid/v1'
+                   AND kind = 'openai' AND default_model = 'vs-model'
+                   AND secret_encrypted IS NOT NULL
+              FROM stewards.credential_providers WHERE provider = 'vs88_zen'),
+        '88: credential_providers must join the dials with the newest ciphertext';
+    -- keyless local providers (LM Studio) are dials-only: NULL secret, still a row
+    PERFORM stewards.provider_dials_set('vs88_local', 'http://localhost:1234/v1');
+    ASSERT (SELECT secret_encrypted IS NULL FROM stewards.credential_providers WHERE provider = 'vs88_local'),
+        '88: a dials-only (keyless) provider rides the view with NULL secret';
+
+    -- guardrails hold: no malformed dials, no NULL ciphertext
+    BEGIN
+        PERFORM stewards.provider_dials_set('vs88_zen', 'ftp://example.invalid', 'openai');
+        ASSERT false, '88: provider_dials_set must reject a non-http base_url';
+    EXCEPTION WHEN others THEN
+        IF SQLERRM NOT LIKE '%must be http%' THEN RAISE; END IF;
+    END;
+    BEGIN
+        PERFORM stewards.credential_set('vs-88-bad', 'vs88_zen', NULL);
+        ASSERT false, '88: credential_set must refuse a NULL secret';
+    EXCEPTION WHEN others THEN
+        IF SQLERRM NOT LIKE '%secret_encrypted is required%' THEN RAISE; END IF;
+    END;
+
+    -- budgets: the daily window counts only today (midnight UTC), prepaid
+    -- counts the whole refill epoch. now() is transaction-frozen, so the
+    -- arithmetic below is deterministic.
+    PERFORM stewards.provider_budget_set('vs88_zen', 5000000, 'daily');  -- $5/day
+    INSERT INTO stewards.cost_events (attempt_seq, at, provider, model, micro_dollars, pricing_effective_at)
+    VALUES (1, now() - interval '1 day', 'vs88_zen', 'vs-model', 10000000, now()),
+           (1, now(),                    'vs88_zen', 'vs-model',  1000000, now());
+    ASSERT stewards.provider_spend_since('vs88_zen') = 1000000,
+        '88: a daily window starts at midnight UTC — yesterday''s $10 must be invisible';
+    ASSERT NOT stewards.provider_cap_exceeded('vs88_zen'),
+        '88: $1 of today''s spend under a $5 daily cap must not gate';
+    INSERT INTO stewards.cost_events (attempt_seq, provider, model, micro_dollars, pricing_effective_at)
+    VALUES (1, 'vs88_zen', 'vs-model', 4000000, now());
+    ASSERT stewards.provider_cap_exceeded('vs88_zen'),
+        '88: reaching $5 of today''s spend must trip the $5 daily cap';
+    -- the same row flipped to prepaid sees the whole epoch (both days)
+    UPDATE stewards.provider_spend_caps
+       SET refill_cadence = NULL, since = now() - interval '2 days'
+     WHERE provider = 'vs88_zen';
+    ASSERT stewards.provider_spend_since('vs88_zen') = 15000000,
+        '88: a prepaid cap counts spend since its refill epoch (both days)';
+    PERFORM stewards.provider_budget_set('vs88_zen', NULL);
+    ASSERT NOT stewards.provider_cap_exceeded('vs88_zen'),
+        '88: removing the budget must remove the gate';
+
+    -- delete + restore virgin state
+    ASSERT stewards.credential_delete('vs-88-zen'),
+        '88: credential_delete must report the row it removed';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.credential_status() WHERE name = 'vs-88-zen'),
+        '88: a deleted credential must vanish from status';
+    DELETE FROM stewards.config WHERE key LIKE 'provider.vs88_%';
+    DELETE FROM stewards.cost_events WHERE provider = 'vs88_zen';
+    DELETE FROM stewards.cost_buckets WHERE provider = 'vs88_zen';
+    RAISE NOTICE 'OK 88: in-app credentials — never-echo status + rotation clears verification + dials/ciphertext view + daily-vs-prepaid cap windows + guardrails';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→88) is sound =='

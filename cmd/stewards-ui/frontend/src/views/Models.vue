@@ -1,12 +1,11 @@
 <script setup lang="ts">
-// Models catalog — browse + copy-paste view for the substrate's
-// model_pricing table joined with live providers_loaded(). Backs the
-// 2026-05-29 "listable in settings" half of Michael's ask.
-//
-// Read-only by design. Model registration happens via SQL migrations
-// (see extension/4a-cost-tracking.sql and follow-on price updates).
+// Providers & models — the 88/#256 setup wizard (add key → test-on-save →
+// pick models → assign roles → budget) stacked over the read-only models
+// catalog (model_pricing joined with live providers_loaded(), the
+// 2026-05-29 "listable in settings" half of Michael's ask).
 import { ref, computed, onMounted } from 'vue'
 import { api, type ModelRow, type ProviderRow } from '@/api'
+import ProvidersWizard from './ProvidersWizard.vue'
 
 const models = ref<ModelRow[]>([])
 const providers = ref<ProviderRow[]>([])
@@ -73,12 +72,14 @@ onMounted(load)
 <template>
   <div class="models-view">
     <header class="page-header">
-      <h1>Models catalog</h1>
+      <h1>Providers &amp; models</h1>
       <p class="subtitle">
         Models known to the substrate via <code>stewards.model_pricing</code>, grouped by provider.
         Click any model name to copy it for pasting into the Brainstorm form or stewards-cli.
       </p>
     </header>
+
+    <ProvidersWizard @changed="load" />
 
     <div class="controls">
       <input

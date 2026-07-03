@@ -911,6 +911,20 @@ extension_sql_file!(
     requires = ["create_world_chat"],
 );
 
+// 88 — in-app credentials + daily budgets (#256): the encrypted credential store
+// behind the setup wizard (stewards.credentials + credential_set/status/delete,
+// never-echo-the-key), provider dials in stewards.config, the
+// credential_providers view the Rust registry overlay reads at dispatch (a
+// wizard-saved key goes live with no restart), and provider_spend_caps'
+// refill_cadence='daily' (budget window = midnight UTC, computed not mutated).
+// Sorts after 86 as the chain tail at authoring time; renumber the `requires`
+// if a later file lands between.
+extension_sql_file!(
+    "../88-credentials.sql",
+    name = "create_credentials",
+    requires = ["create_sticky_agent_family"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
@@ -944,7 +958,12 @@ fn enqueue(kind: &str, provider: &str, payload: pgrx::JsonB) -> i64 {
     .expect("id is non-null")
 }
 
-/// List the providers the bgworker loaded from env at startup.
+/// List the providers the substrate can dispatch to: the env registry the
+/// postmaster loaded at boot UNIONED with the 88 credential overlay
+/// (wizard-added providers in stewards.config + stewards.credentials — a DB
+/// row wins on name collision, so a rotated key reads as configured). Alias
+/// resolution gates on this via provider_is_loaded(), which is what makes a
+/// wizard-added provider live with no restart.
 /// Returns one row per provider; **never returns the API key**.
 #[pg_extern]
 fn providers_loaded() -> TableIterator<
@@ -957,14 +976,35 @@ fn providers_loaded() -> TableIterator<
         name!(has_api_key, bool),
     ),
 > {
-    let providers = PROVIDER_REGISTRY
-        .get()
-        .map(|r| r.summary())
-        .unwrap_or_default();
+    let providers = crate::providers::merged_summaries_spi();
 
     TableIterator::new(providers.into_iter().map(|p| {
         (p.name, p.base_url, p.default_model, p.kind, p.has_api_key)
     }))
+}
+
+/// The honest pg-side check behind the wizard's "is this key live HERE?"
+/// badge: fetch the named credential's ciphertext and attempt the same
+/// AES-256-GCM decryption dispatch will do. Returns 'ok' or the error text —
+/// NEVER the plaintext (which is dropped on the floor here). The Go cockpit
+/// verifying a key proves the key works against the provider; only this
+/// proves the Postgres process can decrypt it (same STEWARDS_MASTER_KEY).
+#[pg_extern]
+fn credential_decrypt_check(name: &str) -> String {
+    let ct: Option<Vec<u8>> = match Spi::get_one_with_args::<Vec<u8>>(
+        "SELECT secret_encrypted FROM stewards.credentials WHERE name = $1",
+        &[name.into()],
+    ) {
+        Ok(v) => v,
+        Err(_) => None, // no row (get_one errors on zero rows) or pre-88 chain
+    };
+    let Some(ct) = ct else {
+        return format!("no credential named '{}'", name);
+    };
+    match crate::providers::decrypt_secret(&ct) {
+        Ok(_plaintext_dropped) => "ok".to_string(),
+        Err(e) => e,
+    }
 }
 
 /// Synchronously embed `text` and return the raw vector (the caller casts
@@ -1000,10 +1040,17 @@ fn embed_query(
     }
 }
 
-/// Resolve a provider by name in a backend: prefer the registry the postmaster
-/// set in `_PG_init` (inherited via fork), else parse env on demand and memoize
-/// it for this backend.
+/// Resolve a provider by name in a backend: the 88 credential overlay first
+/// (a wizard-added provider or rotated key must win), then the registry the
+/// postmaster set in `_PG_init` (inherited via fork), else parse env on
+/// demand and memoize it for this backend.
 fn resolve_embed_provider(name: &str) -> Result<crate::providers::Provider, String> {
+    // Backend context — SPI is already legal here (we're inside a pg_extern).
+    match crate::providers::merged_provider_spi(name) {
+        Ok(Some(p)) => return Ok(p),
+        Ok(None) => {}
+        Err(e) => return Err(e),
+    }
     if let Some(reg) = PROVIDER_REGISTRY.get() {
         if let Some(p) = reg.providers.iter().find(|p| p.name == name) {
             return Ok(p.clone());
