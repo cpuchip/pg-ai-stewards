@@ -736,7 +736,7 @@ function onKey(e: KeyboardEvent) {
         <button class="ml-auto text-rose-400 hover:text-rose-300 border border-zinc-800 rounded px-1.5 py-0.5 shrink-0" title="stop" @click="stop">■ stop</button>
       </div>
       <div v-if="!chatRef" class="text-zinc-600 text-sm">
-        Select a work item or doc on the left to chat grounded in it — or pick a
+        Select a work item or doc to chat grounded in it — or pick a
         <span class="text-zinc-400">project lens</span> above to chat over a whole corpus.
         Attach a PDF, Office doc, or a zipped folder with 📎 and it becomes safe,
         searchable subject material.
@@ -798,12 +798,14 @@ function onKey(e: KeyboardEvent) {
         </button>
       </div>
       <div class="flex items-end gap-2">
-        <button class="text-zinc-400 hover:text-sky-300 disabled:opacity-40 pb-2 text-lg leading-none"
+        <!-- mobile-first ≥44px tap target (min-h/min-w), reverts to the compact
+             desktop icon-button size at md+ so the dense cockpit row is untouched. -->
+        <button class="flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:pb-2 text-zinc-400 hover:text-sky-300 disabled:opacity-40 text-lg leading-none"
                 :disabled="!chatRef" title="attach a document, image, or zipped folder" @click="pickFiles">📎</button>
         <input ref="fileInput" type="file" multiple class="hidden" @change="onFiles"
                accept="image/*,.pdf,.docx,.xlsx,.pptx,.odt,.epub,.html,.htm,.txt,.md,.csv,.json,.rtf,.zip,.7z,.tar,.gz,.tgz,.bz2,.xz,.rar" />
         <!-- rigor mode (65): a traceable, source-cited answer over the bucket -->
-        <button class="mb-1 flex items-center gap-1 text-xs font-medium rounded-md border px-2 py-1.5 transition disabled:opacity-40 shrink-0"
+        <button class="mb-1 flex items-center gap-1 text-xs font-medium rounded-md border px-2 py-1.5 min-h-[44px] md:min-h-0 transition disabled:opacity-40 shrink-0"
                 :class="rigor ? 'border-amber-500/70 bg-amber-500/20 text-amber-200' : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:text-amber-300 hover:border-amber-700/60'"
                 :disabled="!chatRef"
                 :title="rigor ? 'Rigor mode is ON — every claim is grounded in a source or flagged, calibrated by evidence, with observation kept separate from recommendation. Click to turn it off.' : 'Turn on Rigor mode — a slower, defensible answer where every line traces to the bucket (ground-or-flag, calibrated, observation vs recommendation).'"

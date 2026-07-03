@@ -85,7 +85,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="space-y-3 h-[calc(100vh-9rem)] flex flex-col">
+  <div class="space-y-3 h-[calc(100dvh-9rem)] flex flex-col">
     <div class="flex items-baseline justify-between">
       <h2 class="text-2xl font-semibold tracking-tight">Graph</h2>
       <div class="text-xs text-zinc-500 flex items-center gap-3">

@@ -5,7 +5,7 @@
 // P4: the panel layout is serialized to localStorage (toJSON/fromJSON) so a
 // user's arrangement survives reloads; "⟲ layout" resets to the default.
 // Spec: .spec/proposals/stewards-studio.md.
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { DockviewVue, type VueComponent } from 'dockview-vue'
 import type { DockviewApi, DockviewReadyEvent } from 'dockview'
 import 'dockview-core/dist/styles/dockview.css'
@@ -186,65 +186,127 @@ function applyCatalogTitles() {
   for (const p of PANELS) dockApi.getPanel(p.id)?.api.setTitle(p.title)
 }
 watch(() => store.dev, () => closeDevPanes())
+
+// Mobile single-pane mode (mobile-usability P1, 2026-07-03). Dockview is a
+// pixel-driven, JS-laid-out multi-pane manager — genuinely desktop shaped, and
+// fighting its layout engine down to phone width isn't a P1 move. Below md
+// (768px) skip DockviewVue entirely and mount the same three core panel
+// components (Library/Work/Chat — the launcher's other panes, World/
+// Experiments/Sessions, stay desktop-only per the mobile spec) directly in a
+// segmented switcher, one visible at a time. v-show (not v-if) keeps all three
+// alive so switching tabs doesn't re-fetch or drop chat scroll position/polling.
+const isMobile = ref(false)
+let mq: MediaQueryList | null = null
+function syncMobile() { isMobile.value = mq?.matches ?? false }
+onMounted(() => {
+  mq = window.matchMedia('(max-width: 767px)')
+  syncMobile()
+  mq.addEventListener('change', syncMobile)
+})
+onBeforeUnmount(() => { mq?.removeEventListener('change', syncMobile) })
+
+type MobileTab = 'library' | 'work' | 'chat'
+const mobileTab = ref<MobileTab>('library')
+const MOBILE_TABS: { id: MobileTab; label: string }[] = [
+  { id: 'library', label: 'Library' },
+  { id: 'work', label: 'Work' },
+  { id: 'chat', label: 'Chat' },
+]
+// picking something in Library is "I want to talk about this" on a phone —
+// jump straight to Chat instead of leaving the user to find the tab themselves.
+watch(() => store.selectedRef, (v) => { if (v && isMobile.value) mobileTab.value = 'chat' })
 </script>
 
 <template>
   <div class="h-full w-full relative">
-    <!-- b3: collapse/expand the leftmost (Work items) column, VS-Code style.
-         z-40 + isolate (#301 item 4): the cockpit chrome must sit ABOVE a panel's
-         WebGL canvas. A canvas is composited on its own layer and dockview promotes
-         its containers (transform/will-change), which can let the canvas paint over
-         plain z-20 chrome; an isolated high-z stacking context keeps the chrome on top
-         (the canvas is also trapped low, see WorldGraphPanel/CosmosPanel). -->
-    <button
-      class="absolute top-1 left-2 z-40 isolate text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
-      :title="edgeCollapsed.left ? 'show the left panel' : 'collapse the left panel'"
-      @click="toggleEdge('left')">{{ edgeCollapsed.left ? '❯' : '❮' }}</button>
-    <!-- windowing manager: open / reopen any pane -->
-    <div class="absolute top-1 right-2 z-40 isolate flex items-center gap-1">
-      <!-- the unified "Needs your answer" bell (89): every human-blocking item
-           (Hinge reviews, the tool-effect gate, a paused pipeline stage, an A2A
-           blocking question) in one place, superseding 84's tool-confirm-only tray. -->
-      <AttentionBell />
-      <!-- b3: collapse/expand the rightmost (Chat) column -->
+    <!-- MOBILE (<768px): one pane at a time — Library / Work / Chat — instead of
+         dockview's multi-pane VS-Code shell. Its own header row (not absolute
+         chrome floating over the canvas) carries the segmented switcher plus the
+         bell and Details, so nothing overlaps and the bell stays reachable. -->
+    <div v-if="isMobile" class="h-full w-full flex flex-col">
+      <div class="flex items-center gap-1 border-b border-zinc-800 px-2 py-1 shrink-0">
+        <div class="flex-1 flex gap-1" role="tablist">
+          <button v-for="t in MOBILE_TABS" :key="t.id"
+            class="flex-1 min-h-[44px] rounded text-sm border"
+            :class="mobileTab === t.id
+              ? 'text-zinc-100 bg-zinc-800 border-zinc-700'
+              : 'text-zinc-400 border-transparent hover:bg-zinc-900'"
+            @click="mobileTab = t.id">{{ t.label }}</button>
+        </div>
+        <AttentionBell />
+        <button
+          class="text-[11px] rounded px-1.5 min-h-[44px] border shrink-0"
+          :class="store.dev
+            ? 'text-emerald-300 border-emerald-700/60 bg-emerald-900/30'
+            : 'text-zinc-500 border-zinc-800'"
+          title="Details — toggle the live activity/tool-call surfaces"
+          @click="store.dev = !store.dev">⚙</button>
+      </div>
+      <div class="flex-1 min-h-0">
+        <BrowserPanel v-show="mobileTab === 'library'" />
+        <ArtifactPanel v-show="mobileTab === 'work'" />
+        <ChatPanel v-show="mobileTab === 'chat'" />
+      </div>
+    </div>
+
+    <!-- DESKTOP/TABLET (>=768px): the full dockview cockpit, unchanged. -->
+    <template v-else>
+      <!-- b3: collapse/expand the leftmost (Work items) column, VS-Code style.
+           z-40 + isolate (#301 item 4): the cockpit chrome must sit ABOVE a panel's
+           WebGL canvas. A canvas is composited on its own layer and dockview promotes
+           its containers (transform/will-change), which can let the canvas paint over
+           plain z-20 chrome; an isolated high-z stacking context keeps the chrome on top
+           (the canvas is also trapped low, see WorldGraphPanel/CosmosPanel). -->
       <button
-        class="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
-        :title="edgeCollapsed.right ? 'show the right panel' : 'collapse the right panel'"
-        @click="toggleEdge('right')">{{ edgeCollapsed.right ? '❮' : '❯' }}</button>
-      <div class="relative">
+        class="absolute top-1 left-2 z-40 isolate text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
+        :title="edgeCollapsed.left ? 'show the left panel' : 'collapse the left panel'"
+        @click="toggleEdge('left')">{{ edgeCollapsed.left ? '❯' : '❮' }}</button>
+      <!-- windowing manager: open / reopen any pane -->
+      <div class="absolute top-1 right-2 z-40 isolate flex items-center gap-1">
+        <!-- the unified "Needs your answer" bell (89): every human-blocking item
+             (Hinge reviews, the tool-effect gate, a paused pipeline stage, an A2A
+             blocking question) in one place, superseding 84's tool-confirm-only tray. -->
+        <AttentionBell />
+        <!-- b3: collapse/expand the rightmost (Chat) column -->
         <button
           class="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
-          title="open or reopen a panel" @click="showLauncher = !showLauncher">▦ panels</button>
-        <div v-if="showLauncher" class="absolute right-0 mt-1 w-40 rounded border border-zinc-800 bg-zinc-900 shadow-lg overflow-hidden">
-          <button v-for="p in visiblePanels" :key="p.id"
-                  class="w-full text-left px-2 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800 flex items-center justify-between"
-                  @click="openPanel(p)">
-            <span>{{ p.title }}</span>
-            <span class="text-emerald-500 text-[9px]">{{ openPanelIds.includes(p.id) ? '●' : '' }}</span>
-          </button>
+          :title="edgeCollapsed.right ? 'show the right panel' : 'collapse the right panel'"
+          @click="toggleEdge('right')">{{ edgeCollapsed.right ? '❮' : '❯' }}</button>
+        <div class="relative">
+          <button
+            class="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
+            title="open or reopen a panel" @click="showLauncher = !showLauncher">▦ panels</button>
+          <div v-if="showLauncher" class="absolute right-0 mt-1 w-40 rounded border border-zinc-800 bg-zinc-900 shadow-lg overflow-hidden">
+            <button v-for="p in visiblePanels" :key="p.id"
+                    class="w-full text-left px-2 py-1 text-[11px] text-zinc-300 hover:bg-zinc-800 flex items-center justify-between"
+                    @click="openPanel(p)">
+              <span>{{ p.title }}</span>
+              <span class="text-emerald-500 text-[9px]">{{ openPanelIds.includes(p.id) ? '●' : '' }}</span>
+            </button>
+          </div>
         </div>
+        <button
+          class="text-[11px] text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
+          title="reset the panel layout to the default" @click="resetLayout">⟲ layout</button>
+        <!-- the one surface, two depths switch — OFF keeps the everyday surface clean;
+             ON reveals the live Activity pane (models / tokens / dispatch stream),
+             inline tool-call detail, and the developer/raw surfaces. -->
+        <button
+          class="text-[11px] rounded px-1.5 py-0.5 border"
+          :class="store.dev
+            ? 'text-emerald-300 border-emerald-700/60 bg-emerald-900/30'
+            : 'text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border-zinc-800'"
+          :title="store.dev
+            ? 'Details mode ON — live activity, models, tokens & tool calls shown. Click to return to the clean surface.'
+            : 'Details mode OFF — clean everyday surface. Click to see what the engine is doing (models, tokens, tool calls).'"
+          @click="store.dev = !store.dev">⚙ Details</button>
       </div>
-      <button
-        class="text-[11px] text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"
-        title="reset the panel layout to the default" @click="resetLayout">⟲ layout</button>
-      <!-- the one surface, two depths switch — OFF keeps the everyday surface clean;
-           ON reveals the live Activity pane (models / tokens / dispatch stream),
-           inline tool-call detail, and the developer/raw surfaces. -->
-      <button
-        class="text-[11px] rounded px-1.5 py-0.5 border"
-        :class="store.dev
-          ? 'text-emerald-300 border-emerald-700/60 bg-emerald-900/30'
-          : 'text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border-zinc-800'"
-        :title="store.dev
-          ? 'Details mode ON — live activity, models, tokens & tool calls shown. Click to return to the clean surface.'
-          : 'Details mode OFF — clean everyday surface. Click to see what the engine is doing (models, tokens, tool calls).'"
-        @click="store.dev = !store.dev">⚙ Details</button>
-    </div>
-    <DockviewVue
-      class="dockview-theme-abyss"
-      style="height: 100%; width: 100%;"
-      :components="components"
-      @ready="onReady"
-    />
+      <DockviewVue
+        class="dockview-theme-abyss"
+        style="height: 100%; width: 100%;"
+        :components="components"
+        @ready="onReady"
+      />
+    </template>
   </div>
 </template>

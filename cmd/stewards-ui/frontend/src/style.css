@@ -150,3 +150,13 @@
 .doc-theme :where(hr) { border: none; border-top: 1px solid var(--doc-line); margin: 2.5em 0; }
 .doc-theme :where(img) { max-width: 100%; border-radius: 8px; }
 .doc-theme :where(strong) { color: var(--doc-ink); font-weight: 600; }
+
+/* mobile reflow (mobile-usability P1): the 65ch reading measure is right for a
+   desktop/tablet column, but on a phone it's wider than the viewport itself —
+   drop the cap and let the doc fill whatever width its container already gives
+   it. Both real hosts (ArtifactPanel's px-5, StudyDetail's page padding) supply
+   their own horizontal padding, so this doesn't need to add its own — doing so
+   would double it. */
+@media (max-width: 480px) {
+  .doc-theme { max-width: 100%; }
+}

@@ -82,7 +82,7 @@ onBeforeUnmount(() => { if (timer !== null) clearInterval(timer) })
 <template>
   <div class="relative">
     <button
-      class="text-[11px] rounded px-1.5 py-0.5 border flex items-center gap-1"
+      class="text-[11px] rounded px-1.5 py-0.5 min-h-[44px] md:min-h-0 border flex items-center gap-1"
       :class="count
         ? 'text-amber-200 border-amber-600/60 bg-amber-900/30'
         : 'text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border-zinc-800'"
@@ -109,18 +109,18 @@ onBeforeUnmount(() => { if (timer !== null) clearInterval(timer) })
         <div class="flex flex-wrap items-center gap-2 mt-2">
           <template v-if="it.options && it.options.length">
             <button v-for="opt in it.options" :key="opt"
-              class="text-sm rounded px-3 py-2 border disabled:opacity-40"
+              class="text-sm rounded px-3 py-2 min-h-[44px] border disabled:opacity-40"
               :class="optionClass(opt)"
               :disabled="busy === keyOf(it)"
               @click="answer(it, opt)">{{ opt }}</button>
           </template>
           <template v-else>
             <input v-model="drafts[keyOf(it)]" type="text" placeholder="your answer…"
-              class="flex-1 min-w-[140px] text-sm rounded px-2.5 py-2 bg-zinc-800 border border-zinc-700 text-zinc-100"
+              class="flex-1 min-w-[140px] text-sm rounded px-2.5 py-2 min-h-[44px] bg-zinc-800 border border-zinc-700 text-zinc-100"
               :disabled="busy === keyOf(it)"
               @keyup.enter="answer(it, drafts[keyOf(it)] || '')" />
             <button
-              class="text-sm rounded px-3 py-2 border border-emerald-700/60 bg-emerald-900/30 text-emerald-200 hover:bg-emerald-900/60 disabled:opacity-40"
+              class="text-sm rounded px-3 py-2 min-h-[44px] border border-emerald-700/60 bg-emerald-900/30 text-emerald-200 hover:bg-emerald-900/60 disabled:opacity-40"
               :disabled="busy === keyOf(it) || !drafts[keyOf(it)]"
               @click="answer(it, drafts[keyOf(it)] || '')">Send</button>
           </template>
