@@ -5,11 +5,12 @@
 // P4: the panel layout is serialized to localStorage (toJSON/fromJSON) so a
 // user's arrangement survives reloads; "⟲ layout" resets to the default.
 // Spec: .spec/proposals/stewards-studio.md.
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { DockviewVue, type VueComponent } from 'dockview-vue'
 import type { DockviewApi, DockviewReadyEvent } from 'dockview'
 import 'dockview-core/dist/styles/dockview.css'
 import { useStewdioStore } from '../stores/stewdio'
+import { hingeApi, type ToolConfirm } from '../api'
 import BrowserPanel from './stewdio/BrowserPanel.vue'
 import ArtifactPanel from './stewdio/ArtifactPanel.vue'
 import ChatPanel from './stewdio/ChatPanel.vue'
@@ -182,6 +183,42 @@ function applyCatalogTitles() {
   for (const p of PANELS) dockApi.getPanel(p.id)?.api.setTitle(p.title)
 }
 watch(() => store.dev, () => closeDevPanes())
+
+// ── the tool-effect gate "Needs you" tray (84) ──────────────────────────────
+// Dangerous tool calls the substrate withheld pending Michael's approval. An
+// amber badge in the toolbar shows the count; the tray lists each drafted call
+// with Approve / Decline. Poll on a light cadence (gated calls are rare); a
+// verdict refreshes immediately. The surface must be somewhere Michael will
+// see it — this is the always-open cockpit chrome, so it never silently strands.
+const confirms = ref<ToolConfirm[]>([])
+const showConfirms = ref(false)
+const confirmBusy = ref<number | null>(null) // id currently being verdicted
+let confirmTimer: number | null = null
+
+async function refreshConfirms() {
+  try { confirms.value = await hingeApi.toolConfirms() }
+  catch { /* transient — keep the last known list */ }
+}
+async function verdict(id: number, decision: 'approve' | 'decline') {
+  confirmBusy.value = id
+  try {
+    await hingeApi.verdict(id, decision)
+    await refreshConfirms()
+    if (confirms.value.length === 0) showConfirms.value = false
+  } catch { /* leave it in the tray so Michael can retry */ }
+  finally { confirmBusy.value = null }
+}
+// compact one-line preview of the drafted args (no wall of JSON in the card).
+function argsPreview(a: unknown): string {
+  if (a == null) return ''
+  try { const s = typeof a === 'string' ? a : JSON.stringify(a); return s.length > 140 ? s.slice(0, 140) + '…' : s }
+  catch { return '' }
+}
+onMounted(() => {
+  refreshConfirms()
+  confirmTimer = window.setInterval(refreshConfirms, 12000)
+})
+onBeforeUnmount(() => { if (confirmTimer !== null) clearInterval(confirmTimer) })
 </script>
 
 <template>
@@ -198,6 +235,55 @@ watch(() => store.dev, () => closeDevPanes())
       @click="toggleEdge('left')">{{ edgeCollapsed.left ? '❯' : '❮' }}</button>
     <!-- windowing manager: open / reopen any pane -->
     <div class="absolute top-1 right-2 z-40 isolate flex items-center gap-1">
+      <!-- the tool-effect gate "Needs you" tray (84): dangerous tool calls the
+           substrate withheld pending approval. Amber when any are waiting. -->
+      <div class="relative">
+        <button
+          class="text-[11px] rounded px-1.5 py-0.5 border flex items-center gap-1"
+          :class="confirms.length
+            ? 'text-amber-200 border-amber-600/60 bg-amber-900/30'
+            : 'text-zinc-500 hover:text-zinc-200 bg-zinc-900/70 border-zinc-800'"
+          :title="confirms.length
+            ? confirms.length + ' tool call(s) awaiting your approval'
+            : 'no tool calls awaiting approval'"
+          @click="showConfirms = !showConfirms">
+          <span>{{ confirms.length ? '⚠' : '✓' }} Needs you</span>
+          <span v-if="confirms.length"
+                class="inline-flex items-center justify-center min-w-[15px] h-[15px] px-1 rounded-full bg-amber-500 text-zinc-950 text-[9px] font-semibold">{{ confirms.length }}</span>
+        </button>
+        <div v-if="showConfirms"
+             class="absolute right-0 mt-1 w-80 max-h-[60vh] overflow-y-auto rounded border border-zinc-800 bg-zinc-900 shadow-xl">
+          <div class="px-3 py-2 text-[11px] text-zinc-400 border-b border-zinc-800 sticky top-0 bg-zinc-900">
+            Tool calls awaiting your approval
+          </div>
+          <div v-if="!confirms.length" class="px-3 py-4 text-[11px] text-zinc-500">
+            Nothing waiting. Dangerous tool calls (send / deploy / irreversible) pause here for you.
+          </div>
+          <div v-for="c in confirms" :key="c.id"
+               class="px-3 py-2 border-b border-zinc-800/70 last:border-0">
+            <div class="flex items-center gap-2">
+              <span class="text-[12px] font-medium text-amber-200 truncate">{{ c.tool }}</span>
+              <span v-if="c.target_kind"
+                    class="text-[9px] text-zinc-500 border border-zinc-700 rounded px-1">{{ c.target_kind }}</span>
+              <span class="ml-auto text-[9px] text-zinc-600">#{{ c.id }}</span>
+            </div>
+            <div v-if="c.agent" class="text-[10px] text-zinc-500 mt-0.5">by {{ c.agent }}</div>
+            <div v-if="argsPreview(c.args)"
+                 class="text-[10px] text-zinc-400 font-mono mt-1 break-words whitespace-pre-wrap">{{ argsPreview(c.args) }}</div>
+            <div class="flex items-center gap-1.5 mt-2">
+              <button
+                class="text-[11px] rounded px-2 py-0.5 border border-emerald-700/60 bg-emerald-900/30 text-emerald-200 hover:bg-emerald-900/60 disabled:opacity-40"
+                :disabled="confirmBusy === c.id"
+                @click="verdict(c.id, 'approve')">Approve</button>
+              <button
+                class="text-[11px] rounded px-2 py-0.5 border border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40"
+                :disabled="confirmBusy === c.id"
+                @click="verdict(c.id, 'decline')">Decline</button>
+              <span v-if="confirmBusy === c.id" class="text-[10px] text-zinc-500">…</span>
+            </div>
+          </div>
+        </div>
+      </div>
       <!-- b3: collapse/expand the rightmost (Chat) column -->
       <button
         class="text-[11px] text-zinc-400 hover:text-zinc-100 bg-zinc-900/70 border border-zinc-800 rounded px-1.5 py-0.5"

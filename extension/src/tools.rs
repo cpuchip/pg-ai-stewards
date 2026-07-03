@@ -180,7 +180,15 @@ pub(crate) fn tool_dispatch(payload: &serde_json::Value) -> Result<WorkOutcome, 
     // We do this in one tx so the dispatch loop below sees a coherent
     // snapshot. The dispatch itself runs OUTSIDE this tx so HTTP
     // tools don't hold row locks.
-    type Prep = Vec<(String, String, serde_json::Value, serde_json::Value)>;
+    //
+    // 84 (tool-effect gate): the same lookup also fetches
+    // tool_requires_confirmation(name) — the 5th tuple element. A tool
+    // whose effect_class is dangerous (external_send/irreversible/
+    // financial, or unclassified under gate_unclassified) is NOT executed
+    // in the dispatch loop below; it is withheld and enqueued to the
+    // 39-hinge queue. Piggy-backing on the existing per-tool target lookup
+    // keeps this to one round-trip per tool, no extra query.
+    type Prep = Vec<(String, String, serde_json::Value, serde_json::Value, bool)>;
     let prep: Result<Option<Prep>, pgrx::spi::Error> =
         BackgroundWorker::transaction(|| {
             Spi::connect(|client| {
@@ -231,19 +239,27 @@ pub(crate) fn tool_dispatch(payload: &serde_json::Value) -> Result<WorkOutcome, 
 
                     // Look up tool_def. If absent, store a sentinel
                     // target so dispatch can return a structured
-                    // error reply (the model needs to know).
+                    // error reply (the model needs to know). 84: also
+                    // fetch tool_requires_confirmation(name) in the same
+                    // row — a missing/inactive tool is never gated (it
+                    // errors on dispatch anyway).
                     let target_rows = client.select(
-                        "SELECT execute_target FROM stewards.tool_defs \
+                        "SELECT execute_target, \
+                                stewards.tool_requires_confirmation(name) \
+                         FROM stewards.tool_defs \
                          WHERE name = $1 AND active",
                         Some(1),
                         &[name.clone().into()],
                     )?;
-                    let target = match target_rows.into_iter().next() {
-                        Some(r) => r.get::<pgrx::JsonB>(1)?.map(|j| j.0)
-                            .unwrap_or(serde_json::json!({"kind":"missing"})),
-                        None => serde_json::json!({"kind":"missing"}),
+                    let (target, needs_confirm) = match target_rows.into_iter().next() {
+                        Some(r) => (
+                            r.get::<pgrx::JsonB>(1)?.map(|j| j.0)
+                                .unwrap_or(serde_json::json!({"kind":"missing"})),
+                            r.get::<bool>(2)?.unwrap_or(false),
+                        ),
+                        None => (serde_json::json!({"kind":"missing"}), false),
                     };
-                    prepped.push((tc_id, name, args, target));
+                    prepped.push((tc_id, name, args, target, needs_confirm));
                 }
                 Ok(Some(prepped))
             })
@@ -260,7 +276,28 @@ pub(crate) fn tool_dispatch(payload: &serde_json::Value) -> Result<WorkOutcome, 
     // child id for the completion pass.
     let mut resolved: Vec<(String, String, String)> = Vec::new();
     let mut pending: Vec<(String, String, i64)> = Vec::new();
-    for (tc_id, name, args, target) in prepped.into_iter() {
+    for (tc_id, name, args, target, needs_confirm) in prepped.into_iter() {
+        // 84 (tool-effect gate): a dangerous tool is WITHHELD, not
+        // executed. tool_confirm_gate enqueues the drafted call to the
+        // 39-hinge queue and returns a WITHHELD tool result so the loop
+        // adapts instead of wedging; tool_confirm_apply runs the stored
+        // call verbatim once Michael approves. The gate fires no matter
+        // which model drives — a wall the dispatch loop enforces, not a
+        // decision a model makes (closes the ask_up loophole by design).
+        if needs_confirm {
+            match gate_tool_confirm(&name, &args, &target, &agent_family, &session_id) {
+                Ok(content) => resolved.push((tc_id, name, content)),
+                Err(e) => {
+                    pgrx::log!("stewards: tool '{}' gate failed: {}", name, e);
+                    resolved.push((
+                        tc_id,
+                        name,
+                        serde_json::json!({"error": e}).to_string(),
+                    ));
+                }
+            }
+            continue;
+        }
         match exec_one_tool(&name, &args, &target, &session_id) {
             Ok(ToolReply::Sync(content)) => {
                 resolved.push((tc_id, name, content));
@@ -297,6 +334,72 @@ pub(crate) fn tool_dispatch(payload: &serde_json::Value) -> Result<WorkOutcome, 
             resolved,
             pending,
         })
+    }
+}
+
+/// 84 (tool-effect gate): withhold a dangerous tool call. Instead of
+/// executing, call `stewards.tool_confirm_gate(tool, args, target, agent,
+/// session)` which enqueues the drafted call to the 39-hinge queue as
+/// kind='tool-confirm', best-effort pauses the owning work item, and
+/// returns a WITHHELD result jsonb. We hand that jsonb back to the model
+/// as the tool reply so it can continue other work or end the turn — the
+/// call runs verbatim (tool_confirm_apply) only after Michael approves.
+///
+/// PgTryBuilder-wrapped for the same reason exec_sql_fn_tool is: a raised
+/// ereport inside BackgroundWorker::transaction can longjmp past the
+/// bgworker (pgrx 0.18); we catch it and surface a recoverable Err so the
+/// worker survives and the model sees a structured failure.
+fn gate_tool_confirm(
+    name: &str,
+    args: &serde_json::Value,
+    target: &serde_json::Value,
+    agent_family: &str,
+    session_id: &str,
+) -> Result<String, String> {
+    use pgrx::PgTryBuilder;
+
+    let args_v = args.clone();
+    let target_v = target.clone();
+
+    let result: Result<Option<String>, String> = PgTryBuilder::new(|| {
+        let outer: Result<Option<String>, pgrx::spi::Error> =
+            BackgroundWorker::transaction(|| {
+                Spi::connect(|client| {
+                    let row = client.select(
+                        "SELECT stewards.tool_confirm_gate($1, $2, $3, $4, $5)::text",
+                        Some(1),
+                        &[
+                            name.into(),
+                            pgrx::JsonB(args_v.clone()).into(),
+                            pgrx::JsonB(target_v.clone()).into(),
+                            agent_family.into(),
+                            session_id.into(),
+                        ],
+                    )?;
+                    let mut iter = row.into_iter();
+                    match iter.next() {
+                        Some(r) => r.get::<String>(1),
+                        None => Ok(None),
+                    }
+                })
+            });
+        outer.map_err(|e| format!("spi: {}", e))
+    })
+    .catch_others(|cause| Err(format!("postgres error: {:?}", cause)))
+    .execute();
+
+    match result {
+        Ok(Some(s)) => Ok(s),
+        // The gate function should always return a row; a NULL/None means
+        // the enqueue path didn't run — surface a safe withheld message
+        // rather than silently letting the call proceed.
+        Ok(None) => Ok(serde_json::json!({
+            "withheld": true,
+            "message": format!(
+                "WITHHELD pending human confirmation: {} (gate returned no row)", name)
+        })
+        .to_string()),
+        Err(e) => Err(format!("tool_confirm_gate({}): {}", name, e)),
     }
 }
 
