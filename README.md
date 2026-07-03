@@ -132,6 +132,7 @@ public, generalized substrate. The interfaces still move; the engine is solid. O
 | [Operations](docs/operations.md) | The upgrade / migrate / verify runbook — code-in-image, data-in-volume, config-is-code. |
 | [Delegation limits](docs/delegation-limits.md) | How far an agent may spawn sub-agents (depth / width / grants), and how to raise the bounds as models improve. |
 | [The North Star](docs/north-star.md) | The standing *why* carried on every agent call — set your own, or use the generic default. |
+| [OTel export](docs/otel.md) | Emit OTLP spans (one trace per work_item) from the audit rows you already have — point it at any collector. |
 
 Copy-paste starters (model catalog, content digesters) live in
 [`examples/`](examples/).

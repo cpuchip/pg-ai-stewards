@@ -63,6 +63,18 @@ func main() {
 		return
 	}
 
+	// `otel-smoke` -- the real-path proof driver for the OTel exporter (miss
+	// D): the exact fetch + span-build + OTLP-POST code otel_export.go's
+	// background poller runs, invoked directly so a collector/endpoint can
+	// be verified without waiting on the 10s poll tick. Read-only against
+	// the substrate (no checkpoint write) -- see otel_smoke.go + docs/otel.md.
+	if len(os.Args) > 1 && os.Args[1] == "otel-smoke" {
+		if err := runOtelSmoke(os.Args[2:]); err != nil {
+			log.Fatalf("otel-smoke: %v", err)
+		}
+		return
+	}
+
 	// CLI flags. DSN can also come from STEWARDS_DSN env var (same as
 	// stewards-cli) so the .mcp.json config can stay terse.
 	var dsn string
