@@ -911,6 +911,21 @@ extension_sql_file!(
     requires = ["create_world_chat"],
 );
 
+// 91 — the compat contract's runtime guard (audit §IV Track 2, first step):
+// stewards.assert_core_compat(range) raises if the installed core's extversion
+// falls outside a downstream overlay's `-- requires-core: <range>` header,
+// else returns true. Read-only / additive (two new functions, no re-authoring
+// of anything upstream) — requires only the LAST entry in this chain at the
+// time it was authored (this file was assigned #91 while other agents' work
+// landed in the 87-90 gap; NOTE FOR INTEGRATOR: re-point `requires` at
+// whatever is actually last after the parallel batch lands — it does not
+// read or depend on 87-90's tables/functions, this is a chain-order note only).
+extension_sql_file!(
+    "../91-core-compat.sql",
+    name = "create_core_compat",
+    requires = ["create_sticky_agent_family"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

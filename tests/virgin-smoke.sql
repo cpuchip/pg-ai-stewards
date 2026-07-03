@@ -3835,4 +3835,62 @@ BEGIN
     RAISE NOTICE 'OK 86: sticky agent family — fallback + recorded-family resolution + the 85 bridge retired';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→86) is sound =='
+-- ---------------------------------------------------------------------
+-- 91: the compat contract's runtime guard. assert_core_compat(range) reads
+-- the INSTALLED core version straight from pg_extension.extversion and raises
+-- when it falls outside a downstream overlay's `-- requires-core: <range>`
+-- header; else returns true. Proves: a wide bracket passes, a below-reach
+-- minimum raises, an already-passed ceiling raises, segment padding ("0.3" ==
+-- "0.3.0") works, and an unparseable range raises rather than silently no-op.
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+    v_installed text;
+    v_caught    boolean;
+BEGIN
+    SELECT extversion INTO v_installed FROM pg_extension WHERE extname='pg_ai_stewards';
+
+    -- in-range: a wide-open bracket around any installed version passes.
+    ASSERT stewards.assert_core_compat('>=0.0 <99.0') = true,
+        '91: a wide-open range around any installed version must pass';
+
+    -- in-range: the tight bracket every core-coupled overlay actually declares.
+    ASSERT stewards.assert_core_compat('>=0.3 <0.4') = true,
+        format('91: >=0.3 <0.4 must pass against installed core %s', v_installed);
+
+    -- 3-segment range around a 3-segment install — segment padding is a no-op here,
+    -- proving padding does not silently widen or narrow the comparison.
+    ASSERT stewards.assert_core_compat('>=0.3.0 <0.3.99') = true,
+        '91: a 3-segment range must pass against the 3-segment installed version';
+
+    -- lower-bound violation: a minimum the installed version cannot reach.
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.assert_core_compat('>=99.0');
+    EXCEPTION WHEN OTHERS THEN
+        v_caught := (SQLERRM LIKE '%below the required minimum%');
+    END;
+    ASSERT v_caught, '91: a minimum above the installed version must raise, naming the minimum';
+
+    -- ceiling violation: a ceiling the installed version has already met or passed.
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.assert_core_compat('<0.0');
+    EXCEPTION WHEN OTHERS THEN
+        v_caught := (SQLERRM LIKE '%at/above the required ceiling%');
+    END;
+    ASSERT v_caught, '91: a ceiling at/below the installed version must raise, naming the ceiling';
+
+    -- unparseable range: never silently pass.
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.assert_core_compat('not a range');
+    EXCEPTION WHEN OTHERS THEN
+        v_caught := (SQLERRM LIKE '%unparseable%');
+    END;
+    ASSERT v_caught, '91: an unparseable range must raise, never silently pass';
+
+    RAISE NOTICE 'OK 91: core-compat guard — wide-open + tight-bracket + segment-padded ranges pass; below-minimum raises; at/above-ceiling raises; unparseable raises (installed=%)', v_installed;
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→86, 91) is sound =='
