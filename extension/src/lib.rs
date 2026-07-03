@@ -869,6 +869,21 @@ extension_sql_file!(
     requires = ["create_world_graph"],
 );
 
+// 84: the tool-effect gate (Hinge escalation ladder, Phase 1) — the missing
+// TRIGGER. effect_class on tool_defs + tool_requires_confirmation(); the
+// interceptor (tool_confirm_gate) that withholds a dangerous tool call and
+// enqueues it to the 39-hinge queue as kind='tool-confirm'; the executor
+// (tool_confirm_apply) that runs the STORED call verbatim on Michael's
+// approval; the escalation_ladder table (Piece 3 data, no ask_up yet); and
+// tool-confirm added to hinge_escalate_always_kinds. A PURE SAFETY ADD — can
+// only add a pause, never remove one; everything escalates to Michael. Reuses
+// 39-hinge + 69-a2a, so it requires both (via the 83→…→39 chain; a2a is 69).
+extension_sql_file!(
+    "../84-tool-effect-gate.sql",
+    name = "create_tool_effect_gate",
+    requires = ["create_code_graph", "create_hinge", "create_a2a_engine"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

@@ -1630,3 +1630,25 @@ export const scheduledApi = {
   recentRuns: (limit = 7) =>
     getJSON<ScheduledRunsResp>(`/api/scheduled/recent-runs?limit=${limit}`),
 }
+
+// The tool-effect gate (84) "Needs you" tray: dangerous tool calls the
+// substrate withheld pending Michael's approval. tool-confirms lists them;
+// verdict approves (executes the stored call verbatim) or declines.
+export type ToolConfirm = {
+  id: number
+  subject: string
+  tool: string
+  args: unknown
+  agent: string | null
+  target_kind: string | null
+  work_item_id: string | null
+  status: string
+  created_at: string
+}
+
+export const hingeApi = {
+  toolConfirms: (limit = 50) =>
+    getJSON<ToolConfirm[]>(`/api/hinge/tool-confirms?limit=${limit}`),
+  verdict: (id: number, decision: 'approve' | 'decline', reason = '') =>
+    postJSON<{ verdict: unknown; apply: unknown }>('/api/hinge/verdict', { id, decision, reason }),
+}

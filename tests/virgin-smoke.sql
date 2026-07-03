@@ -3667,4 +3667,93 @@ BEGIN
     RAISE NOTICE 'OK 83: code-graph ingest — import_lodestar_graph lands a cross-service edge (svc-b -> svc-a on GET /users/{}), worlds project-scoped';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→83) is sound =='
+-- 84: the tool-effect gate — the whole withhold→approve→execute loop, the
+-- inverse (read tool passes ungated), and the escalate-always bound, all baked
+-- into the assert. A scratch sql_fn tool with a VISIBLE side effect (inserts
+-- into stewards.gate_probe) makes "was it executed?" deterministic, not a guess.
+CREATE TABLE IF NOT EXISTS stewards.gate_probe (n int);
+CREATE OR REPLACE FUNCTION stewards.gate_probe_fire(p_args jsonb)
+RETURNS jsonb LANGUAGE sql AS $g$
+    INSERT INTO stewards.gate_probe (n) VALUES (1)
+    RETURNING jsonb_build_object('fired', true, 'got', p_args);
+$g$;
+-- a dangerous (external_send) probe and a safe (read) probe, same executor.
+INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target)
+VALUES ('gate_probe_tool', 'scratch external-send probe (84 smoke)', '{"type":"object"}'::jsonb,
+        '{"kind":"sql_fn","schema":"stewards","name":"gate_probe_fire"}'::jsonb)
+ON CONFLICT (name) DO UPDATE SET execute_target = EXCLUDED.execute_target;
+UPDATE stewards.tool_defs SET effect_class = 'external_send' WHERE name = 'gate_probe_tool';
+INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, effect_class)
+VALUES ('gate_read_probe', 'scratch read probe (84 smoke)', '{"type":"object"}'::jsonb,
+        '{"kind":"sql_fn","schema":"stewards","name":"gate_probe_fire"}'::jsonb, 'read')
+ON CONFLICT (name) DO UPDATE SET effect_class = 'read';
+
+DO $$
+DECLARE v jsonb; v_id bigint; v_id2 bigint; v_id3 bigint; n int;
+    v_target jsonb := '{"kind":"sql_fn","schema":"stewards","name":"gate_probe_fire"}'::jsonb;
+BEGIN
+    -- structure
+    ASSERT (SELECT count(*) FROM information_schema.columns
+             WHERE table_schema='stewards' AND table_name='tool_defs' AND column_name='effect_class')=1,
+           '84: tool_defs.effect_class column should exist';
+    ASSERT (SELECT count(*) FROM information_schema.tables
+             WHERE table_schema='stewards' AND table_name='escalation_ladder')=1,
+           '84: escalation_ladder table should exist';
+    ASSERT stewards.config_get('hinge_escalate_always_kinds') ? 'tool-confirm',
+           '84: tool-confirm must be in hinge_escalate_always_kinds (nothing auto-approves a gated call)';
+
+    -- the predicate + its inverse
+    ASSERT stewards.tool_requires_confirmation('gate_probe_tool') = true,
+           '84: an external_send tool must require confirmation';
+    ASSERT stewards.tool_requires_confirmation('gate_read_probe') = false,
+           '84: a read tool must NOT require confirmation (inverse)';
+
+    -- (a) WITHHOLD: the gate enqueues a tool-confirm and does NOT execute.
+    v := stewards.tool_confirm_gate('gate_probe_tool', '{"x":1}'::jsonb, v_target, 'probe-agent', 'probe-session');
+    ASSERT (v->>'withheld')::bool = true, '84: gate must return withheld=true';
+    v_id := (v->>'hinge_id')::bigint;
+    ASSERT EXISTS (SELECT 1 FROM stewards.hinge_reviews
+                    WHERE id=v_id AND kind='tool-confirm' AND status='pending'),
+           '84: a pending tool-confirm review must be enqueued';
+    SELECT count(*) INTO n FROM stewards.gate_probe;
+    ASSERT n = 0, format('84: the withheld call must NOT have executed (probe rows=%s)', n);
+
+    -- (b) APPROVE (michael) → apply runs the STORED call verbatim, exactly once.
+    PERFORM stewards.hinge_record_verdict(v_id, 'approve', 'approved by smoke', 'michael');
+    ASSERT (SELECT status FROM stewards.hinge_reviews WHERE id=v_id) = 'approved',
+           '84: michael approve on a tool-confirm → approved';
+    v := stewards.tool_confirm_apply(v_id);
+    ASSERT (v->>'executed')::bool = true, '84: apply must execute on approval';
+    SELECT count(*) INTO n FROM stewards.gate_probe;
+    ASSERT n = 1, format('84: the approved call must have executed once (probe rows=%s)', n);
+    ASSERT (SELECT status FROM stewards.hinge_reviews WHERE id=v_id) = 'applied', '84: review → applied';
+    PERFORM stewards.tool_confirm_apply(v_id);   -- idempotent: no double-send
+    SELECT count(*) INTO n FROM stewards.gate_probe;
+    ASSERT n = 1, format('84: apply must be idempotent — no double-send (rows=%s)', n);
+
+    -- (c) DECLINE → not executed.
+    v := stewards.tool_confirm_gate('gate_probe_tool', '{"x":2}'::jsonb, v_target, 'probe-agent', 'probe-session');
+    v_id2 := (v->>'hinge_id')::bigint;
+    PERFORM stewards.hinge_record_verdict(v_id2, 'decline', 'not this time', 'michael');
+    v := stewards.tool_confirm_apply(v_id2);
+    ASSERT (v->>'executed')::bool = false, '84: a declined call must not execute';
+    SELECT count(*) INTO n FROM stewards.gate_probe;
+    ASSERT n = 1, format('84: decline must leave the probe count unchanged (rows=%s)', n);
+
+    -- (d) ESCALATE-ALWAYS bound: the claude -p reviewer's approve on a
+    -- tool-confirm ESCALATES to the human — it never sticks as approved,
+    -- so apply refuses and nothing executes.
+    v := stewards.tool_confirm_gate('gate_probe_tool', '{"x":3}'::jsonb, v_target, 'probe-agent', 'probe-session');
+    v_id3 := (v->>'hinge_id')::bigint;
+    v := stewards.hinge_record_verdict(v_id3, 'approve', 'auto', 'claude-hinge');
+    ASSERT (v->>'status') = 'escalated',
+           format('84: claude-hinge approve on tool-confirm must ESCALATE, not approve (got %s)', v->>'status');
+    ASSERT (stewards.tool_confirm_apply(v_id3)->>'ok') = 'false',
+           '84: apply on an escalated (not-approved) review must refuse';
+    SELECT count(*) INTO n FROM stewards.gate_probe;
+    ASSERT n = 1, format('84: the escalated call must NOT have executed (rows=%s)', n);
+
+    RAISE NOTICE 'OK 84: tool-effect gate — external_send WITHHELD (hinge row, not executed); michael-approve runs the STORED call verbatim once (idempotent); read tool passes ungated (inverse); decline does not execute; claude-hinge approve on tool-confirm ESCALATES (escalate-always bound)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→84) is sound =='
