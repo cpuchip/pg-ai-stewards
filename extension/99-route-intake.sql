@@ -385,7 +385,7 @@ BEGIN
                             v_kind, v_ref, v_scope_slug));
 
     ELSIF v_kind = 'url' THEN
-        IF to_regprocedure('stewards.crawl_start(text,text,jsonb)') IS NULL THEN
+        IF to_regprocedure('stewards.crawl_start(text,text,jsonb,text,boolean)') IS NULL THEN
             v_result := jsonb_build_object('dispatched', false,
                 'note', 'crawler (crawl_start, 98) is not installed in this build — url queued but not crawled');
         ELSE
