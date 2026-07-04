@@ -26,9 +26,11 @@ const Scheduled = () => import('./views/Scheduled.vue')
 const Brainstorm = () => import('./views/Brainstorm.vue')
 const Models = () => import('./views/Models.vue')
 const Stewdio = () => import('./views/Stewdio.vue')
+const Search = () => import('./views/Search.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/',           name: 'dashboard',  component: Dashboard },
+  { path: '/search',     name: 'search',     component: Search, meta: { title: 'Search' } },
   { path: '/studies',    name: 'studies',    component: Studies, meta: { title: 'Studies' } },
   { path: '/studies/:slug', name: 'study-detail', component: StudyDetail, meta: { title: 'Study detail' }, props: true },
   { path: '/work-items', name: 'work-items', component: WorkItems, meta: { title: 'Work items' } },

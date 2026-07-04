@@ -1,11 +1,28 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { RouterLink, RouterView, useRoute } from 'vue-router'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
+import { requestSearchFocus } from '@/searchShortcut'
 
 // Stewdio is a full-bleed VS-Code-like cockpit: it needs the whole viewport
 // below the header (no main padding, no footer) so dockview can fill the space.
 const route = useRoute()
+const router = useRouter()
 const fullBleed = computed(() => route.name === 'stewdio')
+
+// Global "/" -> Search (93: "give the human the models' search"). Skips when
+// the user is already typing somewhere (input/textarea/contenteditable) so
+// it never steals a literal "/" from a chat box or search field elsewhere.
+function onGlobalKeydown(e: KeyboardEvent) {
+  if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return
+  const el = e.target as HTMLElement | null
+  const tag = el?.tagName
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || el?.isContentEditable) return
+  e.preventDefault()
+  if (route.name !== 'search') router.push('/search')
+  requestSearchFocus()
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 
 // Mobile nav (mobile-usability P1, 2026-07-03). The full ~19-tab inline row
 // has no wrap and no width cap, so on a phone it forced the whole document
@@ -20,6 +37,7 @@ const fullBleed = computed(() => route.name === 'stewdio')
 const navOpen = ref(false)
 const NAV_LINKS = [
   { to: '/stewdio', label: 'Stewdio' },
+  { to: '/search', label: 'Search' },
   { to: '/work-items', label: 'Work items' },
   { to: '/studies', label: 'Studies' },
   { to: '/models', label: 'Models' },
@@ -52,6 +70,7 @@ const NAV_LINKS = [
       <nav class="hidden md:flex gap-4 text-sm text-zinc-400">
         <RouterLink to="/" class="hover:text-zinc-100">Dashboard</RouterLink>
         <RouterLink to="/stewdio" class="hover:text-zinc-100 text-sky-400">Stewdio</RouterLink>
+        <RouterLink to="/search" class="hover:text-zinc-100">Search</RouterLink>
         <RouterLink to="/studies" class="hover:text-zinc-100">Studies</RouterLink>
         <RouterLink to="/work-items" class="hover:text-zinc-100">Work items</RouterLink>
         <RouterLink to="/sessions" class="hover:text-zinc-100">Sessions</RouterLink>

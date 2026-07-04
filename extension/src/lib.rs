@@ -1032,6 +1032,24 @@ extension_sql_file!(
 extension_sql_file!(
     "../94-wiki-curator.sql",
     name = "create_wiki_curator",
+    requires = ["create_recall"],
+);
+
+// 93 — the Atlas steal (study/ai/elastic-atlas-agent-memory.md takeaway 1):
+// last_used_at/use_count on stewards.docs + stewards.engram_embeddings, a
+// shared stewards.recall_boost(use_count, last_used_at, ...) scoring term
+// (frequency boost + recency decay, config-driven via 00's dial surface),
+// folded into doc_search_hybrid/pool_search_hybrid/search_engrams_hybrid
+// (still STABLE/pure), plus `*_recall` wrapper fns that bump usage on
+// actually-returned rows — the surfaces doc_search_tool/pool_search_tool/
+// engram_search_tool now call. Built in a parallel worktree alongside
+// WIKI-CORE's 92 (a wiki table + wiki_create/wiki_add_member/
+// wiki_page_upsert, not present in THIS worktree) — requires the last entry
+// found here (91); the integrator re-stitches this to require 92's
+// registered name once both land, so the merged chain reads 91 -> 92 -> 93.
+extension_sql_file!(
+    "../93-recall.sql",
+    name = "create_recall",
     requires = ["create_wiki"],
 );
 // ---------------------------------------------------------------------------
