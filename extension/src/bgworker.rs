@@ -2454,6 +2454,30 @@ fn sanitize_phantom_tool_history(body: &serde_json::Value) -> serde_json::Value 
             }
             name_ok
         });
+        // Normalize surviving calls' arguments: strict providers translate the
+        // OpenAI arguments STRING into a tool_use input OBJECT, and "" / "null"
+        // / non-object JSON 400s there ("Input should be an object"). An empty
+        // arguments string means "no args" — say it as "{}".
+        for tc in tcs.iter_mut() {
+            let bad = tc
+                .get("function")
+                .and_then(|f| f.get("arguments"))
+                .and_then(|v| v.as_str())
+                .map(|a| {
+                    serde_json::from_str::<serde_json::Value>(a)
+                        .map(|v| !v.is_object())
+                        .unwrap_or(true)
+                })
+                .unwrap_or(true);
+            if bad {
+                if let Some(f) = tc.get_mut("function").and_then(|f| f.as_object_mut()) {
+                    f.insert(
+                        "arguments".to_string(),
+                        serde_json::Value::String("{}".to_string()),
+                    );
+                }
+            }
+        }
         if tcs.is_empty() {
             if let Some(o) = m.as_object_mut() {
                 o.remove("tool_calls");

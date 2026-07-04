@@ -794,6 +794,12 @@ BEGIN
 
     IF jsonb_typeof(v_manifest) = 'string' THEN
         v_manifest_raw := v_manifest #>> '{}';
+        -- Models fence JSON despite every "no fences" instruction (gemini,
+        -- 2026-07-04). Tolerate a ```json ... ``` wrapper; the content is the
+        -- contract, not the wrapping.
+        v_manifest_raw := regexp_replace(
+                              regexp_replace(btrim(v_manifest_raw), '^```[a-zA-Z]*\s*', ''),
+                              '\s*```\s*$', '');
         BEGIN
             v_manifest := v_manifest_raw::jsonb;
         EXCEPTION WHEN OTHERS THEN
