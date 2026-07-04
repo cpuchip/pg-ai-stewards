@@ -85,6 +85,18 @@ func main() {
 		return
 	}
 
+	// `assets-backfill --doc <id>` — the wiki-assets CLI verb (extension/93-
+	// wiki-assets.sql): re-extract embedded PDF picture XObjects from an
+	// ALREADY-INGESTED document via the hardened doc-extract sandbox, so a
+	// rulebook imported before this capability existed gets its assets
+	// without a re-import. See assets_backfill.go + internal/wikiassets.
+	if len(os.Args) > 1 && os.Args[1] == "assets-backfill" {
+		if err := runAssetsBackfill(os.Args[2:]); err != nil {
+			log.Fatalf("assets-backfill: %v", err)
+		}
+		return
+	}
+
 	// CLI flags. DSN can also come from STEWARDS_DSN env var (same as
 	// stewards-cli) so the .mcp.json config can stay terse.
 	var dsn string

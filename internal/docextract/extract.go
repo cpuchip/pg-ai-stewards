@@ -5,13 +5,18 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"image"
+	_ "image/jpeg" // pdfimages can also emit JPEG for a source-JPEG XObject when NOT forced to -png; decode support kept for robustness
+	_ "image/png"  // image.Decode dispatches by sniffed format; -png output needs this registered
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	htmltomarkdown "github.com/JohannesKaufmann/html-to-markdown/v2"
 	readability "github.com/go-shiori/go-readability"
@@ -113,6 +118,27 @@ func ExtractFile(ctx context.Context, data []byte, name string, opts Options) Fi
 			}
 		} else {
 			fr.Pages = pages
+		}
+	}
+
+	// Embedded images — the wiki-assets overlay. UNLIKE the page-pixel
+	// overlay above, this is NOT gated by Render/AutoRender: it always runs
+	// for a PDF (same posture as text), because a rulebook's individual
+	// illustrations are wiki-worthy on their own, independent of whether the
+	// caller wants full-page screenshots too. Junk-filtered + budget-capped
+	// (caps.go) so it degrades gracefully instead of blocking the doc.
+	if docType == "pdf" {
+		// NOTE: extractEmbeddedImages can return BOTH a populated slice AND a
+		// non-nil error (the budget-exceeded case is partial success, not
+		// failure — see its doc comment). fr.Images must be set REGARDLESS of
+		// err, or a budget-capped run silently loses every image it already
+		// extracted. (Caught by running this against a real 94-page rulebook:
+		// the debug trace showed 9 images decoded clean, but the JSON result
+		// still reported zero — this exact err!=nil-discards-imgs bug.)
+		imgs, err := extractEmbeddedImages(ctx, data, opts)
+		fr.Images = imgs
+		if err != nil && fr.Error == "" {
+			fr.Error = "images: " + err.Error()
 		}
 	}
 	return fr
@@ -388,6 +414,313 @@ func pdfPageCount(ctx context.Context, data []byte) int {
 		}
 	}
 	return -1
+}
+
+// --- embedded images (wiki-assets overlay): pdfimages -list -> filter -> pdfimages -png ---
+
+// imgListRow is one parsed row of `pdfimages -list` — the per-image metadata
+// poppler reports WITHOUT decoding a single pixel (fast, always safe to run
+// first). Columns (whitespace-separated, stable across poppler versions):
+// page num type width height color comp bpc enc interp object ID x-ppi y-ppi size ratio.
+type imgListRow struct {
+	Page, Num, Width, Height int
+	Type                     string // "image" | "smask" | "stencil" | ...
+	Object                   string // the PDF object id — poppler's own de-dup key for a reused XObject
+
+	// LocalIndex is this row's 0-based position AMONG its page's rows in
+	// -list order. LOAD-BEARING, not cosmetic: `pdfimages -list` numbers Num
+	// globally across the WHOLE document, but `pdfimages -p -f N -l N`
+	// (targeting one page) renumbers its output files starting from 0 for
+	// THAT PAGE ONLY (verified against a real 94-page PDF: -list reported
+	// page 8's 4th image as global num=24, but `-f 8 -l 8` wrote it as
+	// "img-008-002.png" — local index 2, not 24). Matching extracted
+	// filenames against candidates MUST use LocalIndex, not Num, or nothing
+	// ever matches and every image is silently dropped.
+	LocalIndex int
+}
+
+// pdfImageListRe matches a data row of `pdfimages -list` (a leading page
+// number distinguishes it from the header/dashes/stray-warning lines poppler
+// also writes). strings.Fields on a matching line then splits cleanly since
+// no field itself contains whitespace.
+var pdfImageListRe = regexp.MustCompile(`^\s*\d+\s+\d+\s+\S+`)
+
+// pdfImageList shells poppler's `pdfimages -list` against a PDF already on
+// disk — metadata only, no pixel decode, so it is cheap to always run first
+// and use to decide WHICH pages are worth the expensive -png pass.
+func pdfImageList(ctx context.Context, path string) ([]imgListRow, error) {
+	if _, err := exec.LookPath("pdfimages"); err != nil {
+		return nil, fmt.Errorf("pdfimages (poppler) not found: %w", err)
+	}
+	out, err := exec.CommandContext(ctx, "pdfimages", "-list", path).Output()
+	if err != nil {
+		// pdfimages can exit non-zero on a merely-malformed PDF that still has
+		// SOME readable image directory; stdout may still carry rows. Only
+		// bail if there's truly nothing to parse.
+		if len(out) == 0 {
+			return nil, fmt.Errorf("pdfimages -list: %w", err)
+		}
+	}
+	return parseImageList(string(out)), nil
+}
+
+// parseImageList is the pure parsing core of pdfImageList — split out so it
+// is testable with a captured `pdfimages -list` transcript, no poppler
+// binary required. Assigns LocalIndex per page as it goes (see the field doc
+// on imgListRow for why this differs from the parsed Num column).
+func parseImageList(out string) []imgListRow {
+	var rows []imgListRow
+	perPage := map[int]int{} // page -> next LocalIndex (counts EVERY row for that page, filtered or not)
+	for _, line := range strings.Split(out, "\n") {
+		if !pdfImageListRe.MatchString(line) {
+			continue // header / dashes / a stray "Syntax Warning: ..." line
+		}
+		f := strings.Fields(line)
+		if len(f) < 11 {
+			continue
+		}
+		page, e1 := strconv.Atoi(f[0])
+		num, e2 := strconv.Atoi(f[1])
+		w, e3 := strconv.Atoi(f[3])
+		h, e4 := strconv.Atoi(f[4])
+		if e1 != nil || e2 != nil || e3 != nil || e4 != nil {
+			continue
+		}
+		local := perPage[page]
+		perPage[page] = local + 1
+		rows = append(rows, imgListRow{Page: page, Num: num, Type: f[2], Width: w, Height: h, Object: f[10], LocalIndex: local})
+	}
+	return rows
+}
+
+// filterImageCandidates applies the metadata-only junk filter (caps.go
+// thresholds) to a raw `pdfimages -list` dump — pure and testable without
+// poppler. Drops: non-"image" rows (smask/stencil alpha companions — not
+// standalone content), anything under minImageDim in either dimension, and
+// any object id reused on more than maxObjectRepeats distinct pages (page
+// furniture: a repeating background/border/logo). Caps the survivors to
+// maxImages (page order), which also bounds how many pages the caller must
+// run the expensive -png pass against.
+func filterImageCandidates(rows []imgListRow, maxImages int) []imgListRow {
+	if maxImages <= 0 {
+		maxImages = defaultMaxImages
+	}
+	// distinct pages per object, across the WHOLE doc (not just "image" rows —
+	// a background's smask companion shares the same object and should count
+	// toward "this object is reused", even though the smask row itself is
+	// separately dropped for being a smask).
+	pagesByObject := map[string]map[int]bool{}
+	for _, r := range rows {
+		if r.Object == "" {
+			continue
+		}
+		if pagesByObject[r.Object] == nil {
+			pagesByObject[r.Object] = map[int]bool{}
+		}
+		pagesByObject[r.Object][r.Page] = true
+	}
+	var out []imgListRow
+	for _, r := range rows {
+		if r.Type != "image" {
+			continue // smask / stencil mask: an alpha companion, not standalone content
+		}
+		if r.Width < minImageDim || r.Height < minImageDim {
+			continue // too small to be wiki-worthy art (an icon/bullet/rule)
+		}
+		if r.Object != "" && len(pagesByObject[r.Object]) > maxObjectRepeats {
+			continue // page furniture: this exact XObject recurs across many pages
+		}
+		out = append(out, r)
+		if len(out) >= maxImages {
+			break
+		}
+	}
+	return out
+}
+
+// pdfImageFileRe recovers (page, num) from a pdfimages -p output filename —
+// e.g. "img-001-000.png" -> page=1, num=0 — independent of poppler's exact
+// zero-padding width (which scales with the SOURCE document's page/image
+// counts, not the -f/-l range requested).
+var pdfImageFileRe = regexp.MustCompile(`-(\d+)-(\d+)\.(png|jpg|jpeg)$`)
+
+// extractEmbeddedImages runs the two-stage embedded-image pass: `pdfimages
+// -list` (free) to find candidates, filterImageCandidates to junk-filter
+// them, then a per-PAGE `pdfimages -png -p` targeted at only the surviving
+// pages (poppler has no per-object extraction — page range is the finest
+// selector it offers), under a wall-clock budget so a heavily-illustrated PDF
+// degrades to "partial, capped" rather than blocking the whole document.
+func extractEmbeddedImages(ctx context.Context, data []byte, opts Options) ([]EmbeddedImage, error) {
+	if _, err := exec.LookPath("pdfimages"); err != nil {
+		return nil, fmt.Errorf("pdfimages (poppler) not found: %w", err)
+	}
+	tmp, err := os.CreateTemp("", "docextract-images-*.pdf")
+	if err != nil {
+		return nil, fmt.Errorf("temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return nil, fmt.Errorf("write temp: %w", err)
+	}
+	tmp.Close()
+
+	rows, err := pdfImageList(ctx, tmp.Name())
+	if err != nil {
+		return nil, err
+	}
+	candidates := filterImageCandidates(rows, opts.MaxImages)
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	// keyed on (page, LOCAL index) — the identity `pdfimages -p -f N -l N`
+	// actually uses in its output filenames (see imgListRow.LocalIndex).
+	want := map[[2]int]bool{}
+	globalNum := map[[2]int]int{} // (page,localIndex) -> the document-wide Num, for a stable EmbeddedImage.Index
+	pageSet := map[int]bool{}
+	for _, c := range candidates {
+		key := [2]int{c.Page, c.LocalIndex}
+		want[key] = true
+		globalNum[key] = c.Num
+		pageSet[c.Page] = true
+	}
+	pages := make([]int, 0, len(pageSet))
+	for p := range pageSet {
+		pages = append(pages, p)
+	}
+	sort.Ints(pages)
+
+	dir, err := os.MkdirTemp("", "docextract-embimg-*")
+	if err != nil {
+		return nil, fmt.Errorf("temp dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	prefix := filepath.Join(dir, "img")
+
+	budgetSecs := opts.ImageBudgetSecs
+	if budgetSecs <= 0 {
+		budgetSecs = defaultImageBudgetSecs
+	}
+	budget := time.Duration(budgetSecs) * time.Second
+	start := time.Now()
+	var skippedPages int
+	for _, p := range pages {
+		if time.Since(start) > budget {
+			skippedPages = len(pages) - indexOfInt(pages, p)
+			break
+		}
+		cmd := exec.CommandContext(ctx, "pdfimages", "-png", "-p", "-f", strconv.Itoa(p), "-l", strconv.Itoa(p), tmp.Name(), prefix)
+		_ = cmd.Run() // a single page's extraction failing shouldn't abort the others; we just won't find its files below
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read image dir: %w", err)
+	}
+	var out []EmbeddedImage
+	for _, e := range entries {
+		m := pdfImageFileRe.FindStringSubmatch(e.Name())
+		if m == nil {
+			continue
+		}
+		page, _ := strconv.Atoi(m[1])
+		local, _ := strconv.Atoi(m[2]) // this IS a local-per-page index (see imgListRow.LocalIndex) — NOT the -list global num
+		key := [2]int{page, local}
+		if !want[key] {
+			continue // pdfimages -p extracts EVERY image on the page; keep only our surviving candidates
+		}
+		b, rerr := os.ReadFile(filepath.Join(dir, e.Name()))
+		if rerr != nil {
+			continue
+		}
+		w, h, blank := decodedImageStats(b)
+		if w < minImageDim || h < minImageDim {
+			continue // belt-and-suspenders vs. the -list estimate
+		}
+		if blank {
+			continue // pixel-level safety net: a flat/near-white "image" that slipped the metadata filter
+		}
+		out = append(out, EmbeddedImage{Page: page, Index: globalNum[key], Width: w, Height: h, PNGBase64: base64.StdEncoding.EncodeToString(b)})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Page != out[j].Page {
+			return out[i].Page < out[j].Page
+		}
+		return out[i].Index < out[j].Index
+	})
+	if skippedPages > 0 {
+		return out, fmt.Errorf("image extraction budget (%ds) reached — %d of %d candidate page(s) not processed", budgetSecs, skippedPages, len(pages))
+	}
+	return out, nil
+}
+
+// indexOfInt returns the index of v in s (used only to size the "skipped"
+// count when the budget trips mid-loop).
+func indexOfInt(s []int, v int) int {
+	for i, x := range s {
+		if x == v {
+			return i
+		}
+	}
+	return len(s)
+}
+
+// decodedImageStats decodes a PNG/JPEG byte slice and reports its real pixel
+// dimensions plus whether it is "blank" (flat-color or near-white) — the
+// pixel-level half of the junk filter, run AFTER metadata filtering as a
+// safety net (e.g. a genuinely full-size but blank table cell background).
+func decodedImageStats(b []byte) (w, h int, blank bool) {
+	img, _, err := image.Decode(bytes.NewReader(b))
+	if err != nil {
+		return 0, 0, false // can't assess -> don't second-guess the metadata filter
+	}
+	bounds := img.Bounds()
+	w, h = bounds.Dx(), bounds.Dy()
+	return w, h, isFlatOrBlank(img)
+}
+
+// isFlatOrBlank subsamples a decimated grid of pixels (bounded cost
+// regardless of image size) and reports true when the image is effectively
+// decoration: either overwhelmingly near-white, or clustered within
+// flatColorTolerance of one dominant color (a solid divider bar, a blank
+// table cell). nearWhiteFraction of samples must agree for either case.
+func isFlatOrBlank(img image.Image) bool {
+	b := img.Bounds()
+	const gridN = 24 // ~24x24 samples regardless of source resolution
+	stepX := max(1, b.Dx()/gridN)
+	stepY := max(1, b.Dy()/gridN)
+	var total, nearWhite, nearFlat int
+	var r0, g0, b0 int32
+	first := true
+	for y := b.Min.Y; y < b.Max.Y; y += stepY {
+		for x := b.Min.X; x < b.Max.X; x += stepX {
+			cr, cg, cb, _ := img.At(x, y).RGBA()
+			r8, g8, b8 := int32(cr>>8), int32(cg>>8), int32(cb>>8)
+			total++
+			if r8 >= nearWhiteChannel && g8 >= nearWhiteChannel && b8 >= nearWhiteChannel {
+				nearWhite++
+			}
+			if first {
+				r0, g0, b0 = r8, g8, b8
+				first = false
+			}
+			if abs32(r8-r0) <= flatColorTolerance && abs32(g8-g0) <= flatColorTolerance && abs32(b8-b0) <= flatColorTolerance {
+				nearFlat++
+			}
+		}
+	}
+	if total == 0 {
+		return false
+	}
+	frac := func(n int) float64 { return float64(n) / float64(total) }
+	return frac(nearWhite) >= nearWhiteFraction || frac(nearFlat) >= nearWhiteFraction
+}
+
+func abs32(v int32) int32 {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // Run is the top-level entry: it decides between the single-file pipeline and

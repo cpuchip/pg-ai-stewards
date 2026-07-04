@@ -66,6 +66,13 @@ type ExtractArgs struct {
 	// (RC-3). 0 = the converter default + r.Timeout. A fast single file finishes
 	// early regardless, so a high value here is a ceiling, not a floor.
 	TimeoutSecs int
+
+	// MaxImages / ImageBudgetSecs tune the wiki-assets embedded-image pass
+	// (0 = the converter's own defaults — 40 images / 60s, tuned for an
+	// interactive chat upload). assets-backfill passes a larger budget since
+	// it is a deliberate one-shot sweep, not a request the user is waiting on.
+	MaxImages       int
+	ImageBudgetSecs int
 }
 
 // Extract spawns the hardened container, pipes data to its stdin, and decodes
@@ -146,6 +153,12 @@ func (r *Runner) Extract(ctx context.Context, data []byte, a ExtractArgs) (docex
 	}
 	if a.RecurseNested {
 		args = append(args, "-recurse-nested")
+	}
+	if a.MaxImages > 0 {
+		args = append(args, "-max-images", strconv.Itoa(a.MaxImages))
+	}
+	if a.ImageBudgetSecs > 0 {
+		args = append(args, "-image-budget-secs", strconv.Itoa(a.ImageBudgetSecs))
 	}
 
 	cmd := exec.CommandContext(ctx, "docker", args...)

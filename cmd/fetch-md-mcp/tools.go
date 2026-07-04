@@ -35,15 +35,20 @@ func registerFetchTools(srv *mcp.Server, cfg *fetchConfig) {
 			"Uses Mozilla Readability to extract the main article content " +
 			"and strips boilerplate (navigation, sidebars, ads). Best for " +
 			"docs sites, blog posts, READMEs, Wikipedia. Does NOT render " +
-			"JavaScript — JS-heavy SPAs may return sparse content.",
+			"JavaScript — JS-heavy SPAs may return sparse content. Also " +
+			"returns `images`: the article's own <img> URLs (wiki-assets " +
+			"hook) — discovery only, no bytes fetched here; download+scan+ " +
+			"persist one via the wikiassets package before treating it as " +
+			"trusted (respects the same clamav/structural scan floor as a " +
+			"PDF upload).",
 	}, makeFetchURL(cfg))
 
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "fetch_urls",
 		Description: "Concurrent batch fetch of multiple URLs. Each is " +
-			"converted to markdown via the same path as fetch_url. Returns " +
-			"per-URL results so a partial failure (one bad URL) does not " +
-			"abort the rest.",
+			"converted to markdown via the same path as fetch_url (incl. " +
+			"the discovered `images` list). Returns per-URL results so a " +
+			"partial failure (one bad URL) does not abort the rest.",
 	}, makeFetchURLs(cfg))
 
 	mcp.AddTool(srv, &mcp.Tool{
@@ -76,13 +81,28 @@ type fetchURLInput struct {
 }
 
 type fetchURLOutput struct {
-	URL         string `json:"url"`
-	Title       string `json:"title,omitempty"`
-	Markdown    string `json:"markdown"`
-	WordCount   int    `json:"word_count"`
-	Truncated   bool   `json:"truncated,omitempty"`
-	FetchedAtMs int64  `json:"fetched_at_ms"`
+	URL       string `json:"url"`
+	Title     string `json:"title,omitempty"`
+	Markdown  string `json:"markdown"`
+	WordCount int    `json:"word_count"`
+	Truncated bool   `json:"truncated,omitempty"`
+	// Images: absolute <img> src URLs found within the extracted article
+	// content (the wiki-assets hook — extension/93-wiki-assets.sql). This
+	// tool only DISCOVERS the URLs (stateless, no DB here); an ingestion
+	// caller downloads + scans + persists them via
+	// internal/wikiassets.DownloadAndPersistWebImage, which routes the bytes
+	// through the SAME hardened doc-extract sandbox (clamav + structural
+	// scan) as every other untrusted input before they become a wiki asset —
+	// this tool never stores bytes itself. Capped (maxArticleImages) so a
+	// heavily-illustrated page can't return an unbounded list.
+	Images      []string `json:"images,omitempty"`
+	FetchedAtMs int64    `json:"fetched_at_ms"`
 }
+
+// maxArticleImages caps how many <img> URLs fetch_url/fetch_urls surface per
+// page — enough for a real article/rulebook page's illustrations without an
+// unbounded list from a heavily-linked page.
+const maxArticleImages = 30
 
 func makeFetchURL(cfg *fetchConfig) func(context.Context, *mcp.CallToolRequest, fetchURLInput) (*mcp.CallToolResult, fetchURLOutput, error) {
 	return func(ctx context.Context, req *mcp.CallToolRequest, in fetchURLInput) (*mcp.CallToolResult, fetchURLOutput, error) {
@@ -138,9 +158,57 @@ func makeFetchURL(cfg *fetchConfig) func(context.Context, *mcp.CallToolRequest, 
 			Markdown:    md,
 			WordCount:   countWords(md),
 			Truncated:   truncated,
+			Images:      extractImageURLs(article.Content, parsed),
 			FetchedAtMs: time.Now().UnixMilli(),
 		}, nil
 	}
+}
+
+// extractImageURLs walks the readability-extracted article HTML (NOT the
+// raw page — this deliberately excludes nav/sidebar/ad chrome images, the
+// same boilerplate-stripping readability already does for text) and returns
+// the absolute <img src> URLs within it, in document order, deduped, capped
+// to maxArticleImages. Discovery only — no bytes are fetched here; see
+// fetchURLOutput.Images' doc comment for the download+scan+persist path.
+func extractImageURLs(articleHTML string, base *url.URL) []string {
+	doc, err := html.Parse(strings.NewReader(articleHTML))
+	if err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]bool{}
+	var walk func(*html.Node)
+	walk = func(n *html.Node) {
+		if len(out) >= maxArticleImages {
+			return
+		}
+		if n.Type == html.ElementNode && n.Data == "img" {
+			var src string
+			for _, a := range n.Attr {
+				if a.Key == "src" {
+					src = a.Val
+					break
+				}
+			}
+			if src != "" && !strings.HasPrefix(src, "data:") {
+				abs := src
+				if base != nil {
+					if u, perr := url.Parse(src); perr == nil {
+						abs = base.ResolveReference(u).String()
+					}
+				}
+				if !seen[abs] {
+					seen[abs] = true
+					out = append(out, abs)
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil && len(out) < maxArticleImages; c = c.NextSibling {
+			walk(c)
+		}
+	}
+	walk(doc)
+	return out
 }
 
 // ---------------------------------------------------------------------
@@ -159,12 +227,13 @@ type fetchURLsOutput struct {
 }
 
 type fetchURLsOneResult struct {
-	URL       string `json:"url"`
-	Title     string `json:"title,omitempty"`
-	Markdown  string `json:"markdown,omitempty"`
-	WordCount int    `json:"word_count,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
-	Error     string `json:"error,omitempty"`
+	URL       string   `json:"url"`
+	Title     string   `json:"title,omitempty"`
+	Markdown  string   `json:"markdown,omitempty"`
+	WordCount int      `json:"word_count,omitempty"`
+	Truncated bool     `json:"truncated,omitempty"`
+	Images    []string `json:"images,omitempty"` // see fetchURLOutput.Images
+	Error     string   `json:"error,omitempty"`
 }
 
 func makeFetchURLs(cfg *fetchConfig) func(context.Context, *mcp.CallToolRequest, fetchURLsInput) (*mcp.CallToolResult, fetchURLsOutput, error) {
@@ -238,6 +307,7 @@ func makeFetchURLs(cfg *fetchConfig) func(context.Context, *mcp.CallToolRequest,
 					Markdown:  md,
 					WordCount: countWords(md),
 					Truncated: truncated,
+					Images:    extractImageURLs(article.Content, parsed),
 				}
 			}(i, u)
 		}
@@ -274,18 +344,18 @@ type extractedURL struct {
 }
 
 var socialDomains = map[string]bool{
-	"twitter.com":   true,
-	"x.com":         true,
-	"linkedin.com":  true,
-	"facebook.com":  true,
-	"instagram.com": true,
-	"youtube.com":   true,
-	"youtu.be":      true,
-	"github.com":    true,
+	"twitter.com":     true,
+	"x.com":           true,
+	"linkedin.com":    true,
+	"facebook.com":    true,
+	"instagram.com":   true,
+	"youtube.com":     true,
+	"youtu.be":        true,
+	"github.com":      true,
 	"mastodon.social": true,
-	"bsky.app":      true,
-	"reddit.com":    true,
-	"tiktok.com":    true,
+	"bsky.app":        true,
+	"reddit.com":      true,
+	"tiktok.com":      true,
 }
 
 var downloadExts = []string{

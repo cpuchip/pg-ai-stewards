@@ -41,6 +41,8 @@ func main() {
 		maxEntries  = flag.Int("max-entries", 0, "archive: max member count (0 = default 1000)")
 		maxRatio    = flag.Int("max-ratio", 0, "archive: compression-ratio ceiling (0 = default 200)")
 		recurse     = flag.Bool("recurse-nested", false, "archive: recurse into nested archives (default false = surface as a file)")
+		maxImages   = flag.Int("max-images", 0, "wiki-assets: cap embedded picture XObjects extracted per PDF, after the junk filter (0 = default 40)")
+		imageBudget = flag.Int("image-budget-secs", 0, "wiki-assets: wall-clock budget for the embedded-image phase (0 = default 60; a one-shot backfill run can afford more)")
 		smoke       = flag.Bool("smoke", false, "run a self-test (benign + adversarial inputs) and exit")
 		timeoutSecs = flag.Int("timeout", 120, "overall extraction timeout in seconds")
 	)
@@ -83,13 +85,15 @@ func main() {
 	caps.RecurseNested = *recurse
 
 	res, err := docextract.Run(ctx, data, docextract.Options{
-		Filename:    *filename,
-		RenderPages: *render,
-		AutoRender:  *autoRender,
-		MaxPages:    *maxPages,
-		RenderDPI:   *dpi,
-		ClamAVDB:    *clamavDB,
-		Caps:        caps,
+		Filename:        *filename,
+		RenderPages:     *render,
+		AutoRender:      *autoRender,
+		MaxPages:        *maxPages,
+		RenderDPI:       *dpi,
+		ClamAVDB:        *clamavDB,
+		Caps:            caps,
+		MaxImages:       *maxImages,
+		ImageBudgetSecs: *imageBudget,
 	})
 	if err != nil {
 		// A run-level error still emits whatever partial result we have, so the

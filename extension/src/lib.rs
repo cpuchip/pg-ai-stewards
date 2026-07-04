@@ -1052,6 +1052,23 @@ extension_sql_file!(
     name = "create_recall",
     requires = ["create_wiki"],
 );
+
+// 96 — WIKI-ASSETS (the 6-builder wiki fleet, 2026-07-03): PDF/web images as
+// addressable, embeddable wiki assets. Populates stewards.wiki_assets (owned
+// by WIKI-CORE, 92-wiki.sql — landed on main while this file was authored in
+// an isolated worktree against a SKETCHED contract; reconciled here to the
+// REAL schema: id bigserial, doc_id text (matches docs.id), bytes bytea +
+// source_attachment_id bigint (the P2/P3 rich-docs convention — NOT a
+// storage_path column, see 92-wiki.sql's header deviation #3), caption,
+// page_no. requires create_model_role_toggles (95) — the true tail of the
+// chain as merged, not create_core_compat (91), which was only correct while
+// this worktree hadn't yet seen 92-95 land. See 96-wiki-assets.sql's header
+// for the full contract + the markdown-embed convention.
+extension_sql_file!(
+    "../96-wiki-assets.sql",
+    name = "create_wiki_assets",
+    requires = ["create_model_role_toggles"],
+);
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

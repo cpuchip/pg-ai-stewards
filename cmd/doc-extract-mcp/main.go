@@ -28,6 +28,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/cpuchip/pg-ai-stewards/cmd/doc-extract-mcp/runner"
+	"github.com/cpuchip/pg-ai-stewards/internal/wikiassets"
 )
 
 const version = "0.1.0"
@@ -38,6 +39,7 @@ func main() {
 	render := flag.Bool("render", false, "With -attachment: force the pixel overlay.")
 	importCorpus := flag.String("import-corpus", "", "Debug: with -attachment, import it into the docs pool as this corpus name and exit.")
 	importProject := flag.String("import-project", "", "Debug: with -import-corpus, tag the imported docs with this project.")
+	backfillDoc := flag.String("backfill-doc", "", "Debug: run assets-backfill against this chat_attachments id or docs slug/id, print the JSON result, and exit.")
 	flag.Parse()
 
 	log.SetOutput(os.Stderr)
@@ -65,6 +67,17 @@ func main() {
 	defer pool.Close()
 
 	run := runner.New()
+
+	if *backfillDoc != "" {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		out, berr := wikiassets.Backfill(ctx, pool, run, *backfillDoc)
+		if berr != nil {
+			log.Fatalf("assets-backfill %q: %v", *backfillDoc, berr)
+		}
+		_ = enc.Encode(out)
+		return
+	}
 
 	// Debug paths: run a tool core directly (live DB + live container) and exit.
 	if *attach > 0 {

@@ -29,23 +29,42 @@ type Result struct {
 
 // FileResult is the extraction outcome for a single document (or one archive
 // member). Text is always populated for a readable doc; Pages is the additive
-// pixel overlay (rendered only when requested and the doc is renderable).
+// pixel overlay (rendered only when requested and the doc is renderable);
+// Images is the wiki-assets overlay (embedded picture XObjects, extracted
+// whenever the doc is a PDF — see ExtractedImages / extractEmbeddedImages).
 type FileResult struct {
-	Path      string      `json:"path"`                 // member path within an archive, or the filename
-	MimeType  string      `json:"mime_type,omitempty"`  // best-effort content type
-	DocType   string      `json:"doc_type,omitempty"`   // pdf|docx|xlsx|pptx|odt|epub|html|text|image|archive|unknown
-	Text      string      `json:"text,omitempty"`       // extracted markdown (the always-on path)
-	WordCount int         `json:"word_count,omitempty"` // words in Text
-	Pages     []PageImage `json:"pages,omitempty"`      // rendered page bitmaps (the pixel overlay)
-	Scan      ScanResult  `json:"scan"`                 // the four-layer defense, layer 1
-	Skipped   bool        `json:"skipped,omitempty"`    // quarantined (malicious) — bytes never parsed for content
-	Error     string      `json:"error,omitempty"`      // extraction error (member failures don't abort the run)
+	Path      string          `json:"path"`                 // member path within an archive, or the filename
+	MimeType  string          `json:"mime_type,omitempty"`  // best-effort content type
+	DocType   string          `json:"doc_type,omitempty"`   // pdf|docx|xlsx|pptx|odt|epub|html|text|image|archive|unknown
+	Text      string          `json:"text,omitempty"`       // extracted markdown (the always-on path)
+	WordCount int             `json:"word_count,omitempty"` // words in Text
+	Pages     []PageImage     `json:"pages,omitempty"`      // rendered page bitmaps (the pixel overlay)
+	Images    []EmbeddedImage `json:"images,omitempty"`     // embedded picture XObjects (the wiki-assets overlay)
+	Scan      ScanResult      `json:"scan"`                 // the four-layer defense, layer 1
+	Skipped   bool            `json:"skipped,omitempty"`    // quarantined (malicious) — bytes never parsed for content
+	Error     string          `json:"error,omitempty"`      // extraction error (member failures don't abort the run)
 }
 
 // PageImage is one rendered page as a base64 PNG — a dumb RGB bitmap that
 // carries nothing executable forward (the Dangerzone pixel round-trip).
 type PageImage struct {
 	Page      int    `json:"page"`       // 1-based page number
+	PNGBase64 string `json:"png_base64"` // PNG bytes, base64 (no MIME line-wrapping)
+}
+
+// EmbeddedImage is one picture XObject extracted from INSIDE a PDF page (a
+// photo, map, character-art panel, or table screenshot embedded in the page
+// content) — distinct from PageImage, which is the WHOLE page rasterized.
+// This is the wiki-assets overlay (extension/*-wiki-assets): a PDF's own
+// artwork becomes individually addressable rather than only visible baked
+// into a full-page screenshot. Extracted via poppler's `pdfimages -png`,
+// after a two-stage junk filter (see extractEmbeddedImages) drops page
+// furniture (repeated backgrounds/borders, alpha masks, icons, blank tiles).
+type EmbeddedImage struct {
+	Page      int    `json:"page"`       // 1-based source page
+	Index     int    `json:"index"`      // pdfimages' own per-document image index (stable ordering / de-dup key)
+	Width     int    `json:"width"`      // pixel width (post-decode; belt-and-suspenders vs. the -list estimate)
+	Height    int    `json:"height"`     // pixel height
 	PNGBase64 string `json:"png_base64"` // PNG bytes, base64 (no MIME line-wrapping)
 }
 

@@ -56,6 +56,22 @@ type Options struct {
 
 	// Caps bound archive unpacking. Zero value uses DefaultArchiveCaps.
 	Caps ArchiveCaps
+
+	// MaxImages caps how many embedded picture XObjects (pdfimages -png) are
+	// extracted per document, AFTER the junk filter. 0 = a small built-in
+	// default. Unlike page rendering, embedded-image extraction is NOT gated
+	// by AutoRender/RenderPages — it always runs for a PDF (alongside text +
+	// page-PNG), the way text always runs; this cap (+ the wall-clock budget
+	// below) is what keeps a heavily-illustrated rulebook bounded instead of
+	// gating the whole feature behind a flag.
+	MaxImages int
+
+	// ImageBudgetSecs overrides the wall-clock budget for the embedded-image
+	// phase (0 = defaultImageBudgetSecs, tuned for an interactive upload). A
+	// deliberate one-shot backfill run (assets-backfill) can afford a much
+	// larger budget to sweep more of a heavily-illustrated document in one
+	// pass; an inline chat doc_extract call should stay snappy.
+	ImageBudgetSecs int
 }
 
 // defaultMaxPages is the built-in pixel-overlay page cap when Options.MaxPages
@@ -65,3 +81,65 @@ const defaultMaxPages = 10
 
 // defaultRenderDPI balances legibility against PNG size for a vision model.
 const defaultRenderDPI = 150
+
+// --- embedded-image (wiki-assets) extraction tuning ---
+//
+// Every threshold below was set against a REAL 94-page TTRPG rulebook (the
+// Cosmere RPG beta preview), not a synthetic fixture. `pdfimages -list`
+// reported 272 image XObjects; 123 were `smask` alpha-channel companions
+// (not standalone content), and ONE repeated full-bleed background object
+// (2593×3376) recurred on 90 of the 94 pages — the object-repeat dedup alone
+// discards 216 of 272 rows (79%) before a single pixel is decoded. A naive
+// `pdfimages -png` blind extraction of all 272 images took OVER 8 minutes
+// (re-encoding photographic JPEG-source pages as lossless PNG is expensive);
+// a single targeted page (`-f N -l N`) with real content took ~12s. Hence the
+// two-stage design: filter on `pdfimages -list` METADATA first (free — no
+// pixel decode), THEN extract PNGs only for surviving candidate pages, under
+// a wall-clock budget so a pathological/heavily-illustrated PDF degrades to
+// "partial, capped" instead of blocking the whole doc-extract run.
+
+// defaultMaxImages caps the number of embedded images PERSISTED per document
+// (post-filter). Deliberately modest: these become individually browsable
+// wiki assets, not an image dump — a rulebook's real illustrations (as
+// opposed to page furniture) tend to number in the dozens, not hundreds.
+const defaultMaxImages = 40
+
+// defaultImageBudgetSecs bounds the WALL-CLOCK time spent on the embedded-
+// image phase specifically (separate from the overall extraction timeout),
+// so a heavily-illustrated PDF can't starve the (more important) text
+// extraction of its share of the run's time budget. When the budget is hit,
+// already-extracted images are kept and a warning names how many pages were
+// skipped — partial results beat none (the same philosophy as a render
+// failure never clobbering already-extracted text).
+const defaultImageBudgetSecs = 60
+
+// minImageDim: an embedded image narrower or shorter than this (in EITHER
+// dimension) is treated as a UI glyph / bullet / rule / small icon, not
+// wiki-worthy art. Empirically, the real content in the reference rulebook
+// was never smaller than ~360px in its narrow dimension; 100px gives headroom
+// without letting through obvious chrome.
+const minImageDim = 100
+
+// maxObjectRepeats: a PDF image XObject (identified by its `object` id in
+// `pdfimages -list`) that recurs on MORE than this many distinct pages is
+// page furniture — a repeating background, border frame, or running-header
+// logo — not per-page content. Threshold 2 keeps a genuinely-reused SMALL
+// icon (e.g. a rules-callout glyph used twice) while dropping anything that
+// functions as a template element. The reference rulebook's background
+// object recurred on 90 of 94 pages; a section-banner object recurred 3
+// times — both are furniture, not assets.
+const maxObjectRepeats = 2
+
+// nearWhiteChannel / nearWhiteFraction: the "blank / decorative" pixel-level
+// safety net (applied AFTER decode, on top of the metadata-only filters
+// above). A sampled pixel is "near-white" when every channel is >= this
+// value; an image where at least this FRACTION of sampled pixels are
+// near-white (or all cluster within a small tolerance of one flat color —
+// isFlatOrBlank checks both) is decoration (a blank cell, a divider bar, a
+// solid-color rule), not content.
+const nearWhiteChannel = 250
+const nearWhiteFraction = 0.97
+
+// flatColorTolerance: per-channel tolerance (0-255) for the "single flat
+// color" half of the blank/decoration check.
+const flatColorTolerance = 6

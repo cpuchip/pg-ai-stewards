@@ -18,6 +18,7 @@ import (
 
 	"github.com/cpuchip/pg-ai-stewards/cmd/doc-extract-mcp/runner"
 	"github.com/cpuchip/pg-ai-stewards/internal/docextract"
+	"github.com/cpuchip/pg-ai-stewards/internal/wikiassets"
 )
 
 // --- corpus import tuning (env-configurable, generic OSS) ---
@@ -113,6 +114,18 @@ func registerDocExtractTools(srv *mcp.Server, run *runner.Runner, pool *pgxpool.
 			"doc tagged with the given project so doc_search finds it. Pass attachment_id + a corpus_name " +
 			"(and optionally project). Malicious/empty members are skipped. Returns how many were imported.",
 	}, makeDocImportCorpus(run, pool))
+
+	mcp.AddTool(srv, &mcp.Tool{
+		Name: "assets_backfill",
+		Description: "Re-extract WIKI ASSETS (embedded picture XObjects — maps, character art, item cards, " +
+			"tables) from an ALREADY-INGESTED PDF, without re-importing it. Pass `doc` as either a " +
+			"chat_attachments id (the original PDF) or a stewards.docs slug/id it was pooled into via " +
+			"doc_import_corpus (resolved back to its source attachment). Runs the same hardened sandbox as " +
+			"doc_extract, but budgeted for a deliberate one-shot sweep (minutes, not seconds) since this is " +
+			"not an inline request the user is waiting on. Assets are saved as chat attachments (servable " +
+			"immediately) and linked into stewards.wiki_assets when the PDF is pooled and that table exists. " +
+			"Use this to give Michael's existing TTRPG rulebooks browsable art without a re-import.",
+	}, makeAssetsBackfill(run, pool))
 }
 
 type docExtractInput struct {
@@ -131,10 +144,19 @@ type docExtractOutput struct {
 	ScanFindings   []string `json:"scan_findings,omitempty"`
 	Quarantined    bool     `json:"quarantined,omitempty"`
 	PageImageIDs   []int64  `json:"page_image_ids,omitempty"`
-	Members        int      `json:"members,omitempty"`
-	RepoKind       string   `json:"repo_kind,omitempty"`   // archive only: code | docs | mixed (RC-2 routing hint)
-	RepoReason     string   `json:"repo_reason,omitempty"` // why (e.g. "has a build manifest (go.mod)")
-	Summary        string   `json:"summary"`
+	// Wiki-assets overlay (embedded PDF picture XObjects — distinct from the
+	// whole-page renders above): WikiAssetImageIDs are the chat_attachments
+	// ids (servable immediately at /api/chat/attachment/<id>); WikiAssetsLinked
+	// counts how many were ALSO linked into stewards.wiki_assets (only
+	// possible once the source PDF is pooled via doc_import_corpus AND WIKI-
+	// CORE's table exists — see WikiAssetsNote when it's fewer than len(ids)).
+	WikiAssetImageIDs []int64 `json:"wiki_asset_image_ids,omitempty"`
+	WikiAssetsLinked  int     `json:"wiki_assets_linked,omitempty"`
+	WikiAssetsNote    string  `json:"wiki_assets_note,omitempty"`
+	Members           int     `json:"members,omitempty"`
+	RepoKind          string  `json:"repo_kind,omitempty"`   // archive only: code | docs | mixed (RC-2 routing hint)
+	RepoReason        string  `json:"repo_reason,omitempty"` // why (e.g. "has a build manifest (go.mod)")
+	Summary           string  `json:"summary"`
 }
 
 // toolTextCap bounds the text returned in the tool RESULT (the full text is
@@ -219,7 +241,37 @@ func extractAttachment(ctx context.Context, pool *pgxpool.Pool, run *runner.Runn
 			}
 			out.PageImageIDs = ids
 		}
+		// Wiki-assets overlay -> embedded picture XObjects, individually
+		// addressable (distinct from the whole-page overlay above). Persisted
+		// through the SAME chat_attachments storage convention regardless of
+		// whether this PDF is pooled into stewards.docs yet; the wiki_assets
+		// LINK is best-effort (skipped + noted when not pooled, or when
+		// WIKI-CORE's table isn't live on this database yet).
+		if len(fr.Images) > 0 {
+			docID, pooled, derr := wikiassets.ResolveDocID(ctx, pool, in.AttachmentID)
+			if derr != nil {
+				return docExtractOutput{}, fmt.Errorf("resolve wiki doc id: %w", derr)
+			}
+			assets, aerr := wikiassets.PersistImages(ctx, pool, sessionID, filename, in.AttachmentID, docID, fr.Images)
+			if aerr != nil {
+				return docExtractOutput{}, fmt.Errorf("persist wiki assets: %w", aerr)
+			}
+			for _, a := range assets {
+				out.WikiAssetImageIDs = append(out.WikiAssetImageIDs, a.AttachmentID)
+				if a.AssetID != 0 {
+					out.WikiAssetsLinked++
+				}
+			}
+			if !pooled {
+				out.WikiAssetsNote = "not yet pooled into stewards.docs — assets saved as attachments but not linked into wiki_assets; run doc_import_corpus, then re-extract (or assets-backfill), to link them"
+			} else if out.WikiAssetsLinked < len(assets) {
+				out.WikiAssetsNote = "wiki_assets table not available on this database yet (WIKI-CORE migration pending) — assets saved as attachments only"
+			}
+		}
 		out.Summary = fileSummary(filename, fr, len(out.PageImageIDs))
+		if len(out.WikiAssetImageIDs) > 0 {
+			out.Summary += fmt.Sprintf(" %d embedded picture(s) extracted as wiki asset(s) (%d linked into wiki_assets).", len(out.WikiAssetImageIDs), out.WikiAssetsLinked)
+		}
 
 	case "archive":
 		manifest, verdict, findings := archiveManifest(filename, res)
@@ -535,5 +587,50 @@ func errResult(format string, a ...any) *mcp.CallToolResult {
 	return &mcp.CallToolResult{
 		IsError: true,
 		Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf(format, a...)}},
+	}
+}
+
+// --- assets_backfill: re-extract wiki assets from an already-ingested PDF ---
+
+type assetsBackfillInput struct {
+	Doc string `json:"doc" jsonschema:"a chat_attachments id (the original PDF) OR a stewards.docs slug/id it was pooled into via doc_import_corpus"`
+}
+
+type assetsBackfillOutput struct {
+	AttachmentID   int64    `json:"attachment_id"`
+	Filename       string   `json:"filename"`
+	DocID          string   `json:"doc_id,omitempty"`
+	CandidatePages int      `json:"candidate_pages"`
+	Extracted      int      `json:"extracted"`
+	AttachmentIDs  []int64  `json:"asset_attachment_ids,omitempty"`
+	ServeURLs      []string `json:"serve_urls,omitempty"`
+	Linked         int      `json:"wiki_assets_linked"`
+	Note           string   `json:"note,omitempty"`
+	Summary        string   `json:"summary"`
+}
+
+func makeAssetsBackfill(run *runner.Runner, pool *pgxpool.Pool) func(context.Context, *mcp.CallToolRequest, assetsBackfillInput) (*mcp.CallToolResult, assetsBackfillOutput, error) {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in assetsBackfillInput) (*mcp.CallToolResult, assetsBackfillOutput, error) {
+		res, err := wikiassets.Backfill(ctx, pool, run, in.Doc)
+		if err != nil {
+			return errResult("assets_backfill: %v", err), assetsBackfillOutput{}, nil
+		}
+		out := assetsBackfillOutput{
+			AttachmentID: res.AttachmentID, Filename: res.Filename, DocID: res.DocID,
+			CandidatePages: res.CandidatePages, Extracted: res.Extracted, Note: res.Note,
+		}
+		for _, a := range res.Assets {
+			out.AttachmentIDs = append(out.AttachmentIDs, a.AttachmentID)
+			out.ServeURLs = append(out.ServeURLs, a.ServeURL)
+			if a.AssetID != 0 {
+				out.Linked++
+			}
+		}
+		out.Summary = fmt.Sprintf("%q: extracted %d embedded image(s) across %d candidate page(s) (%d linked into wiki_assets).",
+			res.Filename, out.Extracted, out.CandidatePages, out.Linked)
+		if out.Note != "" {
+			out.Summary += " " + out.Note
+		}
+		return nil, out, nil
 	}
 }
