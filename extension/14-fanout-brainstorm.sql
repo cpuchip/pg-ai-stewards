@@ -745,6 +745,16 @@ ON CONFLICT (family) DO UPDATE
        auto_materialize_on_verified = EXCLUDED.auto_materialize_on_verified,
        metadata = EXCLUDED.metadata;
 
+-- The maturity hop that makes the fan-out FIRE: on_maturity_verified (08)
+-- calls spawn_children only when the parent reaches 'verified', and the
+-- maturity hook only advances via pipeline_stage_maturity. The consolidated
+-- port dropped this row — decompose-fanout completed at 'raw' and never
+-- spawned (found 2026-07-04 by the Lab's first opposed-mandate panel run).
+INSERT INTO stewards.pipeline_stage_maturity (pipeline_family, stage_name, produces_maturity)
+VALUES ('decompose-fanout', 'decompose', 'verified')
+ON CONFLICT (pipeline_family, stage_name) DO UPDATE
+   SET produces_maturity = EXCLUDED.produces_maturity;
+
 -- =====================================================================
 -- spawn_children — CORRECT UNION of j3 (aggregator file_destination) +
 -- j4 (per-child file_destination) + j8c (model/provider override
@@ -837,8 +847,13 @@ BEGIN
 
         UPDATE stewards.work_items
            SET parent_work_item_id = p_parent_id,
+               -- Model-proposes-SQL-disposes: manifests routinely INVENT a
+               -- project name (gemini: "safety-monitoring", 2026-07-04) and
+               -- the projects FK would abort the whole spawn. Honor the
+               -- manifest's project only when it exists; else the parent's.
                project_association = COALESCE(
-                   v_child ->> 'project_association',
+                   (SELECT p.slug FROM stewards.projects p
+                     WHERE p.slug = v_child ->> 'project_association'),
                    v_parent.project_association
                ),
                cost_cap_micro   = COALESCE(v_cost_cap, cost_cap_micro),

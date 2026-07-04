@@ -2580,8 +2580,12 @@ fn anthropic_body_from_openai(
                         .and_then(|f| f.get("arguments"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("{}");
+                    // Anthropic requires input to be an OBJECT. Stored arguments
+                    // can be "" (unparseable -> {}) but also "null"/"[]"/bare
+                    // scalars from lenient providers — coerce all non-objects.
                     let input: serde_json::Value =
                         serde_json::from_str(args_str).unwrap_or_else(|_| serde_json::json!({}));
+                    let input = if input.is_object() { input } else { serde_json::json!({}) };
                     blocks.push(serde_json::json!({
                         "type": "tool_use", "id": id, "name": name, "input": input,
                     }));

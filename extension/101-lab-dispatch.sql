@@ -318,9 +318,9 @@ UPDATE stewards.experiments SET
   dispatch = '{"pipeline_family": "decompose-fanout"}'::jsonb,
   variants = '[
     {"variant": "same-prompt",
-     "input": {"binding_question": "Convene a review panel of exactly THREE independent reviewers on the following subject. Decompose into exactly 3 child tasks, one per reviewer, each with the SAME neutral mandate: review the subject carefully and report the most important findings, strengths and weaknesses alike. Aggregate their reports, then list the DISTINCT findings with a count of how many reviewers surfaced each.\n\nSUBJECT:\n{SUBJECT}"}},
+     "input": {"binding_question": "Convene a review panel of exactly THREE independent reviewers on the following subject. Decompose into exactly 3 child tasks, one per reviewer, each with the SAME neutral mandate: review the subject carefully and report the most important findings, strengths and weaknesses alike. Each child MUST set pipeline_family to research-summary. Aggregate their reports, then list the DISTINCT findings with a count of how many reviewers surfaced each.\n\nSUBJECT:\n{SUBJECT}"}},
     {"variant": "opposed-mandate",
-     "input": {"binding_question": "Convene a review panel of exactly THREE independent reviewers on the following subject. Decompose into exactly 3 child tasks with OPPOSED mandates — reviewer 1: PROVE the subject''s central claim is sound (strongest supporting case); reviewer 2: DISPROVE it (strongest refutation); reviewer 3: FIND THE THIRD OPTION (what both sides miss — reframings, hidden assumptions, orthogonal evidence). Aggregate their reports, then list the DISTINCT findings with a count of how many reviewers surfaced each.\n\nSUBJECT:\n{SUBJECT}"}}
+     "input": {"binding_question": "Convene a review panel of exactly THREE independent reviewers on the following subject. Decompose into exactly 3 child tasks with OPPOSED mandates — reviewer 1: PROVE the subject''s central claim is sound (strongest supporting case); reviewer 2: DISPROVE it (strongest refutation); reviewer 3: FIND THE THIRD OPTION (what both sides miss — reframings, hidden assumptions, orthogonal evidence). Each child MUST set pipeline_family to research-summary. Aggregate their reports, then list the DISTINCT findings with a count of how many reviewers surfaced each.\n\nSUBJECT:\n{SUBJECT}"}}
   ]'::jsonb
 WHERE name = 'opposed-mandate-panels';
 
@@ -346,6 +346,17 @@ INSERT INTO stewards.experiments (name, hypothesis, n_per_variant, metrics, vari
 ON CONFLICT (name) DO UPDATE
    SET variants = EXCLUDED.variants, hypothesis = EXCLUDED.hypothesis,
        metrics = EXCLUDED.metrics;
+
+-- §7 — executor repair the first Lab round exposed (2026-07-04): the
+-- decompose-fanout maturity seed was missing from the consolidated 14, so
+-- spawn_children (08, fires at maturity 'verified') was unreachable and the
+-- pipeline completed at 'raw' with zero children. Idempotent duplicate of the
+-- seed now also in 14 — present here because 101 is the chain tail and
+-- single-file live apply is only safe for the tail.
+INSERT INTO stewards.pipeline_stage_maturity (pipeline_family, stage_name, produces_maturity)
+VALUES ('decompose-fanout', 'decompose', 'verified')
+ON CONFLICT (pipeline_family, stage_name) DO UPDATE
+   SET produces_maturity = EXCLUDED.produces_maturity;
 
 -- =====================================================================
 -- End of 101-lab-dispatch.sql

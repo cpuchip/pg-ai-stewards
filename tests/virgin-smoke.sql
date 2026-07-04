@@ -5156,6 +5156,9 @@ BEGIN
     ASSERT (SELECT count(*) FROM stewards.experiments e, jsonb_array_elements(e.variants) v
              WHERE e.name = 'sonnet-raw-vs-claude-code' AND v ? 'pipeline_family') = 2,
         '101: both sonnet-raw-vs-claude-code variants must name their pipeline_family';
+    ASSERT (SELECT produces_maturity FROM stewards.pipeline_stage_maturity
+             WHERE pipeline_family = 'decompose-fanout' AND stage_name = 'decompose') = 'verified',
+        '101: decompose-fanout/decompose must produce maturity verified (else spawn_children never fires and fan-out is dead)';
 
     -- live-fire the runner on a throwaway 2-variant echo experiment
     INSERT INTO stewards.experiments (name, hypothesis, variants, n_per_variant, metrics, dispatch)
