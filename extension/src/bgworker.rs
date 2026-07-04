@@ -1974,10 +1974,18 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
     // includes it regardless). AN.2: anthropic-format models take a different
     // body shape (system extracted, max_tokens required) — see
     // anthropic_body_from_openai — and a different endpoint (/messages).
+    // Phantom-history sanitize (ALL providers, before any format branch): a
+    // history stored before the phantom-slot accumulator fix may carry an
+    // assistant tool_call with an empty function.name plus its orphan
+    // role:tool result. deepseek/kimi tolerate replaying it; Google's
+    // OpenAI-compat translation 400s ("function_response.name: Name cannot
+    // be empty") and Anthropic 400s ("name: String should have at least 1
+    // character"). One choke point beats per-format guards.
+    let body_sane = sanitize_phantom_tool_history(body_orig);
     let body_owned = if is_anthropic {
-        anthropic_body_from_openai(body_orig, tools_disabled)
+        anthropic_body_from_openai(&body_sane, tools_disabled)
     } else {
-        let mut b = body_orig.clone();
+        let mut b = body_sane.clone();
         if let serde_json::Value::Object(ref mut m) = b {
             if tools_disabled {
                 m.remove("tools");
@@ -2347,8 +2355,26 @@ fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value
         message.insert("content".to_string(), serde_json::Value::String(content));
     }
     if !tool_calls.is_empty() {
+        // Drop phantom slots the index gap-filler materialized. OpenCode Zen's
+        // sonnet stream keeps Anthropic CONTENT-BLOCK indices in its OpenAI-compat
+        // tool_call deltas — a text block at index 0 pushes the first real call to
+        // index 1, and `while len <= idx` back-fills an empty slot 0. Storing it
+        // poisons the session: the tool loop wastes a round on tool '' and an
+        // Anthropic-format replay 400s ("name: String should have at least 1
+        // character"). A name-less call is un-executable — skip it, loudly.
         let arr: Vec<serde_json::Value> = tool_calls
             .iter()
+            .filter(|tc| {
+                if tc.name.is_empty() {
+                    pgrx::warning!(
+                        "stewards: dropping phantom streamed tool_call (empty name, id={:?}, {} arg bytes) — provider indexed deltas past a non-tool block",
+                        tc.id, tc.arguments.len()
+                    );
+                    false
+                } else {
+                    true
+                }
+            })
             .map(|tc| {
                 let mut o = serde_json::Map::new();
                 o.insert("id".to_string(), serde_json::Value::String(tc.id.clone()));
@@ -2365,7 +2391,9 @@ fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value
                 serde_json::Value::Object(o)
             })
             .collect();
-        message.insert("tool_calls".to_string(), serde_json::Value::Array(arr));
+        if !arr.is_empty() {
+            message.insert("tool_calls".to_string(), serde_json::Value::Array(arr));
+        }
     }
     if !reasoning.is_empty() {
         message.insert(
@@ -2389,6 +2417,71 @@ fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value
         resp_obj["usage"] = u;
     }
     Ok(resp_obj)
+}
+
+/// Strip phantom tool history from an OpenAI-shaped body before sending:
+/// assistant tool_calls with an empty function.name (the streamed index
+/// gap-filler artifact) are removed, and role:tool results that can no longer
+/// pair with a surviving call (empty or now-dangling tool_call_id) are dropped
+/// with them. Providers with strict request validation (Google, Anthropic)
+/// reject the whole request over one such entry; lenient ones waste a round.
+fn sanitize_phantom_tool_history(body: &serde_json::Value) -> serde_json::Value {
+    let mut b = body.clone();
+    let Some(msgs) = b.get_mut("messages").and_then(|v| v.as_array_mut()) else {
+        return b;
+    };
+    let mut dropped_ids: Vec<String> = Vec::new();
+    let mut dropped_calls = 0usize;
+    for m in msgs.iter_mut() {
+        if m.get("role").and_then(|v| v.as_str()) != Some("assistant") {
+            continue;
+        }
+        let Some(tcs) = m.get_mut("tool_calls").and_then(|v| v.as_array_mut()) else {
+            continue;
+        };
+        tcs.retain(|tc| {
+            let name_ok = tc
+                .get("function")
+                .and_then(|f| f.get("name"))
+                .and_then(|v| v.as_str())
+                .map(|n| !n.is_empty())
+                .unwrap_or(false);
+            if !name_ok {
+                dropped_calls += 1;
+                dropped_ids.push(
+                    tc.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                );
+            }
+            name_ok
+        });
+        if tcs.is_empty() {
+            if let Some(o) = m.as_object_mut() {
+                o.remove("tool_calls");
+                // OpenAI stores tool-call-only turns with null content; without
+                // the calls the turn needs SOME content to stay valid.
+                if o.get("content").map(|c| c.is_null()).unwrap_or(true) {
+                    o.insert(
+                        "content".to_string(),
+                        serde_json::Value::String(String::new()),
+                    );
+                }
+            }
+        }
+    }
+    if dropped_calls > 0 {
+        msgs.retain(|m| {
+            if m.get("role").and_then(|v| v.as_str()) != Some("tool") {
+                return true;
+            }
+            let tcid = m.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("");
+            !(tcid.is_empty() || dropped_ids.iter().any(|d| d == tcid))
+        });
+        pgrx::warning!(
+            "stewards: sanitized {} phantom tool_call(s) (empty function.name) + paired results out of replayed history",
+            dropped_calls
+        );
+    }
+    b
 }
 
 /// AN.2 + AT.1: translate an OpenAI chat body into an Anthropic /messages body.
@@ -2421,6 +2514,14 @@ fn anthropic_body_from_openai(
             // role:tool -> accumulate; Anthropic groups tool_results in a user turn.
             if role == "tool" {
                 let tu_id = m.get("tool_call_id").and_then(|v| v.as_str()).unwrap_or("");
+                // A result with no tool_use_id can't pair with any tool_use (the
+                // phantom-slot artifact stored id="") — Anthropic rejects it; skip.
+                if tu_id.is_empty() {
+                    pgrx::warning!(
+                        "stewards: skipping orphan tool_result (empty tool_call_id) in anthropic replay"
+                    );
+                    continue;
+                }
                 let content = m.get("content").and_then(|v| v.as_str()).unwrap_or("");
                 pending_tool_results.push(serde_json::json!({
                     "type": "tool_result",
@@ -2464,6 +2565,17 @@ fn anthropic_body_from_openai(
                         .and_then(|f| f.get("name"))
                         .and_then(|v| v.as_str())
                         .unwrap_or("");
+                    // Replay guard: histories stored before the phantom-slot fix
+                    // may carry a name-less tool_call; Anthropic validation 400s
+                    // the whole request on it. Skip it (its empty-id tool_result
+                    // is skipped by the orphan guard in the role:tool arm above).
+                    if name.is_empty() {
+                        pgrx::warning!(
+                            "stewards: skipping empty-name tool_use in anthropic replay (id={:?})",
+                            id
+                        );
+                        continue;
+                    }
                     let args_str = f
                         .and_then(|f| f.get("arguments"))
                         .and_then(|v| v.as_str())
