@@ -348,7 +348,7 @@ Destination wiki: {{input.wiki_slug}}
 Organize the source docs above into a set of wiki page proposals. For EACH proposed page:
 
 1. Decide its slug + title + a concise, provenance-first summary (every claim traces to a doc_slug above; quote VERBATIM only when you have the source text in front of you this session — paraphrase otherwise; NO unsourced claims).
-2. Call wiki_page_dedup_check(wiki_slug, title, summary) BEFORE finalizing the proposal. This call is REQUIRED for every single proposal, not optional — record what it returned (candidate_slug + similarity) in the proposal's dedup_checked field even when it finds nothing (similarity 0 / candidate_slug null IS a result).
+2. Call wiki_page_dedup_check(title, summary) BEFORE finalizing the proposal. This call is REQUIRED for every single proposal, not optional — record what it returned (existing_slug + similarity) in the proposal's dedup_checked field even when it finds nothing (similarity 0 / existing_slug null IS a result).
 3. Decide flat-vs-nested for the WHOLE proposal set: if the doc set is UNIFORM (all one kind of thing), use a flat slug space; if HETEROGENEOUS (several distinct categories), prefix slugs by category/ so the wiki reads as sections, not one flat pile.
 
 ## OUTPUT — JSON ONLY, no prose, no fences
@@ -514,11 +514,13 @@ BEGIN
             -- Server-side safety net: re-run dedup_check even though propose
             -- was REQUIRED to call it — the LLM's echoed dedup_checked field
             -- is advisory; this authoritative branch decision is the real gate.
-            -- INTEGRATION POINT: assumes wiki_page_dedup_check RETURNS TABLE
-            -- (candidate_slug text, similarity real), best match first.
-            SELECT candidate_slug, similarity INTO v_dedup_slug, v_dedup_sim
-              FROM stewards.wiki_page_dedup_check(v_wiki_slug, v_title, v_content)
-             ORDER BY similarity DESC LIMIT 1;
+            -- 92's real shape (reconciled at fleet integration):
+            -- wiki_page_dedup_check(p_title, p_content) RETURNS TABLE
+            -- (is_duplicate boolean, existing_slug text, similarity real),
+            -- single best-match row; page slugs are global, no wiki arg.
+            SELECT existing_slug, similarity INTO v_dedup_slug, v_dedup_sim
+              FROM stewards.wiki_page_dedup_check(v_title, v_content)
+             LIMIT 1;
         EXCEPTION WHEN OTHERS THEN
             RAISE NOTICE 'wiki_organize_apply: wiki_page_dedup_check failed for % (likely 92-wiki-core not yet installed): %', v_slug, SQLERRM;
         END;
@@ -1121,3 +1123,102 @@ ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET action = EXCLUDED.action;
 -- =====================================================================
 -- End of 94-wiki-curator.sql
 -- =====================================================================
+
+-- =====================================================================
+-- Fleet-integration addendum (integrator, 2026-07-03): the wiki-tools
+-- group above grants five verb names that 92 authors only as PLAIN SQL
+-- functions — no *_tool(jsonb) wrapper, no tool_defs row, so under
+-- deny-by-default the propose stage and the collect-entity children had
+-- grants to tools that did not exist. These wrappers follow
+-- wiki_search_tool's conventions (jsonb in/out, error-as-jsonb, never
+-- RAISE to the dispatch loop).
+-- =====================================================================
+
+CREATE OR REPLACE FUNCTION stewards.wiki_create_tool(p_args jsonb)
+RETURNS jsonb LANGUAGE plpgsql AS $FN$
+BEGIN
+    IF coalesce(btrim(p_args->>'slug'),'') = '' OR coalesce(btrim(p_args->>'title'),'') = '' THEN
+        RETURN '{"error":"slug and title required"}'::jsonb;
+    END IF;
+    RETURN jsonb_build_object('wiki_id', stewards.wiki_create(
+        p_args->>'slug', p_args->>'title',
+        coalesce(p_args->>'kind','collection'),
+        coalesce(p_args->'scope','{}'::jsonb)));
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('error','wiki_create failed','detail',SQLERRM);
+END;
+$FN$;
+
+CREATE OR REPLACE FUNCTION stewards.wiki_page_upsert_tool(p_args jsonb)
+RETURNS jsonb LANGUAGE plpgsql AS $FN$
+BEGIN
+    IF coalesce(btrim(p_args->>'slug'),'') = '' OR coalesce(btrim(p_args->>'title'),'') = '' THEN
+        RETURN '{"error":"slug and title required"}'::jsonb;
+    END IF;
+    RETURN jsonb_build_object('page_id', stewards.wiki_page_upsert(
+        p_args->>'slug', p_args->>'title',
+        coalesce(p_args->>'content',''),
+        coalesce(p_args->'sources','[]'::jsonb),
+        p_args->>'reason',
+        coalesce(p_args->>'status','live')));
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('error','wiki_page_upsert failed','detail',SQLERRM);
+END;
+$FN$;
+
+CREATE OR REPLACE FUNCTION stewards.wiki_add_member_tool(p_args jsonb)
+RETURNS jsonb LANGUAGE plpgsql AS $FN$
+BEGIN
+    RETURN jsonb_build_object('added', stewards.wiki_add_member(
+        p_args->>'wiki_slug', p_args->>'page_slug', p_args->>'_agent_family'));
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('error','wiki_add_member failed','detail',SQLERRM);
+END;
+$FN$;
+
+CREATE OR REPLACE FUNCTION stewards.wiki_page_dedup_check_tool(p_args jsonb)
+RETURNS jsonb LANGUAGE plpgsql STABLE AS $FN$
+DECLARE v jsonb;
+BEGIN
+    SELECT to_jsonb(t) INTO v
+      FROM stewards.wiki_page_dedup_check(p_args->>'title', coalesce(p_args->>'content','')) t
+     LIMIT 1;
+    RETURN coalesce(v, '{"is_duplicate":false,"existing_slug":null,"similarity":null}'::jsonb);
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('error','dedup check failed','detail',SQLERRM);
+END;
+$FN$;
+
+CREATE OR REPLACE FUNCTION stewards.wiki_merge_propose_tool(p_args jsonb)
+RETURNS jsonb LANGUAGE plpgsql AS $FN$
+BEGIN
+    RETURN jsonb_build_object('review_id', stewards.wiki_merge_propose(
+        p_args->>'from_slug', p_args->>'to_slug', p_args->>'rationale'));
+EXCEPTION WHEN OTHERS THEN
+    RETURN jsonb_build_object('error','wiki_merge_propose failed','detail',SQLERRM);
+END;
+$FN$;
+
+INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, active) VALUES
+( 'wiki_create',
+  'Create a named wiki (a scope over pages). Args: slug (required), title (required), kind (project|world|manual|collection|pull; default collection), scope (jsonb).',
+  '{"type":"object","required":["slug","title"],"properties":{"slug":{"type":"string"},"title":{"type":"string"},"kind":{"type":"string"},"scope":{"type":"object"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"wiki_create_tool"}'::jsonb, true ),
+( 'wiki_page_upsert',
+  'Create or revise a wiki page (revision-aware; slug is the page''s permanent identity). Args: slug (required), title (required), content (markdown), sources (jsonb array of {doc_id|chunk_ref|asset_id, kind, note} — cite what earned each claim), reason, status.',
+  '{"type":"object","required":["slug","title"],"properties":{"slug":{"type":"string"},"title":{"type":"string"},"content":{"type":"string"},"sources":{"type":"array"},"reason":{"type":"string"},"status":{"type":"string"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"wiki_page_upsert_tool"}'::jsonb, true ),
+( 'wiki_add_member',
+  'Add a page to a wiki (a page may belong to many wikis). Args: wiki_slug (required), page_slug (required).',
+  '{"type":"object","required":["wiki_slug","page_slug"],"properties":{"wiki_slug":{"type":"string"},"page_slug":{"type":"string"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"wiki_add_member_tool"}'::jsonb, true ),
+( 'wiki_page_dedup_check',
+  'REQUIRED before finalizing any page proposal: checks a candidate title+content against existing pages. Returns {is_duplicate, existing_slug, similarity}; >=0.90 similarity means supersede the existing page (lightning), a middling match means propose a merge instead of multiplying near-duplicates.',
+  '{"type":"object","required":["title"],"properties":{"title":{"type":"string"},"content":{"type":"string"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"wiki_page_dedup_check_tool"}'::jsonb, true ),
+( 'wiki_merge_propose',
+  'Propose merging one wiki page into another (mountain tier — a human approves it on the Hinge; the merge then applies itself). Args: from_slug, to_slug, rationale.',
+  '{"type":"object","required":["from_slug","to_slug"],"properties":{"from_slug":{"type":"string"},"to_slug":{"type":"string"},"rationale":{"type":"string"}}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"wiki_merge_propose_tool"}'::jsonb, true )
+ON CONFLICT (name) DO UPDATE SET description=EXCLUDED.description, args_schema=EXCLUDED.args_schema,
+    execute_target=EXCLUDED.execute_target, active=true;
