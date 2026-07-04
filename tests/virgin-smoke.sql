@@ -5070,16 +5070,21 @@ BEGIN
         format('99: Michael''s approval must trigger route_intake_new_scope_apply_trigger to completion (status=applied), got %s', v_hstatus);
     SELECT count(*) INTO v_wikis_created FROM stewards.wikis WHERE slug = 'vs99-new-wiki';
     ASSERT v_wikis_created = 1, '99: approval must create the proposed wiki (stewards.wikis row)';
+    -- (fleet integration: 98/crawl_start IS installed now — the dispatch is real)
     ASSERT EXISTS (SELECT 1 FROM stewards.hinge_reviews
-                    WHERE id = v_hid AND (payload -> 'dispatch' ->> 'dispatched')::boolean = false
-                      AND (payload -> 'dispatch' ->> 'note') ILIKE '%crawler%'),
-        '99: post-approval dispatch (kind=url, crawl_start absent) must degrade honestly, recorded on the review payload';
+                    WHERE id = v_hid AND (payload -> 'dispatch' ->> 'dispatched')::boolean = true
+                      AND payload -> 'dispatch' ->> 'target' = 'crawl_start'),
+        '99: post-approval dispatch (kind=url, 98 installed) must really dispatch via crawl_start, recorded on the review payload';
+    ASSERT EXISTS (SELECT 1 FROM stewards.work_items
+                    WHERE pipeline_family = 'crawl'
+                      AND input ->> 'url' = 'https://example.com/vs99-lore-site'),
+        '99: the real crawl_start dispatch must create a crawl work_item seeded with the fixture url';
 
-    -- ---- §9: world path — asserted BY SHAPE, since 97 (world_to_wiki) is
-    -- absent in this worktree: the world row is created and the trigger
-    -- completes cleanly despite the missing sibling (no crash). ----
-    ASSERT to_regprocedure('stewards.world_to_wiki(text)') IS NULL,
-        '99: this worktree must NOT have world_to_wiki (97, sibling BRIDGE builder) — the shape-only assertion requires it absent';
+    -- ---- §9: world path — 97 (world_to_wiki) IS installed at fleet
+    -- integration: the trigger's best-effort call gives the new world its
+    -- readable wiki face (an empty world projects to a wiki with no pages). ----
+    ASSERT to_regprocedure('stewards.world_to_wiki(text)') IS NOT NULL,
+        '99: fleet-integrated build must have world_to_wiki (97/BRIDGE)';
     v_world_wi := stewards.work_item_create('route-intake',
         jsonb_build_object('kind','file','ref','999999'),
         'vs99-route-intake-world-file');
@@ -5094,7 +5099,9 @@ BEGIN
     ASSERT v_hstatus = 'applied',
         '99: the world-shaped approval trigger must complete (status=applied) even though 97/world_to_wiki is absent';
     ASSERT EXISTS (SELECT 1 FROM stewards.worlds WHERE slug = 'vs99-new-world'),
-        '99: approval must create the proposed world (stewards.worlds row) regardless of whether 97 is installed';
+        '99: approval must create the proposed world (stewards.worlds row)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.wikis WHERE slug = 'world-vs99-new-world' AND kind = 'world'),
+        '99: with 97 installed, the approval trigger''s best-effort world_to_wiki must give the new world its wiki face';
     SELECT payload -> 'dispatch' INTO v_world_result FROM stewards.hinge_reviews WHERE id = v_world_hid;
     ASSERT (v_world_result ->> 'dispatched')::boolean = false AND (v_world_result ->> 'note') ILIKE '%world-build%',
         format('99: a world-shaped file/text dispatch must honestly note world-build has no SQL entry point, got %s', v_world_result);
@@ -5104,12 +5111,18 @@ BEGIN
     DELETE FROM stewards.work_items WHERE id = v_wi_id;
     DELETE FROM stewards.hinge_reviews WHERE id IN (v_hid, v_world_hid);
     DELETE FROM stewards.wiki_members WHERE wiki_id = v_wiki_id;
-    DELETE FROM stewards.wikis WHERE slug IN ('vs99-wiki','vs99-new-wiki');
+    DELETE FROM stewards.crawl_frontier WHERE work_item_id IN
+        (SELECT id FROM stewards.work_items WHERE pipeline_family = 'crawl'
+          AND input ->> 'url' = 'https://example.com/vs99-lore-site');
+    DELETE FROM stewards.work_items WHERE pipeline_family = 'crawl'
+      AND input ->> 'url' = 'https://example.com/vs99-lore-site';
+    DELETE FROM stewards.wiki_members WHERE wiki_id IN (SELECT id FROM stewards.wikis WHERE slug = 'world-vs99-new-world');
+    DELETE FROM stewards.wikis WHERE slug IN ('vs99-wiki','vs99-new-wiki','world-vs99-new-world');
     DELETE FROM stewards.worlds WHERE slug = 'vs99-new-world';
     DELETE FROM stewards.projects WHERE slug = 'vs99-xylophone-project';
     UPDATE stewards.config SET value = value - 'new-scope' WHERE key = 'hinge_escalate_always_kinds';
 
-    RAISE NOTICE 'OK 99: route-intake (raw-to-wiki router) — scope_candidates FTS-matches a seeded project and honestly empties on no theme; route_intake creates + carries kind/ref/instruction onto a real route-intake work_item; the pipeline has exactly [classify, match] stages; disposition on a SEEDED matched scope files act-and-report (real wiki_organize_start/94 dispatch, no Hinge gate); a matched video dispatch degrades honestly (playlist_add/yt-overlay absent); disposition on NO MATCH lands a pending kind=new-scope Hinge row bound to hinge_escalate_always_kinds; Michael''s approval creates the wiki and dispatches (crawl_start/98 absent -> honest degrade, recorded on the review); the world path is created by shape with world_to_wiki/97 absent, and a world-shaped file dispatch honestly names the missing world-build SQL entry point';
+    RAISE NOTICE 'OK 99: route-intake (raw-to-wiki router) — scope_candidates FTS-matches a seeded project and honestly empties on no theme; route_intake creates + carries kind/ref/instruction onto a real route-intake work_item; the pipeline has exactly [classify, match] stages; disposition on a SEEDED matched scope files act-and-report (real wiki_organize_start/94 dispatch, no Hinge gate); a matched video dispatch degrades honestly (playlist_add/yt-overlay absent); disposition on NO MATCH lands a pending kind=new-scope Hinge row bound to hinge_escalate_always_kinds; Michael''s approval creates the wiki and REALLY dispatches via crawl_start (98 installed; the crawl work_item is created and cleaned); the world path creates the world AND its wiki face via world_to_wiki (97 installed), while a world-shaped file dispatch still honestly names the missing world-build SQL entry point';
 END $$;
 
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→100) is sound =='

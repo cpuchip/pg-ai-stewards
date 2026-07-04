@@ -315,9 +315,11 @@ BEGIN
             'config', jsonb_build_object('max_pages', 15)
         )
     ));
-    ASSERT (v_result->>'ok')::boolean = false, 'OK 100i: pipeline_family "crawl" is not installed on this scratch (a sibling builder''s file) — must fail honestly';
-    ASSERT (v_result->>'error') LIKE '%no pipeline_family "crawl"%', format('OK 100i: error should name crawl specifically, got %L', v_result->>'error');
-    RAISE NOTICE 'OK 100i (1/2): the arxiv-llm-weekly / pipeline_family=crawl shape correctly fails honest-not-found on this scratch (crawl lands via a sibling file)';
+    -- (fleet integration: 98/crawl IS installed — the mission shape now succeeds outright)
+    ASSERT coalesce((v_result->>'ok')::boolean, false),
+        format('OK 100i: the arxiv-llm-weekly / pipeline_family=crawl shape must SUCCEED on the integrated chain, got %s', v_result);
+    ASSERT (v_result->'schedule'->>'next_due_at') IS NOT NULL, 'OK 100i: next_due_at must be present so chat can echo it';
+    RAISE NOTICE 'OK 100i (1/2): the arxiv-llm-weekly / pipeline_family=crawl shape succeeds end-to-end on the integrated chain — the crawler cron via chat is REAL';
 
     -- Same shape, an existing family — the full happy path, mission-realistic.
     v_result := stewards.schedule_create_tool(jsonb_build_object(
