@@ -125,16 +125,20 @@ ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, description = EXCLUDED.d
 -- =====================================================================
 
 -- ── wiki_scope_doc_slugs — the doc set a wiki's gather stage may see.
--- INTEGRATION POINT: assumes wiki_members(wiki_slug, page_slug) and
--- page_sources(page_slug, doc_slug) — see the header. Degrades to an
--- empty set (not an error) via the caller's exception guard until 92 lands.
+-- Reconciled at fleet integration to 92's REAL shape: the junction tables
+-- are id-keyed (wikis.id/wiki_pages.id uuids), page_sources carries doc_id
+-- (= stewards.docs.id, text), and the slug every tool surface speaks lives
+-- on docs.slug — so the walk is wikis→wiki_members→page_sources→docs.
 CREATE OR REPLACE FUNCTION stewards.wiki_scope_doc_slugs(p_wiki_slug text)
 RETURNS TABLE (doc_slug text)
 LANGUAGE sql STABLE AS $fn$
-    SELECT DISTINCT ps.doc_slug
-      FROM stewards.wiki_members wm
-      JOIN stewards.page_sources ps ON ps.page_slug = wm.page_slug
-     WHERE wm.wiki_slug = p_wiki_slug;
+    SELECT DISTINCT d.slug
+      FROM stewards.wikis w
+      JOIN stewards.wiki_members wm ON wm.wiki_id = w.id
+      JOIN stewards.page_sources ps ON ps.page_id = wm.page_id
+      JOIN stewards.docs d          ON d.id = ps.doc_id
+     WHERE w.slug = p_wiki_slug
+       AND ps.doc_id IS NOT NULL;
 $fn$;
 COMMENT ON FUNCTION stewards.wiki_scope_doc_slugs(text) IS
 '94-wiki-curator: the doc slugs in scope for a wiki lens — every doc that is a page_source of one of the wiki''s member pages. INTEGRATION POINT: assumes 92-wiki-core''s wiki_members/page_sources shape.';
