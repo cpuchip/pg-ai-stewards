@@ -1069,6 +1069,25 @@ extension_sql_file!(
     name = "create_wiki_assets",
     requires = ["create_model_role_toggles"],
 );
+
+// 97 — the world->wiki bridge (.spec/proposals/ingestion-crawler-and-raw-
+// to-wiki.md Part 0 + Part 4 arc 1): stewards.world_to_wiki(world_slug) —
+// an idempotent full re-projection of a World's entity graph (54-
+// loreworks.sql) onto a wiki (92-wiki.sql): one page per world_entity,
+// page_links mirroring world_edges 1:1, page_sources resolved from
+// source_refs where the cited doc slug exists. Removed entities are
+// superseded, never deleted. world_wiki_refresh_due() is the cheap
+// "who needs a re-projection" scan (honest limitation: world_entities has
+// no updated_at, so it only catches NEW entities/edges, not in-place
+// edits — see the SQL file's header). world_to_wiki_tool + tool_def +
+// grants to wiki-curator and loremaster (94's jsonb-in/out, error-as-
+// jsonb convention). Installs at the tail of the chain — 92-96 (the
+// 6-builder wiki fleet) are all present in this worktree.
+extension_sql_file!(
+    "../97-world-wiki-bridge.sql",
+    name = "create_world_wiki_bridge",
+    requires = ["create_wiki_assets"],
+);
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
