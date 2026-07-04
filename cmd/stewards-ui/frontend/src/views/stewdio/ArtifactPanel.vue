@@ -8,6 +8,7 @@ import MarkdownIt from 'markdown-it'
 import { api, type StudyDetail, type WorkItemDetail, type AttachmentMeta, type ObjectPage } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
 import { makeLinkClick } from './useDocLinks'
+import SourcesPulledPanel from '../wiki/SourcesPulledPanel.vue'
 
 defineOptions({ inheritAttrs: false })
 const store = useStewdioStore()
@@ -59,6 +60,9 @@ function openSourceObject() {
 const loading = ref(false)
 const err = ref('')
 const doc = ref<StudyDetail | null>(null)
+// "Sources pulled" tab (WIKI-GRAPH item 4) — sits beside the rendered doc, not
+// inside it, so it never competes with the content for prose width.
+const docTab = ref<'doc' | 'sources'>('doc')
 const wi = ref<WorkItemDetail | null>(null)
 const obj = ref<AttachmentMeta | null>(null)        // O1: a stored binary object
 const objPages = ref<ObjectPage[]>([])               // a document's rendered pages
@@ -94,7 +98,7 @@ async function refreshWorkItem(id: string) {
 
 async function load() {
   stopPoll(); doc.value = null; wi.value = null; obj.value = null; objPages.value = []
-  stages.value = []; err.value = ''
+  stages.value = []; err.value = ''; docTab.value = 'doc'
   if (!store.selectedRef || !store.selectedKind) return
   loading.value = true
   try {
@@ -132,31 +136,42 @@ onUnmounted(stopPoll)
            class="shrink-0 text-[11px] text-sky-400 hover:text-sky-300 border border-zinc-800 rounded px-1.5 py-0.5"
            title="download this document as markdown" download>⬇ .md</a>
       </div>
-      <div class="text-zinc-600 text-xs mb-4 flex items-center gap-2">
+      <div class="text-zinc-600 text-xs mb-3 flex items-center gap-2">
         <span>{{ doc.kind }} · {{ doc.slug }}</span>
         <button v-if="sourceObject" class="text-emerald-400 hover:text-emerald-300 border border-emerald-800/50 rounded px-1.5 py-0.5"
                 title="open the original source document (PDF / image) this was extracted from"
                 @click="openSourceObject">🖼 view source</button>
       </div>
 
-      <!-- O1: paint the source back. A digested YouTube video shows its player
-           above the notes — watch the source without leaving the cockpit. -->
-      <div v-if="videoId" class="mb-4">
-        <div class="relative w-full overflow-hidden rounded-lg border border-zinc-800 bg-black" style="aspect-ratio: 16 / 9;">
-          <iframe
-            class="absolute inset-0 h-full w-full"
-            :src="`https://www.youtube-nocookie.com/embed/${videoId}`"
-            title="source video"
-            frameborder="0"
-            allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            referrerpolicy="strict-origin-when-cross-origin"
-            allowfullscreen></iframe>
-        </div>
-        <a :href="`https://youtu.be/${videoId}`" target="_blank" rel="noopener noreferrer"
-           class="text-[11px] text-zinc-500 hover:text-sky-400">▶ open on YouTube</a>
+      <!-- Doc ⇄ Sources pulled tab strip (WIKI-GRAPH item 4) -->
+      <div class="inline-flex rounded overflow-hidden border border-zinc-700 text-xs mb-4">
+        <button class="px-2 py-1" :class="docTab === 'doc' ? 'bg-sky-900/50 text-sky-200' : 'text-zinc-400 hover:bg-zinc-800'"
+                @click="docTab = 'doc'">Doc</button>
+        <button class="px-2 py-1 border-l border-zinc-700" :class="docTab === 'sources' ? 'bg-sky-900/50 text-sky-200' : 'text-zinc-400 hover:bg-zinc-800'"
+                @click="docTab = 'sources'">Sources pulled</button>
       </div>
 
-      <div class="doc-theme prose prose-invert max-w-none" v-html="md.render(doc.body || '')" @click="onLink"></div>
+      <template v-if="docTab === 'doc'">
+        <!-- O1: paint the source back. A digested YouTube video shows its player
+             above the notes — watch the source without leaving the cockpit. -->
+        <div v-if="videoId" class="mb-4">
+          <div class="relative w-full overflow-hidden rounded-lg border border-zinc-800 bg-black" style="aspect-ratio: 16 / 9;">
+            <iframe
+              class="absolute inset-0 h-full w-full"
+              :src="`https://www.youtube-nocookie.com/embed/${videoId}`"
+              title="source video"
+              frameborder="0"
+              allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+              referrerpolicy="strict-origin-when-cross-origin"
+              allowfullscreen></iframe>
+          </div>
+          <a :href="`https://youtu.be/${videoId}`" target="_blank" rel="noopener noreferrer"
+             class="text-[11px] text-zinc-500 hover:text-sky-400">▶ open on YouTube</a>
+        </div>
+
+        <div class="doc-theme prose prose-invert max-w-none" v-html="md.render(doc.body || '')" @click="onLink"></div>
+      </template>
+      <SourcesPulledPanel v-else :doc-ref="doc.slug" @open="(ref) => store.select(ref, 'doc', ref)" />
     </div>
 
     <!-- O1: a stored binary object — paint the original back (image / PDF pages /
