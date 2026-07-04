@@ -667,6 +667,12 @@ export const api = {
     return r.json()
   },
 
+  // 99: raw-to-wiki router — drop a video, a website, a file, or text and
+  // have it auto-sorted into the right world/wiki/project (or propose a
+  // new one, gated for approval). File drops reuse chatAttach() first,
+  // then pass the returned attachment id as ref.
+  intake: (req: IntakeReq) => postJSON<IntakeResp>('/api/intake', req),
+
   // Models catalog (UI 2026-05-29 — backs Brainstorm datalist + /models view).
   modelsList: () => getJSON<ModelsListResp>('/api/models'),
   // Role aliases → provider/model members (Stewdio Models panel).
@@ -1410,6 +1416,16 @@ export type PipelinesListResp = {
 export type SetFileDestinationReq = {
   id: string
   file_destination: string // empty = DB-only
+}
+
+// 99: raw-to-wiki router (POST /api/intake -> stewards.route_intake).
+export type IntakeReq = {
+  kind: 'url' | 'file' | 'video' | 'text'
+  ref: string // a url, a chat_attachments id (as text), or a doc slug
+  instruction?: string
+}
+export type IntakeResp = {
+  work_item_id: string
 }
 
 export type SetFileDestinationResp = {
