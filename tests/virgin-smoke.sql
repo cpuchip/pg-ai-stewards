@@ -5112,4 +5112,4 @@ BEGIN
     RAISE NOTICE 'OK 99: route-intake (raw-to-wiki router) — scope_candidates FTS-matches a seeded project and honestly empties on no theme; route_intake creates + carries kind/ref/instruction onto a real route-intake work_item; the pipeline has exactly [classify, match] stages; disposition on a SEEDED matched scope files act-and-report (real wiki_organize_start/94 dispatch, no Hinge gate); a matched video dispatch degrades honestly (playlist_add/yt-overlay absent); disposition on NO MATCH lands a pending kind=new-scope Hinge row bound to hinge_escalate_always_kinds; Michael''s approval creates the wiki and dispatches (crawl_start/98 absent -> honest degrade, recorded on the review); the world path is created by shape with world_to_wiki/97 absent, and a world-shaped file dispatch honestly names the missing world-build SQL entry point';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→96, 98, 99) is sound =='
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→100) is sound =='
