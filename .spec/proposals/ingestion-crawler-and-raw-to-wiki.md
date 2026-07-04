@@ -91,3 +91,16 @@ Three arcs, each a fleet, each ratify-first:
 3. **The raw-to-wiki router** (M) — the auto-magic/directed intake that ties files+urls+videos into the auto-sort. Best last: it *dispatches* the crawler and the bridge, so it wants them to exist.
 
 My lean: **1 → 2 → 3.** The bridge makes tonight's wiki+world investment pay off immediately; the crawler is the capability you actually asked for; the router is the magic wrapper that makes it one gesture. All inside the Fable window if we run them like today.
+
+## Part 5 — benchmark addendum (2026-07-03 late): Karpathy + Nate B. Jones gap check
+
+Michael asked what's missing vs Karpathy's wiki and Nate B. Jones' Open Engine/Open Brain.
+
+**Validation first:** Jones' Open Brain (github.com/NateBJones-Projects/OB1) is "one Postgres DB + vector embeddings + MCP, any AI plugs in" — pg-ai-stewards' thesis independently arrived at (the fifth independent convergence this month). Open Engine's pieces (status ledgers, receipts, standing skills, recurring automation) all have substrate natives (work items, a2a_receipt, 24-skills, 18-scheduler + 100-schedule-chat).
+
+**Five increments ratified-in-principle from the comparison (queue after tonight's fleet):**
+1. **Index page per wiki** (S) — the curator maintains a curated `index` front-door page (TOC/entry points) every organize pass. Karpathy's index.md; OKF formalizes it.
+2. **Ingest log as a page** (S) — a generated per-wiki changelog page ("what came in, when, → which pages") over the existing ledger rows. Karpathy's log.md with our provenance depth.
+3. **Per-wiki rules doc** (S) — schema-once: an editable conventions page (naming, tone, skip-list) the curator reads before organizing that wiki; replaces one global prompt with per-wiki steering. Also Michael's customization handle.
+4. **Cross-source disagreement flagging** (M) — when new content contradicts an existing page: a "sources disagree" section citing both + bell item for big ones. Supersession handles updates; this handles disputes. Nobody in the field has it (the Karpathy video's best moment — the Mythos-preview benchmark mismatch — was this, by accident).
+5. **The "what's new" digest** (M) — per-wiki change feed + a schedulable summary note ("overnight: N new pages, M revised, K disagreements") via schedule-chat; phone push when ntfy (#321) lands. The necessary companion to automagic corpus growth.
