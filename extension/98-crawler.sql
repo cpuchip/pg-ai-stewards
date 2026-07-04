@@ -787,6 +787,13 @@ ON CONFLICT (family, model_match) DO UPDATE
    SET description = EXCLUDED.description, prompt = EXCLUDED.prompt,
        temperature = EXCLUDED.temperature, active = true;
 
+-- First live crawl (2026-07-04, arXiv): the default steps budget (8) exhausted
+-- mid-cycle on a link-heavy listing page — the model burned rounds enqueuing
+-- links one-by-one and never reached its final CRAWL: line. 16 fits a full
+-- pop/fetch/save/enqueue cycle with slack; the route_on hop cap still bounds
+-- the whole loop.
+UPDATE stewards.agents SET steps = 16 WHERE family = 'crawler';
+
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action) VALUES
   ('crawler', 'crawl_next',    'allow'),
   ('crawler', 'crawl_save',    'allow'),
@@ -834,7 +841,7 @@ Previous step: {{input.last_step}}
 
 ## HARD CONSTRAINTS
 - ONE crawl_next call per step. The budgets are enforced in SQL; you cannot override them, so do not try.
-- Maximum 8 rounds of tool calls.
+- Maximum 14 rounds of tool calls.
 - Before the final CRAWL: line, give a 2-3 line summary of what this step did (saved/skipped what, enqueued how many) — that summary is handed to your next step as context.$T$;
 
 INSERT INTO stewards.pipelines (
@@ -849,7 +856,7 @@ VALUES (
     jsonb_build_array(
         jsonb_build_object(
             'name', 'step', 'next', NULL,
-            'model', 'kimi-k2.6', 'provider', 'opencode_go',
+            'model', 'deepseek-v4-pro', 'provider', 'opencode_go',
             'agent_family', 'crawler', 'auto_advance', true,
             'tools_disabled', false,
             'tool_groups', jsonb_build_array('crawl-tools'),
@@ -862,7 +869,15 @@ VALUES (
                     'count_key', '_crawl_steps',
                     'max', 40,
                     'on_max_status', 'awaiting_review',
-                    'on_max_reason', 'crawl step cap (40) reached under the route_on hop guard — budget may remain; a human re-dispatches to resume from the frontier'))
+                    'on_max_reason', 'crawl step cap (40) reached under the route_on hop guard — budget may remain; a human re-dispatches to resume from the frontier'),
+                jsonb_build_object(
+                    'when', '^\s*$',
+                    'goto', 'step',
+                    'feedback_key', 'last_step',
+                    'count_key', '_crawl_steps',
+                    'max', 40,
+                    'on_max_status', 'awaiting_review',
+                    'on_max_reason', 'crawl step cap (40) reached (via empty-output self-heal) — a human re-dispatches to resume from the frontier'))
         )
     ),
     false,  -- sabbath_enabled: mechanical ingestion, not a creative artifact
@@ -884,7 +899,7 @@ ON CONFLICT (family) DO UPDATE SET
     updated_at = now();
 
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model, notes) VALUES
-    ('crawl', 'step', 'kimi-k2.6', 'One frontier URL per step: pop, polite fetch, judge/extract, score links. Link-scoring is workhorse-grade; pin a stronger model via model_override when extraction is subtle.')
+    ('crawl', 'step', 'deepseek-v4-pro', 'One frontier URL per step: pop, polite fetch, judge/extract, score links. Link-scoring is workhorse-grade; pin a stronger model via model_override when extraction is subtle.')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
     default_model = EXCLUDED.default_model, notes = EXCLUDED.notes;
 
