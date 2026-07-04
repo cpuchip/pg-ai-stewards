@@ -2729,10 +2729,11 @@ BEGIN
       FROM stewards.doc_search_hybrid('lexical semantic ranks', ARRAY['nonexistent-kind'], 5);
     ASSERT v_doc_n = 0, '60b: doc_search_hybrid honors the kinds filter (no match → empty)';
 
-    -- the agent-facing tool wrapper now routes through the hybrid fn
+    -- the agent-facing tool wrapper now routes through the hybrid fn (as of
+    -- 93, one hop further via doc_search_recall, the bump-on-return wrapper)
     ASSERT jsonb_array_length(stewards.doc_search_tool(
               jsonb_build_object('query','lexical semantic ranks'))) >= 1,
-        '60b: doc_search_tool routes through doc_search_hybrid';
+        '60b: doc_search_tool routes through doc_search_hybrid (via 93''s doc_search_recall)';
     -- and its tool_def description was updated to say "hybrid"/"RRF" (honest contract)
     ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs
                    WHERE name='doc_search' AND description ILIKE '%RRF%'),
@@ -3340,10 +3341,14 @@ DECLARE
     v_eids   text[];
 BEGIN
     -- (1) STRUCTURAL / INVERSE HYPOTHESIS: the wrapper routes through the hybrid
-    -- and embeds inline.
+    -- and embeds inline. 93 (the Atlas recall steal) repointed engram_search_tool
+    -- at search_engrams_recall (the bump-on-return wrapper, which itself calls
+    -- search_engrams_hybrid once via a MATERIALIZED CTE) so real agent usage
+    -- feeds the recency/frequency boost — so the literal call site is now
+    -- search_engrams_recall, one hop further from the tool than before 93.
     v_def := pg_get_functiondef('stewards.engram_search_tool(jsonb)'::regprocedure);
-    ASSERT v_def ILIKE '%search_engrams_hybrid%',
-        '67: engram_search_tool routes through search_engrams_hybrid';
+    ASSERT v_def ILIKE '%search_engrams_recall%',
+        '67/93: engram_search_tool routes through search_engrams_recall (which wraps search_engrams_hybrid)';
     ASSERT v_def ILIKE '%embed_query%',
         '67: engram_search_tool embeds the query inline via embed_query (text-in → vector)';
 
@@ -3398,7 +3403,7 @@ BEGIN
 
     DELETE FROM stewards.messages WHERE session_id = v_sess;  -- cascades engram_embeddings
     DELETE FROM stewards.sessions WHERE id = v_sess;
-    RAISE NOTICE 'OK 67: agent engram search wired — engram_search tool_def + engram_search_tool embed inline (embed_query) and route through search_engrams_hybrid; granted to exactly brain_search_text''s families (stewards-explore mirrored, watchman-consolidator still denied); no embed provider ⇒ FTS-only degrade (FTS engram surfaced, vector-only not)';
+    RAISE NOTICE 'OK 67: agent engram search wired — engram_search tool_def + engram_search_tool embed inline (embed_query) and route through search_engrams_recall (93: which wraps search_engrams_hybrid + bumps usage); granted to exactly brain_search_text''s families (stewards-explore mirrored, watchman-consolidator still denied); no embed provider ⇒ FTS-only degrade (FTS engram surfaced, vector-only not)';
 END $$;
 
 -- ---------------------------------------------------------------------
@@ -4343,6 +4348,109 @@ BEGIN
     ASSERT n = 0,
         format('%s SECURITY DEFINER function(s) in stewards lack a pinned search_path', n);
     RAISE NOTICE 'OK 93: house rule — every SECURITY DEFINER function in stewards pins search_path (0 today; the chain runs invoker-only)';
+END $$;
+
+-- 93-recall (extension/93-recall.sql; NOT the same "93" as the audit-synthesis
+-- house-rule block just above — that label was already squatted by an inline
+-- §II check unrelated to any chain file, before this chain file existed.
+-- Labeled 'OK recall (93)' below to stay unambiguous rather than renumbering
+-- either block). The Atlas steal (study/ai/elastic-atlas-agent-memory.md
+-- takeaway 1): last_used_at/use_count on docs + engram_embeddings, a shared
+-- stewards.recall_boost scoring term, folded into the three hybrid fns, and
+-- `*_recall` bump-on-return wrappers that doc_search_tool/pool_search_tool/
+-- engram_search_tool now call. Built in a parallel worktree alongside
+-- WIKI-CORE's 92 (not present here) — this block runs standalone regardless
+-- of 92, since 93 depends only on 91 in this worktree (see lib.rs's
+-- create_recall registration note on the re-stitch).
+DO $$
+DECLARE
+    v_neutral real; v_freq real; v_old real;
+    v_first   text;
+    v_orig    text;
+    v_before_a int; v_before_z int; v_after_a int; v_after_z int; v_ts timestamptz;
+    v_result  jsonb;
+BEGIN
+    -- columns exist on both recall surfaces
+    ASSERT (SELECT count(*) FROM information_schema.columns
+             WHERE table_schema='stewards' AND table_name='docs'
+               AND column_name IN ('last_used_at','use_count')) = 2,
+        '93-recall: stewards.docs must carry both last_used_at and use_count';
+    ASSERT (SELECT count(*) FROM information_schema.columns
+             WHERE table_schema='stewards' AND table_name='engram_embeddings'
+               AND column_name IN ('last_used_at','use_count')) = 2,
+        '93-recall: stewards.engram_embeddings must carry both last_used_at and use_count';
+
+    -- recall_boost math: brand-new is exactly neutral; frequency is boost-only;
+    -- a long-idle recall decays toward the floor (1-recency_weight), never to 0.
+    v_neutral := stewards.recall_boost(0, NULL, 0.2, 0.4, 30);
+    ASSERT v_neutral = 1.0::real,
+        format('93-recall: brand-new/never-recalled must be exactly neutral 1.0, got %s', v_neutral);
+    v_freq := stewards.recall_boost(10, NULL, 0.2, 0.4, 30);
+    ASSERT v_freq > 1.0::real,
+        format('93-recall: use_count=10 with no recency history must boost > 1.0, got %s', v_freq);
+    v_old := stewards.recall_boost(1, now() - interval '365 days', 0.2, 0.4, 30);
+    ASSERT v_old > 0.55::real AND v_old < 0.70::real,
+        format('93-recall: a long-idle recall must decay toward the (1-recency_weight) floor, not to 0 — got %s', v_old);
+
+    -- a used row outranks an identical unused row, DESPITE a natural
+    -- tie-break (slug order) that would otherwise favor the unused one.
+    DELETE FROM stewards.docs WHERE slug IN ('vs93-recall-a-idle','vs93-recall-z-used');
+    INSERT INTO stewards.docs (slug, title, body, kind, use_count, last_used_at) VALUES
+      ('vs93-recall-a-idle', 'vs93 recall probe idle',
+       'xylophone93recallprobe unique marker content for the OK-93 smoke test', 'doc', 0, NULL),
+      ('vs93-recall-z-used', 'vs93 recall probe used',
+       'xylophone93recallprobe unique marker content for the OK-93 smoke test', 'doc', 5, now());
+
+    SELECT slug INTO v_first
+      FROM stewards.doc_search_hybrid('xylophone93recallprobe', ARRAY[]::text[], 5, false)
+     ORDER BY rank DESC LIMIT 1;
+    ASSERT v_first = 'vs93-recall-z-used',
+        format('93-recall: the recently-used, higher-use_count doc must outrank the identical idle one (natural slug tie-break favors "a-idle") — top hit was %s', v_first);
+
+    -- config knobs are actually read — zeroing both weights collapses the
+    -- boost entirely, reverting to the natural (pre-boost) tie-break order.
+    SELECT value #>> '{}' INTO v_orig FROM stewards.config WHERE key = 'recall.freq_weight';
+    PERFORM stewards.config_set('recall.freq_weight', '0'::jsonb);
+    PERFORM stewards.config_set('recall.recency_weight', '0'::jsonb);
+    SELECT slug INTO v_first
+      FROM stewards.doc_search_hybrid('xylophone93recallprobe', ARRAY[]::text[], 5, false)
+     ORDER BY rank DESC LIMIT 1;
+    ASSERT v_first = 'vs93-recall-a-idle',
+        format('93-recall: freq_weight=0 + recency_weight=0 must revert to the natural (pre-boost) tie-break order — top hit was %s', v_first);
+    PERFORM stewards.config_set('recall.freq_weight', to_jsonb(v_orig::numeric));
+    PERFORM stewards.config_set('recall.recency_weight', '0.4'::jsonb);
+
+    -- bump round-trip: doc_search_recall actually moves use_count/last_used_at
+    -- on the rows it returns.
+    SELECT use_count INTO v_before_a FROM stewards.docs WHERE slug = 'vs93-recall-a-idle';
+    SELECT use_count INTO v_before_z FROM stewards.docs WHERE slug = 'vs93-recall-z-used';
+    PERFORM 1 FROM stewards.doc_search_recall('xylophone93recallprobe', ARRAY[]::text[], 5, false);
+    SELECT use_count, last_used_at INTO v_after_a, v_ts FROM stewards.docs WHERE slug = 'vs93-recall-a-idle';
+    ASSERT v_after_a = v_before_a + 1,
+        format('93-recall: doc_search_recall must bump use_count by 1 on a returned row (a-idle): before=%s after=%s', v_before_a, v_after_a);
+    ASSERT v_ts > now() - interval '1 minute',
+        '93-recall: doc_search_recall must set last_used_at to (approximately) now() on a returned row';
+    SELECT use_count INTO v_after_z FROM stewards.docs WHERE slug = 'vs93-recall-z-used';
+    ASSERT v_after_z = v_before_z + 1,
+        format('93-recall: doc_search_recall must bump use_count by 1 on a returned row (z-used): before=%s after=%s', v_before_z, v_after_z);
+
+    -- inverse hypothesis: the pure hybrid fn must NOT bump (only *_recall does)
+    SELECT use_count INTO v_before_a FROM stewards.docs WHERE slug = 'vs93-recall-a-idle';
+    PERFORM 1 FROM stewards.doc_search_hybrid('xylophone93recallprobe', ARRAY[]::text[], 5, false);
+    SELECT use_count INTO v_after_a FROM stewards.docs WHERE slug = 'vs93-recall-a-idle';
+    ASSERT v_after_a = v_before_a,
+        format('93-recall: doc_search_hybrid must stay pure (no bump) — before=%s after=%s', v_before_a, v_after_a);
+
+    -- the agent-facing tool now routes through *_recall too
+    SELECT use_count INTO v_before_z FROM stewards.docs WHERE slug = 'vs93-recall-z-used';
+    SELECT stewards.doc_search_tool(jsonb_build_object('query','xylophone93recallprobe','limit',5)) INTO v_result;
+    ASSERT jsonb_array_length(v_result) > 0, '93-recall: doc_search_tool must still return hits';
+    SELECT use_count INTO v_after_z FROM stewards.docs WHERE slug = 'vs93-recall-z-used';
+    ASSERT v_after_z = v_before_z + 1,
+        format('93-recall: doc_search_tool must route through doc_search_recall (bump) — before=%s after=%s', v_before_z, v_after_z);
+
+    DELETE FROM stewards.docs WHERE slug IN ('vs93-recall-a-idle','vs93-recall-z-used');
+    RAISE NOTICE 'OK recall (93): last_used_at/use_count on docs+engram_embeddings; recall_boost neutral-for-new(=%)/boost-for-frequent(=%)/floors-not-zeroes(=%); a used row outranks an identical unused row; config knobs (recall.freq_weight/recall.recency_weight) demonstrably change ranking; doc_search_recall bump round-trip works and doc_search_hybrid stays pure (inverse hypothesis); doc_search_tool routes through doc_search_recall', v_neutral, v_freq, v_old;
 END $$;
 
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→91) is sound =='

@@ -1796,3 +1796,55 @@ export const attentionApi = {
   answer: (kind: AttentionKind, id: string, answer: string) =>
     postJSON<unknown>('/api/attention/answer', { kind, id, answer }),
 }
+
+// The human-facing search page (93: "give the human the models' search").
+// One query, three ranked views over stewards.docs: Hybrid (RRF + the 93
+// recall boost, via doc_search_recall — a surfaced hit bumps usage exactly
+// like an agent's doc_search tool call), Keyword (the bare FTS leg, for
+// comparison), and Graph (1-hop doc_similar neighbors of the top hybrid
+// hit). snippet may carry <b>...</b> highlight markers from ts_headline —
+// same v-html convention Studies.vue already uses for its own snippets.
+export type GlobalSearchHit = {
+  slug: string
+  kind?: string
+  title?: string
+  snippet?: string
+  score?: number
+}
+export type GraphSearchHit = {
+  slug: string
+  title?: string
+  score?: number
+}
+export type GlobalSearchResp = {
+  query: string
+  hybrid: GlobalSearchHit[]
+  keyword: GlobalSearchHit[]
+  graph: GraphSearchHit[]
+  graph_of?: string
+}
+
+// Wiki (lab-and-wiki Part 2): the "+ wiki" add-to-collection action on a
+// search result row. Thin wrappers over WIKI-CORE's (extension/92)
+// wiki_create/wiki_add_member/wiki_page_upsert — see cmd/stewards-ui/api/
+// wiki.go's file-header INTEGRATION NOTE for what's still unverified.
+export type WikiBrief = { slug: string; title?: string; kind?: string }
+export type WikiListResp = { items: WikiBrief[]; note?: string }
+export type WikiAddReq = {
+  wiki_slug?: string
+  new_wiki?: { slug: string; title: string; kind?: string; scope?: string }
+  result_slug: string
+  result_title: string
+  result_kind?: string
+}
+export type WikiAddResp = { ok: boolean; wiki_slug: string; page_slug: string; note?: string }
+
+export const searchApi = {
+  search: (q: string, limit = 10) =>
+    getJSON<GlobalSearchResp>(`/api/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+}
+
+export const wikiApi = {
+  list: () => getJSON<WikiListResp>('/api/wiki/list'),
+  add: (req: WikiAddReq) => postJSON<WikiAddResp>('/api/wiki/add', req),
+}

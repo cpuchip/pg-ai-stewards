@@ -58,6 +58,8 @@ func Register(mux *http.ServeMux, deps *Deps) {
 	deps.registerLab(mux)
 	deps.registerAttention(mux)
 	deps.registerCredentials(mux) // 88/#256: the setup wizard (keys + models + budgets)
+	deps.registerSearch(mux)      // 93: the human-facing hybrid/keyword/graph search page
+	deps.registerWiki(mux)        // lab-and-wiki Part 2: the "+ wiki" add-to-collection action
 }
 
 // writeJSON marshals v to JSON, sets the Content-Type header, and
