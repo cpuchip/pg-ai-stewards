@@ -856,7 +856,7 @@ VALUES (
     jsonb_build_array(
         jsonb_build_object(
             'name', 'step', 'next', NULL,
-            'model', 'deepseek-v4-pro', 'provider', 'opencode_go',
+            'model', 'deepseek-v4-flash', 'provider', 'opencode_zen',
             'agent_family', 'crawler', 'auto_advance', true,
             'tools_disabled', false,
             'tool_groups', jsonb_build_array('crawl-tools'),
@@ -899,7 +899,7 @@ ON CONFLICT (family) DO UPDATE SET
     updated_at = now();
 
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model, notes) VALUES
-    ('crawl', 'step', 'deepseek-v4-pro', 'One frontier URL per step: pop, polite fetch, judge/extract, score links. Link-scoring is workhorse-grade; pin a stronger model via model_override when extraction is subtle.')
+    ('crawl', 'step', 'deepseek-v4-flash', 'One frontier URL per step: pop, polite fetch, judge/extract, score links. Link-scoring is workhorse-grade; pin a stronger model via model_override when extraction is subtle.')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
     default_model = EXCLUDED.default_model, notes = EXCLUDED.notes;
 
