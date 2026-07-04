@@ -997,7 +997,7 @@ extension_sql_file!(
 extension_sql_file!(
     "../95-model-role-toggles.sql",
     name = "create_model_role_toggles",
-    requires = ["create_wiki"],
+    requires = ["create_wiki_curator"],
 );
 
 // 92 — the Wiki (WIKI-CORE, first of a 6-builder fleet; lab-and-wiki.md
@@ -1018,6 +1018,21 @@ extension_sql_file!(
     "../92-wiki.sql",
     name = "create_wiki",
     requires = ["create_core_compat"],
+);
+
+// 94 — wiki-curator (6-builder wiki fleet, parallel with 92-wiki-core and
+// 93-<sibling>, neither present in this worktree at authoring time — see
+// 94-wiki-curator.sql's header for the full integration-point account).
+// wiki-organize (gather->propose->deterministic-apply) + wiki-collect
+// (plan->spawn_children fan-out, reused unmodified->aggregate, bridged
+// into a real wiki page by two additive triggers) + the wiki_search lens.
+// requires create_core_compat (91) ONLY because 92/93 are absent here —
+// this MUST become ["create_wiki_core"] (or whatever 92 names itself) at
+// fleet integration, once this file's wiki_* calls have a real callee.
+extension_sql_file!(
+    "../94-wiki-curator.sql",
+    name = "create_wiki_curator",
+    requires = ["create_wiki"],
 );
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
