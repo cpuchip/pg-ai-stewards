@@ -37,6 +37,15 @@ const byAlias = computed(() => {
   return m
 })
 
+// 95: the "preferred" badge means "what pick_alias_member actually resolves
+// to" — the first ENABLED member, not simply index 0. A disabled priority-0
+// member (e.g. rested via the Roles panel) must lose the badge to whichever
+// enabled member is next in the chain.
+function isPreferred(members: AliasRow[], i: number): boolean {
+  const firstEnabled = members.findIndex(m => m.enabled !== false)
+  return i === (firstEnabled === -1 ? 0 : firstEnabled)
+}
+
 // LIVE: in-progress work grouped by model → count + tokens + cost (the
 // "N sessions on <model>" view). active rows are per work_item.
 type LiveModel = { model: string; provider: string; count: number; tokens: number; micro: number; gpu?: string; local: boolean }
@@ -142,12 +151,14 @@ function ago(ts?: string): string {
       <div v-for="(members, alias) in byAlias" :key="alias" class="mb-2">
         <div class="text-zinc-300 text-xs font-medium">{{ alias }}</div>
         <div v-for="(mem, i) in members" :key="mem.provider + mem.model"
-             class="flex items-center gap-2 text-[11px] pl-2 py-0.5">
+             class="flex items-center gap-2 text-[11px] pl-2 py-0.5" :class="{ 'opacity-40': !mem.enabled }">
           <span :title="mem.usable === false ? 'last probe: unusable' : 'usable'"
                 class="w-1.5 h-1.5 rounded-full" :class="mem.usable === false ? 'bg-rose-600' : 'bg-emerald-600'"></span>
           <span class="text-zinc-300 font-mono truncate">{{ mem.model }}</span>
           <span class="text-zinc-600">{{ mem.provider }}</span>
-          <span v-if="i === 0" class="text-[9px] text-sky-500 border border-sky-900 rounded px-1">preferred</span>
+          <span v-if="mem.is_local" class="text-[9px] text-emerald-500 border border-emerald-900 rounded px-1">local</span>
+          <span v-if="!mem.enabled" class="text-[9px] text-zinc-500 border border-zinc-800 rounded px-1">disabled</span>
+          <span v-else-if="isPreferred(members, i)" class="text-[9px] text-sky-500 border border-sky-900 rounded px-1">preferred</span>
           <span class="ml-auto text-zinc-700">p{{ mem.priority }}</span>
         </div>
       </div>

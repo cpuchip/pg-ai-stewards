@@ -4345,4 +4345,76 @@ BEGIN
     RAISE NOTICE 'OK 93: house rule — every SECURITY DEFINER function in stewards pins search_path (0 today; the chain runs invoker-only)';
 END $$;
 
+-- 95: model-role toggles — per-alias-member enabled + provider_is_local + the
+-- "rest all local models" bulk switch (+ its inverse). Note: 68 seeds several
+-- real flexllama alias rows on a virgin install (ingest/research-local/reason/
+-- critic), so the bulk switch touches those too — this block always ends by
+-- waking local back up, restoring them (and everything else) to enabled=true.
+DO $$
+DECLARE v_prov text; v_mod text; v_n int;
+BEGIN
+    -- alias 'toggletest': a local (lm_studio) priority-0 member + a cloud
+    -- (opencode_zen) priority-1 fallback. No model_capability row for either —
+    -- model_usable defaults true for an unrowed (provider, model), same
+    -- convention the OK 18/19 blocks above rely on.
+    INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority) VALUES
+      ('toggletest','lm_studio','tt-local',0),
+      ('toggletest','opencode_zen','tt-zen',1)
+      ON CONFLICT (alias, provider, provider_model) DO NOTHING;
+
+    -- both enabled by default (95's column default true) => priority-0 (local) wins
+    SELECT provider, model INTO v_prov, v_mod FROM stewards.pick_alias_member('toggletest');
+    ASSERT v_prov='lm_studio' AND v_mod='tt-local',
+      format('both members enabled => lowest priority (local) wins, got %s/%s', v_prov, v_mod);
+
+    -- per-member toggle round-trip: disable the local member directly (the
+    -- API's per-member toggle wraps exactly this UPDATE)
+    UPDATE stewards.model_aliases SET enabled=false WHERE alias='toggletest' AND provider='lm_studio';
+    ASSERT NOT (SELECT enabled FROM stewards.model_aliases WHERE alias='toggletest' AND provider='lm_studio'),
+      'enabled=false must persist the round-trip';
+
+    -- resolver skips the disabled priority-0 member, falls to the zen fallback
+    SELECT provider, model INTO v_prov, v_mod FROM stewards.pick_alias_member('toggletest');
+    ASSERT v_prov='opencode_zen' AND v_mod='tt-zen',
+      format('disabled member must be skipped, falls to zen, got %s/%s', v_prov, v_mod);
+
+    -- re-enable => preferred again
+    UPDATE stewards.model_aliases SET enabled=true WHERE alias='toggletest' AND provider='lm_studio';
+    SELECT provider INTO v_prov FROM stewards.pick_alias_member('toggletest');
+    ASSERT v_prov='lm_studio', format('re-enabled member must be preferred again, got %s', v_prov);
+
+    -- PROOF shape: rest ALL local models (the one-click UI action's SQL
+    -- primitive) must disable the lm_studio member but leave the opencode_zen
+    -- member untouched, and resolution must land on zen with no exclude needed.
+    v_n := stewards.model_aliases_set_local_enabled(false);
+    ASSERT v_n >= 1, format('model_aliases_set_local_enabled(false) must report >=1 row changed, got %s', v_n);
+    ASSERT NOT (SELECT enabled FROM stewards.model_aliases WHERE alias='toggletest' AND provider='lm_studio'),
+      'rest-all-local must disable the lm_studio member';
+    ASSERT (SELECT enabled FROM stewards.model_aliases WHERE alias='toggletest' AND provider='opencode_zen'),
+      'rest-all-local must NOT touch the opencode_zen (non-local) member';
+    SELECT provider, model INTO v_prov, v_mod FROM stewards.pick_alias_member('toggletest');
+    ASSERT v_prov='opencode_zen' AND v_mod='tt-zen',
+      format('after resting local, resolution must land on zen, got %s/%s', v_prov, v_mod);
+
+    -- the inverse: waking local back up restores it as the preferred member
+    v_n := stewards.model_aliases_set_local_enabled(true);
+    ASSERT v_n >= 1, 'model_aliases_set_local_enabled(true) must report >=1 row woken';
+    SELECT provider, model INTO v_prov, v_mod FROM stewards.pick_alias_member('toggletest');
+    ASSERT v_prov='lm_studio' AND v_mod='tt-local',
+      format('waking local back up must restore it as preferred, got %s/%s', v_prov, v_mod);
+
+    -- failover's exclude arg (32) still composes with the enabled filter
+    SELECT provider INTO v_prov FROM stewards.pick_alias_member('toggletest', false,
+      '[{"provider":"lm_studio","model":"tt-local"}]'::jsonb);
+    ASSERT v_prov='opencode_zen', format('exclude must still skip a tried member alongside enabled, got %s', v_prov);
+
+    -- provider_is_local classifies correctly
+    ASSERT stewards.provider_is_local('lm_studio') AND stewards.provider_is_local('flexllama'),
+      'provider_is_local must recognize both local providers';
+    ASSERT NOT stewards.provider_is_local('opencode_zen'), 'provider_is_local must not misclassify a cloud provider';
+
+    DELETE FROM stewards.model_aliases WHERE alias='toggletest';
+    RAISE NOTICE 'OK 95: model-role toggles — enabled round-trips + pick_alias_member skips a disabled member (composes with the failover exclude arg) + model_aliases_set_local_enabled rests/wakes local members only + provider_is_local classifies correctly';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→91) is sound =='

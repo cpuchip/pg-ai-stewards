@@ -72,6 +72,16 @@ const rolesFor = computed(() => {
 
 const presetHint = computed(() => presets[preset.value]?.hint ?? '')
 
+// 95: the strip's summary must name what pick_alias_member actually resolves
+// to — the first ENABLED member, not merely index 0 (a disabled priority-0
+// member, e.g. rested via the Roles panel below, must not still be shown as
+// "the" model for that role).
+function preferredMember(role: string): AliasRow | undefined {
+  const list = rolesFor.value[role]
+  if (!list?.length) return undefined
+  return list.find(m => m.enabled !== false) ?? list[0]
+}
+
 function modelHasRole(role: string, prov: string, model: string): boolean {
   return aliases.value.some(a => a.alias === role && a.provider === prov && a.model === model)
 }
@@ -258,7 +268,7 @@ onMounted(load)
       <span v-for="role in roleAliases" :key="role" class="role-chip">
         <span class="role-name">{{ role }}</span>
         <template v-if="rolesFor[role]?.length">
-          <code>{{ rolesFor[role]?.[0]?.provider }}/{{ rolesFor[role]?.[0]?.model }}</code>
+          <code>{{ preferredMember(role)?.provider }}/{{ preferredMember(role)?.model }}</code>
           <span v-if="(rolesFor[role]?.length ?? 0) > 1" class="role-more">+{{ (rolesFor[role]?.length ?? 0) - 1 }}</span>
         </template>
         <span v-else class="role-unset">unassigned</span>

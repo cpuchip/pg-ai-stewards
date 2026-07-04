@@ -48,6 +48,12 @@ func (d *Deps) registerCredentials(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/models/aliases", d.aliasSetHandler)
 	mux.HandleFunc("POST /api/models/aliases/delete", d.aliasDeleteHandler)
 	mux.HandleFunc("POST /api/models/probe", d.modelProbeHandler)
+	// 95 model-role toggles: per-member enable/disable + priority reorder +
+	// the "rest all local models" bulk switch (+ its inverse) — thin wrappers
+	// over the UPDATEs pick_alias_member (32/95) actually resolves against.
+	mux.HandleFunc("POST /api/models/aliases/enabled", d.aliasEnabledHandler)
+	mux.HandleFunc("POST /api/models/aliases/priority", d.aliasPriorityHandler)
+	mux.HandleFunc("POST /api/models/aliases/rest-local", d.aliasRestLocalHandler)
 }
 
 // ---------------------------------------------------------------------------
@@ -589,6 +595,90 @@ func (d *Deps) aliasDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"deleted": ct.RowsAffected() > 0})
+}
+
+// POST /api/models/aliases/enabled — the per-member toggle (95): flip a single
+// (alias, provider, model)'s enabled flag. pick_alias_member (95) is the one
+// resolver both dispatch (31) and runtime failover (32) share, so this is the
+// whole mechanism — no re-dispatch, no restart, just a click.
+func (d *Deps) aliasEnabledHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	var req struct {
+		Alias    string `json:"alias"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		Enabled  bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		req.Alias == "" || req.Provider == "" || req.Model == "" {
+		writeErr(w, http.StatusBadRequest, "alias, provider and model are required")
+		return
+	}
+	ct, err := d.Pool.Exec(ctx, `
+		UPDATE stewards.model_aliases
+		   SET enabled = $4
+		 WHERE alias = $1 AND provider = $2 AND provider_model = $3`,
+		req.Alias, req.Provider, req.Model, req.Enabled)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"updated": ct.RowsAffected() > 0})
+}
+
+// POST /api/models/aliases/priority — reorder one member within its role's
+// try-chain. A thin wrapper over the UPDATE; the UI's up/down arrows swap two
+// adjacent members' priorities with two calls.
+func (d *Deps) aliasPriorityHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	var req struct {
+		Alias    string `json:"alias"`
+		Provider string `json:"provider"`
+		Model    string `json:"model"`
+		Priority int    `json:"priority"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		req.Alias == "" || req.Provider == "" || req.Model == "" {
+		writeErr(w, http.StatusBadRequest, "alias, provider and model are required")
+		return
+	}
+	ct, err := d.Pool.Exec(ctx, `
+		UPDATE stewards.model_aliases
+		   SET priority = $4
+		 WHERE alias = $1 AND provider = $2 AND provider_model = $3`,
+		req.Alias, req.Provider, req.Model, req.Priority)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"updated": ct.RowsAffected() > 0})
+}
+
+// POST /api/models/aliases/rest-local — Michael's pain point named verbatim:
+// "I cant disable the local models we've enabled through lm studio or
+// flexllama." One click rests (enabled=false) or wakes (enabled=true) every
+// lm_studio/flexllama alias member across EVERY role at once —
+// model_aliases_set_local_enabled (95) is the whole mechanism; this is a thin
+// wrapper. Reversible (only flips a flag, never deletes), so no confirmation.
+func (d *Deps) aliasRestLocalHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, "bad json: "+err.Error())
+		return
+	}
+	var changed int
+	if err := d.Pool.QueryRow(ctx,
+		`SELECT stewards.model_aliases_set_local_enabled($1)`, req.Enabled).Scan(&changed); err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"changed": changed, "enabled": req.Enabled})
 }
 
 // POST /api/models/probe — fire the substrate's real-path streaming probe

@@ -985,6 +985,20 @@ extension_sql_file!(
     name = "create_core_compat",
     requires = ["create_harness_executor"],
 );
+
+// 95 — model-role toggles (2026-07-03 ux ease-of-life): a per-alias-member
+// `enabled` column, pick_alias_member re-authored (32's FINAL 3-arg form +
+// `AND a.enabled`) so both the dispatcher (31) and the runtime failover walk
+// (32) skip a disabled member through the one function they already share,
+// provider_is_local (mirrors activity.go's localProviders), and the
+// model_aliases_set_local_enabled bulk switch the cockpit's "rest all local
+// models" button (+ its inverse) wraps. Additive only — no re-author of
+// work_item_dispatch_stage or steward_tick themselves.
+extension_sql_file!(
+    "../95-model-role-toggles.sql",
+    name = "create_model_role_toggles",
+    requires = ["create_core_compat"],
+);
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
