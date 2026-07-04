@@ -95,6 +95,9 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
 # this addition on the same diff hunk. Merge/renumber at fleet integration.
 COPY 100-schedule-chat.sql ./
 
+# 101-lab-dispatch.sql (LAB RUNNER, 2026-07-04)
+COPY 101-lab-dispatch.sql ./
+
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
 # and generated .sql under the standard pg_config paths.

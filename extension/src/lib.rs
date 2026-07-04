@@ -1099,6 +1099,17 @@ extension_sql_file!(
     name = "create_schedule_chat",
     requires = ["create_route_intake"],
 );
+// 101 — LAB DISPATCH: the experiment runner 87 deferred. experiment_run
+// (variants × n as tagged work_items, one randomized interleave, {SUBJECT}
+// templating) + experiment_harvest (deterministic metric back-fill) +
+// experiment_report (per-variant honest numbers) + chat tools; arms
+// opposed-mandate-panels (decompose-fanout) and sonnet-raw-vs-claude-code
+// (research-summary vs harness-review) with real executors.
+extension_sql_file!(
+    "../101-lab-dispatch.sql",
+    name = "create_lab_dispatch",
+    requires = ["create_schedule_chat"],
+);
 // 99 — ROUTER (raw-to-wiki, .spec/proposals/ingestion-crawler-and-raw-to-wiki.md
 // Part 2): route_intake(kind, ref, instruction) -> a route-intake work_item
 // (classify -> match, LLM) -> route_intake_disposition (deterministic: a

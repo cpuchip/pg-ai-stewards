@@ -5125,4 +5125,76 @@ BEGIN
     RAISE NOTICE 'OK 99: route-intake (raw-to-wiki router) — scope_candidates FTS-matches a seeded project and honestly empties on no theme; route_intake creates + carries kind/ref/instruction onto a real route-intake work_item; the pipeline has exactly [classify, match] stages; disposition on a SEEDED matched scope files act-and-report (real wiki_organize_start/94 dispatch, no Hinge gate); a matched video dispatch degrades honestly (playlist_add/yt-overlay absent); disposition on NO MATCH lands a pending kind=new-scope Hinge row bound to hinge_escalate_always_kinds; Michael''s approval creates the wiki and REALLY dispatches via crawl_start (98 installed; the crawl work_item is created and cleaned); the world path creates the world AND its wiki face via world_to_wiki (97 installed), while a world-shaped file dispatch still honestly names the missing world-build SQL entry point';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→100) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 101 -- lab dispatch (101): experiment_run creates variants x n tagged
+-- work_items in one interleave ({SUBJECT} templated), harvest fills
+-- deterministic metrics once terminal, report aggregates per-variant.
+-- Uses a throwaway experiment on the echo-test pipeline so no LLM runs.
+-- ---------------------------------------------------------------------
+DO $vs101$
+DECLARE
+    v_rows  int;
+    v_wi    uuid;
+    v_rep   jsonb;
+BEGIN
+    ASSERT to_regprocedure('stewards.experiment_run(text,jsonb)') IS NOT NULL,
+        '101: experiment_run(text,jsonb) must exist';
+    ASSERT to_regprocedure('stewards.experiment_harvest(text)') IS NOT NULL,
+        '101: experiment_harvest(text) must exist';
+    ASSERT to_regprocedure('stewards.experiment_report(text)') IS NOT NULL,
+        '101: experiment_report(text) must exist';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_defs WHERE name = 'experiment_run' AND active),
+        '101: experiment_run tool_def must be active';
+    ASSERT EXISTS (SELECT 1 FROM stewards.agent_tool_perms
+                    WHERE agent_family = 'work-item-chat' AND tool_pattern = 'experiment_report'),
+        '101: work-item-chat must be granted experiment_report';
+
+    -- the two armed experiments carry real executors now
+    ASSERT (SELECT dispatch->>'pipeline_family' FROM stewards.experiments
+             WHERE name = 'opposed-mandate-panels') = 'decompose-fanout',
+        '101: opposed-mandate-panels must dispatch on decompose-fanout';
+    ASSERT (SELECT count(*) FROM stewards.experiments e, jsonb_array_elements(e.variants) v
+             WHERE e.name = 'sonnet-raw-vs-claude-code' AND v ? 'pipeline_family') = 2,
+        '101: both sonnet-raw-vs-claude-code variants must name their pipeline_family';
+
+    -- live-fire the runner on a throwaway 2-variant echo experiment
+    INSERT INTO stewards.experiments (name, hypothesis, variants, n_per_variant, metrics, dispatch)
+    VALUES ('vs101-throwaway', 'runner smoke', 
+            '[{"variant":"a","input":{"note":"{SUBJECT}-a"}},{"variant":"b","input":{"note":"{SUBJECT}-b"}}]'::jsonb,
+            2, '["duration_s"]'::jsonb, '{"pipeline_family":"echo-test"}'::jsonb);
+
+    SELECT count(*) INTO v_rows FROM stewards.experiment_run('vs101-throwaway', '{"subject":"vs101"}'::jsonb);
+    ASSERT v_rows = 4, format('101: 2 variants x n=2 must dispatch 4 trials, got %s', v_rows);
+    ASSERT (SELECT count(*) FROM stewards.experiment_runs r
+             JOIN stewards.experiments e ON e.id = r.experiment_id
+            WHERE e.name = 'vs101-throwaway' AND r.work_item_id IS NOT NULL) = 4,
+        '101: every trial must carry a real work_item';
+    SELECT r.work_item_id INTO v_wi FROM stewards.experiment_runs r
+      JOIN stewards.experiments e ON e.id = r.experiment_id
+     WHERE e.name = 'vs101-throwaway' LIMIT 1;
+    ASSERT (SELECT input->>'_variant' FROM stewards.work_items WHERE id = v_wi) IN ('a','b'),
+        '101: work_item input must carry the _variant tag';
+    ASSERT (SELECT input->>'note' FROM stewards.work_items WHERE id = v_wi) IN ('vs101-a','vs101-b'),
+        '101: {SUBJECT} templating must substitute into variant input strings';
+
+    -- force one run terminal and harvest it (no LLM on a virgin boot)
+    UPDATE stewards.work_items SET status = 'cancelled', updated_at = now()
+     WHERE id IN (SELECT r.work_item_id FROM stewards.experiment_runs r
+                    JOIN stewards.experiments e ON e.id = r.experiment_id
+                   WHERE e.name = 'vs101-throwaway');
+    ASSERT stewards.experiment_harvest('vs101-throwaway') = 4,
+        '101: harvest must fill all 4 now-terminal runs';
+    v_rep := stewards.experiment_report('vs101-throwaway');
+    ASSERT jsonb_array_length(v_rep->'variants') = 2,
+        '101: report must aggregate both variants';
+    ASSERT (v_rep->'variants'->0->>'n_terminal')::int = 2,
+        '101: each variant must show 2 terminal runs';
+
+    -- clean up (experiment_runs cascade; work_items go explicitly)
+    DELETE FROM stewards.work_items WHERE input->>'_experiment' = 'vs101-throwaway';
+    DELETE FROM stewards.experiments WHERE name = 'vs101-throwaway';
+    RAISE NOTICE 'OK 101: lab dispatch -- runner (4 tagged trials, {SUBJECT} templating), deterministic harvest, per-variant report; the two #322 experiments are armed with real executors';
+END
+$vs101$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→101) is sound =='
