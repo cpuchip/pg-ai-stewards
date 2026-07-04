@@ -1917,8 +1917,8 @@ export type GlobalSearchResp = {
 // search result row. Thin wrappers over WIKI-CORE's (extension/92)
 // wiki_create/wiki_add_member/wiki_page_upsert — see cmd/stewards-ui/api/
 // wiki.go's file-header INTEGRATION NOTE for what's still unverified.
-export type WikiBrief = { slug: string; title?: string; kind?: string }
-export type WikiListResp = { items: WikiBrief[]; note?: string }
+export type WikiCollectBrief = { slug: string; title?: string; kind?: string }
+export type WikiListResp = { items: WikiCollectBrief[]; note?: string }
 export type WikiAddReq = {
   wiki_slug?: string
   new_wiki?: { slug: string; title: string; kind?: string; scope?: string }

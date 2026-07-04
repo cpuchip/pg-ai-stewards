@@ -8,7 +8,7 @@
 // Part 2) — see wiki.go's INTEGRATION NOTE for what's unverified there.
 import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { searchApi, wikiApi, type GlobalSearchResp, type GlobalSearchHit, type WikiBrief } from '@/api'
+import { searchApi, wikiApi, type GlobalSearchResp, type GlobalSearchHit, type WikiCollectBrief } from '@/api'
 import { searchFocusRequest } from '@/searchShortcut'
 
 const route = useRoute()
@@ -74,7 +74,7 @@ function openResult(h: GlobalSearchHit) {
 
 // "+ wiki" popover — one open at a time, keyed by result slug.
 const wikiMenuFor = ref<string | null>(null)
-const wikiList = ref<WikiBrief[]>([])
+const wikiList = ref<WikiCollectBrief[]>([])
 const wikiListNote = ref('')
 const wikiListLoading = ref(false)
 const newWikiTitle = ref('')
@@ -107,7 +107,7 @@ function slugify(s: string): string {
   return s.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'wiki'
 }
 
-async function addToExisting(h: GlobalSearchHit, wiki: WikiBrief) {
+async function addToExisting(h: GlobalSearchHit, wiki: WikiCollectBrief) {
   wikiBusy.value = h.slug
   try {
     await wikiApi.add({
