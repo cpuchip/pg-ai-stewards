@@ -1081,6 +1081,12 @@ BEGIN
                 NEW.id, v_spawn_n;
         EXCEPTION WHEN OTHERS THEN
             RAISE NOTICE 'on_maturity_verified: spawn_children failed: %', SQLERRM;
+            -- A fan-out parent that completes with 0 children LOOKS fine in every
+            -- list view (the lying-completed shape, 3rd sighting 2026-07-04).
+            -- Leave a visible trace on the row even though completion proceeds.
+            UPDATE stewards.work_items
+               SET last_failure_reason = 'spawn_children failed (completed WITHOUT fan-out): ' || SQLERRM
+             WHERE id = NEW.id;
         END;
     END IF;
 

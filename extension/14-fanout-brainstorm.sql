@@ -795,11 +795,13 @@ BEGIN
     IF jsonb_typeof(v_manifest) = 'string' THEN
         v_manifest_raw := v_manifest #>> '{}';
         -- Models fence JSON despite every "no fences" instruction (gemini,
-        -- 2026-07-04). Tolerate a ```json ... ``` wrapper; the content is the
-        -- contract, not the wrapping.
+        -- 2026-07-04) and prefix prose before the fence (flash, same day).
+        -- The content is the contract, not the wrapping: strip fences, then
+        -- take the outermost {...} block (first brace to last, dotall).
         v_manifest_raw := regexp_replace(
                               regexp_replace(btrim(v_manifest_raw), '^```[a-zA-Z]*\s*', ''),
                               '\s*```\s*$', '');
+        v_manifest_raw := coalesce((regexp_match(v_manifest_raw, '\{.*\}'))[1], v_manifest_raw);
         BEGIN
             v_manifest := v_manifest_raw::jsonb;
         EXCEPTION WHEN OTHERS THEN
@@ -834,6 +836,14 @@ BEGIN
         IF (v_child -> 'input_extra') IS NOT NULL
            AND jsonb_typeof(v_child -> 'input_extra') = 'object' THEN
             v_child_input := v_child_input || (v_child -> 'input_extra');
+        END IF;
+
+        -- work_items.slug is GLOBALLY unique and manifests deterministically
+        -- reuse child names across reruns of the same subject (reviewer-1-prove
+        -- collided with a prior round's corpse, 2026-07-04). De-collide with a
+        -- parent-id suffix instead of failing the whole spawn.
+        IF EXISTS (SELECT 1 FROM stewards.work_items WHERE slug = v_child_slug) THEN
+            v_child_slug := v_child_slug || '-' || substr(p_parent_id::text, 1, 8);
         END IF;
 
         v_child_id := stewards.work_item_create(
