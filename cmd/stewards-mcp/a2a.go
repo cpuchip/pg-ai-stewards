@@ -170,6 +170,16 @@ func registerA2ATools(srv *mcp.Server, pool *pgxpool.Pool) {
 		return res, out, nil
 	})
 
+	registerA2ANoteTools(srv, pool)
+}
+
+// registerA2ANoteTools wires up JUST a2a_note / a2a_note_clear — the
+// "leave a note" half of the engine, split out from registerA2ATools (90:
+// harness write-back) so a narrow surface (like the harness's Arc C HTTP
+// hinge) can carry notes WITHOUT a2a_submit/a2a_claim/a2a_receipt/etc. The
+// full stdio surface still gets everything: registerA2ATools calls this too,
+// so behavior there is unchanged.
+func registerA2ANoteTools(srv *mcp.Server, pool *pgxpool.Pool) {
 	// ── a2a_note ──────────────────────────────────────────────────────
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "a2a_note",
@@ -186,7 +196,7 @@ func registerA2ATools(srv *mcp.Server, pool *pgxpool.Pool) {
 
 	// ── a2a_note_clear ────────────────────────────────────────────────
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "a2a_note_clear",
+		Name:        "a2a_note_clear",
 		Description: "Mark your notes acted (clears the 📬). Omit note_id to clear all unacted notes after you've acted on your inbox.",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in A2ANoteClearInput) (*mcp.CallToolResult, A2AResult, error) {
 		if in.NoteID > 0 {
