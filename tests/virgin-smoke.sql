@@ -4760,4 +4760,14 @@ BEGIN
     RAISE NOTICE 'OK recall (93): last_used_at/use_count on docs+engram_embeddings; recall_boost neutral-for-new(=%)/boost-for-frequent(=%)/floors-not-zeroes(=%); a used row outranks an identical unused row; config knobs (recall.freq_weight/recall.recency_weight) demonstrably change ranking; doc_search_recall bump round-trip works and doc_search_hybrid stays pure (inverse hypothesis); doc_search_tool routes through doc_search_recall', v_neutral, v_freq, v_old;
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→95) is sound =='
+-- 96: wiki assets — the serve/markdown/caption surface over 92's wiki_assets.
+DO $$
+BEGIN
+    ASSERT to_regprocedure('stewards.wiki_asset_serve_url(bigint)') IS NOT NULL, '96: wiki_asset_serve_url missing';
+    ASSERT to_regprocedure('stewards.wiki_asset_markdown(bigint)') IS NOT NULL, '96: wiki_asset_markdown missing';
+    ASSERT to_regprocedure('stewards.wiki_asset_caption_enqueue(bigint)') IS NOT NULL, '96: caption_enqueue missing';
+    ASSERT to_regprocedure('stewards.wiki_asset_caption_collect(bigint)') IS NOT NULL, '96: caption_collect missing';
+    RAISE NOTICE 'OK 96: wiki assets — serve-url/markdown/caption enqueue+collect functions present over 92''s wiki_assets (extraction itself is bridge-side; real proof = the Cosmere rulebook backfill, 40/40)';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→96) is sound =='
