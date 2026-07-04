@@ -26,6 +26,19 @@ type fetchConfig struct {
 	HTTPClient *http.Client
 	UserAgent  string
 	MaxBytes   int64
+	// Gate is the politeness floor (robots.txt + per-domain rate limit),
+	// engaged per call via enforce_robots — see politeness.go.
+	Gate *politeGate
+}
+
+// politeGateCheck runs the politeness floor when a tool call asked for it.
+// Returns nil when the fetch may proceed (including when enforcement is
+// off — the default, so existing interactive callers are unchanged).
+func politeGateCheck(ctx context.Context, cfg *fetchConfig, target string, enforce bool, rateMS int) error {
+	if !enforce || cfg.Gate == nil {
+		return nil
+	}
+	return cfg.Gate.Check(ctx, target, rateMS)
 }
 
 func registerFetchTools(srv *mcp.Server, cfg *fetchConfig) {
@@ -78,6 +91,11 @@ type fetchURLInput struct {
 	MaxChars int    `json:"max_chars,omitempty" jsonschema:"Truncate markdown to this many characters (0 = no truncation)"`
 	JS       bool   `json:"js,omitempty" jsonschema:"Render JavaScript via headless Chromium (slower; needed for SPAs and JS-required pages)"`
 	WaitMS   int    `json:"wait_ms,omitempty" jsonschema:"Post-load settle delay in ms when js=true (default 500)"`
+	// Politeness floor (98-crawler). Default false so interactive
+	// single-page callers keep today's behavior; the purpose-crawler
+	// ALWAYS sets true.
+	EnforceRobots bool `json:"enforce_robots,omitempty" jsonschema:"Honor robots.txt and the per-domain rate limit (crawl mode). Disallowed URLs return a structured error."`
+	RateMS        int  `json:"rate_ms,omitempty" jsonschema:"Per-domain min interval in ms between fetches when enforce_robots=true (default 2000; structural floor 500)"`
 }
 
 type fetchURLOutput struct {
@@ -109,6 +127,9 @@ func makeFetchURL(cfg *fetchConfig) func(context.Context, *mcp.CallToolRequest, 
 		if strings.TrimSpace(in.URL) == "" {
 			return toolError("url is required"), fetchURLOutput{}, nil
 		}
+		if perr := politeGateCheck(ctx, cfg, in.URL, in.EnforceRobots, in.RateMS); perr != nil {
+			return toolError("%v", perr), fetchURLOutput{}, nil
+		}
 		var (
 			bodyStr  string
 			finalURL string
@@ -117,7 +138,7 @@ func makeFetchURL(cfg *fetchConfig) func(context.Context, *mcp.CallToolRequest, 
 		if in.JS {
 			bodyStr, finalURL, err = fetchURLJS(ctx, cfg, in.URL, in.WaitMS)
 		} else {
-			b, fu, e := httpGet(ctx, cfg, in.URL)
+			b, fu, e := httpGet(ctx, cfg, in.URL, in.EnforceRobots)
 			// ES.5.s2: a non-HTML document (PDF, docx, …) gets extracted
 			// to markdown via tabula instead of mangled through the HTML
 			// readability path.
@@ -220,6 +241,10 @@ type fetchURLsInput struct {
 	MaxChars int      `json:"max_chars,omitempty" jsonschema:"Truncate each markdown body to this many characters (0 = no truncation)"`
 	JS       bool     `json:"js,omitempty" jsonschema:"Render JavaScript via headless Chromium for each URL (slower)"`
 	WaitMS   int      `json:"wait_ms,omitempty" jsonschema:"Post-load settle delay in ms when js=true (default 500)"`
+	// Politeness floor (98-crawler): see fetchURLInput. Same-host URLs
+	// in one batch serialize under the per-domain rate limit.
+	EnforceRobots bool `json:"enforce_robots,omitempty" jsonschema:"Honor robots.txt and the per-domain rate limit for every URL in the batch (crawl mode)"`
+	RateMS        int  `json:"rate_ms,omitempty" jsonschema:"Per-domain min interval in ms between fetches when enforce_robots=true (default 2000; structural floor 500)"`
 }
 
 type fetchURLsOutput struct {
@@ -255,6 +280,10 @@ func makeFetchURLs(cfg *fetchConfig) func(context.Context, *mcp.CallToolRequest,
 				sem <- struct{}{}
 				defer func() { <-sem }()
 
+				if perr := politeGateCheck(ctx, cfg, target, in.EnforceRobots, in.RateMS); perr != nil {
+					results[idx] = fetchURLsOneResult{URL: target, Error: perr.Error()}
+					return
+				}
 				var (
 					bodyStr  string
 					finalURL string
@@ -263,7 +292,7 @@ func makeFetchURLs(cfg *fetchConfig) func(context.Context, *mcp.CallToolRequest,
 				if in.JS {
 					bodyStr, finalURL, err = fetchURLJS(ctx, cfg, target, in.WaitMS)
 				} else {
-					b, fu, e := httpGet(ctx, cfg, target)
+					b, fu, e := httpGet(ctx, cfg, target, in.EnforceRobots)
 					// ES.5.s2: extract non-HTML documents via tabula.
 					if e == nil {
 						if md, isDoc, derr := extractIfDocument(b, fu); isDoc {
@@ -325,6 +354,9 @@ type extractLinksInput struct {
 	URL    string `json:"url" jsonschema:"URL whose links you want to enumerate"`
 	JS     bool   `json:"js,omitempty" jsonschema:"Render JavaScript via headless Chromium before extracting links (slower; needed for SPAs)"`
 	WaitMS int    `json:"wait_ms,omitempty" jsonschema:"Post-load settle delay in ms when js=true (default 500)"`
+	// Politeness floor (98-crawler): see fetchURLInput.
+	EnforceRobots bool `json:"enforce_robots,omitempty" jsonschema:"Honor robots.txt and the per-domain rate limit (crawl mode)"`
+	RateMS        int  `json:"rate_ms,omitempty" jsonschema:"Per-domain min interval in ms between fetches when enforce_robots=true (default 2000; structural floor 500)"`
 }
 
 type extractLinksOutput struct {
@@ -371,6 +403,9 @@ func makeExtractLinks(cfg *fetchConfig) func(context.Context, *mcp.CallToolReque
 		if strings.TrimSpace(in.URL) == "" {
 			return toolError("url is required"), extractLinksOutput{}, nil
 		}
+		if perr := politeGateCheck(ctx, cfg, in.URL, in.EnforceRobots, in.RateMS); perr != nil {
+			return toolError("%v", perr), extractLinksOutput{}, nil
+		}
 		var (
 			bodyStr  string
 			finalURL string
@@ -379,7 +414,7 @@ func makeExtractLinks(cfg *fetchConfig) func(context.Context, *mcp.CallToolReque
 		if in.JS {
 			bodyStr, finalURL, err = fetchURLJS(ctx, cfg, in.URL, in.WaitMS)
 		} else {
-			b, fu, e := httpGet(ctx, cfg, in.URL)
+			b, fu, e := httpGet(ctx, cfg, in.URL, in.EnforceRobots)
 			bodyStr, finalURL, err = string(b), fu, e
 		}
 		if err != nil {
@@ -497,6 +532,9 @@ type fetchURLRawInput struct {
 	MaxChars int    `json:"max_chars,omitempty" jsonschema:"Truncate raw HTML to this many characters (0 = no truncation)"`
 	JS       bool   `json:"js,omitempty" jsonschema:"Render JavaScript via headless Chromium and return the post-render HTML"`
 	WaitMS   int    `json:"wait_ms,omitempty" jsonschema:"Post-load settle delay in ms when js=true (default 500)"`
+	// Politeness floor (98-crawler): see fetchURLInput.
+	EnforceRobots bool `json:"enforce_robots,omitempty" jsonschema:"Honor robots.txt and the per-domain rate limit (crawl mode)"`
+	RateMS        int  `json:"rate_ms,omitempty" jsonschema:"Per-domain min interval in ms between fetches when enforce_robots=true (default 2000; structural floor 500)"`
 }
 
 type fetchURLRawOutput struct {
@@ -512,6 +550,9 @@ func makeFetchURLRaw(cfg *fetchConfig) func(context.Context, *mcp.CallToolReques
 		if strings.TrimSpace(in.URL) == "" {
 			return toolError("url is required"), fetchURLRawOutput{}, nil
 		}
+		if perr := politeGateCheck(ctx, cfg, in.URL, in.EnforceRobots, in.RateMS); perr != nil {
+			return toolError("%v", perr), fetchURLRawOutput{}, nil
+		}
 		var (
 			raw        string
 			finalURL   string
@@ -522,7 +563,7 @@ func makeFetchURLRaw(cfg *fetchConfig) func(context.Context, *mcp.CallToolReques
 			raw, finalURL, err = fetchURLJS(ctx, cfg, in.URL, in.WaitMS)
 			statusCode = 200 // chromedp doesn't surface HTTP status
 		} else {
-			b, fu, sc, e := httpGetWithStatus(ctx, cfg, in.URL)
+			b, fu, sc, e := httpGetWithStatus(ctx, cfg, in.URL, in.EnforceRobots)
 			raw, finalURL, statusCode, err = string(b), fu, sc, e
 		}
 		if err != nil {
@@ -547,12 +588,12 @@ func makeFetchURLRaw(cfg *fetchConfig) func(context.Context, *mcp.CallToolReques
 // helpers
 // ---------------------------------------------------------------------
 
-func httpGet(ctx context.Context, cfg *fetchConfig, target string) ([]byte, string, error) {
-	body, finalURL, _, err := httpGetWithStatus(ctx, cfg, target)
+func httpGet(ctx context.Context, cfg *fetchConfig, target string, enforce bool) ([]byte, string, error) {
+	body, finalURL, _, err := httpGetWithStatus(ctx, cfg, target, enforce)
 	return body, finalURL, err
 }
 
-func httpGetWithStatus(ctx context.Context, cfg *fetchConfig, target string) ([]byte, string, int, error) {
+func httpGetWithStatus(ctx context.Context, cfg *fetchConfig, target string, enforce bool) ([]byte, string, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
 		return nil, target, 0, err
@@ -563,7 +604,16 @@ func httpGetWithStatus(ctx context.Context, cfg *fetchConfig, target string) ([]
 	// here because the readability path handles HTML uniformly.
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
 
-	resp, err := cfg.HTTPClient.Do(req)
+	// In enforce mode, robots is re-checked on every redirect hop — a
+	// permitted URL must not smuggle the crawler onto a disallowed one.
+	client := cfg.HTTPClient
+	if enforce && cfg.Gate != nil {
+		polite := *cfg.HTTPClient
+		polite.CheckRedirect = cfg.Gate.politeCheckRedirect
+		client = &polite
+	}
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, target, 0, err
 	}

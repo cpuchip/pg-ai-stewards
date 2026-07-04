@@ -1069,6 +1069,25 @@ extension_sql_file!(
     name = "create_wiki_assets",
     requires = ["create_model_role_toggles"],
 );
+
+// 98 — the purpose-crawler (ingestion fleet, 2026-07-03; spec
+// .spec/proposals/ingestion-crawler-and-raw-to-wiki.md Part 1): the
+// LLM-driven, guardrailed crawl. crawl_frontier (queue-as-rows, resumable),
+// crawl_start/crawl_next/crawl_save/crawl_enqueue (model proposes, SQL
+// disposes — page/byte/depth budgets + domain wall + dedup are a structural
+// floor the model can only stay under), the single-stage 'crawl' pipeline
+// looping via route_on (42), the 'crawler' agent family (exactly five
+// tools), and crawl_status written into stage_results.crawl_status so the
+// existing work-item card is the UI. The politeness half (robots.txt +
+// per-domain rate floor) lives in cmd/fetch-md-mcp/politeness.go behind the
+// enforce_robots param. requires create_wiki_assets (96) — the tail of the
+// chain in THIS worktree; a parallel builder owns 97, and the integrator
+// re-stitches this to require 97's registered name when both land.
+extension_sql_file!(
+    "../98-crawler.sql",
+    name = "create_crawler",
+    requires = ["create_wiki_assets"],
+);
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
