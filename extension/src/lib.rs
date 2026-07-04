@@ -1069,6 +1069,26 @@ extension_sql_file!(
     name = "create_wiki_assets",
     requires = ["create_model_role_toggles"],
 );
+
+// 99 — ROUTER (raw-to-wiki, .spec/proposals/ingestion-crawler-and-raw-to-wiki.md
+// Part 2): route_intake(kind, ref, instruction) -> a route-intake work_item
+// (classify -> match, LLM) -> route_intake_disposition (deterministic: a
+// matched scope files immediately; an unmatched one parks a mountain-tier
+// kind=new-scope Hinge review) -> route_intake_dispatch (deterministic:
+// url->crawl_start/98, video->playlist_add/examples overlay, file/text->
+// wiki_organize_start/94 — all guarded, all degrade honestly when the
+// sibling isn't installed). Also ships scope_candidates (a cheap FTS scope
+// search over worlds/wikis/projects) + its tool wrapper. Sibling fleet
+// builders BRIDGE (97, world_to_wiki) and CRAWLER (98, crawl_start) are NOT
+// present in this worktree — every call into them is to_regprocedure-
+// guarded, same discipline as WIKI-GRAPH's to_regclass guard
+// (cmd/stewards-ui/api/wiki.go). requires create_wiki_assets (96) — the true
+// tail of the chain as merged.
+extension_sql_file!(
+    "../99-route-intake.sql",
+    name = "create_route_intake",
+    requires = ["create_wiki_assets"],
+);
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

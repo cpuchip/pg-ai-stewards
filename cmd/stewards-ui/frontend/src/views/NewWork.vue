@@ -5,6 +5,68 @@ import { api, type ProviderRow, type IntentRow, type PipelineRow } from '@/api'
 
 const router = useRouter()
 
+// 99: raw-to-wiki quick-drop — push a video/website/file/text at the
+// substrate and let it auto-sort into the right world/wiki/project (or
+// propose a new one). Thin wrapper over POST /api/intake
+// (stewards.route_intake). File drops reuse the existing chat-attach
+// upload path, then pass the returned attachment id as ref.
+const dropKind = ref<'url' | 'file' | 'video' | 'text'>('url')
+const dropRef = ref('')
+const dropFile = ref<File | null>(null)
+const dropInstruction = ref('')
+const dropSubmitting = ref(false)
+const dropError = ref('')
+const dropResult = ref<{ id: string } | null>(null)
+
+function onDropFileChange(e: Event) {
+  const input = e.target as HTMLInputElement
+  dropFile.value = input.files?.item(0) ?? null
+}
+
+const dropCanSubmit = computed(() => {
+  if (dropKind.value === 'file') return dropFile.value !== null
+  return dropRef.value.trim().length > 0
+})
+
+const dropRefPlaceholder = computed(() => {
+  switch (dropKind.value) {
+    case 'video': return 'https://www.youtube.com/watch?v=…'
+    case 'text':  return 'an existing doc slug'
+    default:      return 'https://…'
+  }
+})
+
+async function submitDrop() {
+  dropSubmitting.value = true
+  dropError.value = ''
+  dropResult.value = null
+  try {
+    let ref = dropRef.value.trim()
+    if (dropKind.value === 'file') {
+      if (!dropFile.value) throw new Error('choose a file first')
+      const uploaded = await api.chatAttach(dropFile.value, {})
+      ref = String(uploaded.id)
+    }
+    const r = await api.intake({
+      kind: dropKind.value,
+      ref,
+      instruction: dropInstruction.value.trim() || undefined,
+    })
+    dropResult.value = { id: r.work_item_id }
+    dropRef.value = ''
+    dropFile.value = null
+    dropInstruction.value = ''
+  } catch (e) {
+    dropError.value = String(e)
+  } finally {
+    dropSubmitting.value = false
+  }
+}
+
+function goToDropWorkItem() {
+  if (dropResult.value) router.push(`/work-items/${dropResult.value.id}`)
+}
+
 const pipeline = ref('study-write')
 const pipelines = ref<PipelineRow[]>([])
 const pipelinesError = ref('')
@@ -257,6 +319,94 @@ function goToWorkItem() {
       <code class="font-mono text-zinc-300">stewards-cli work-item create</code>
       does.
     </p>
+
+    <!-- 99: raw-to-wiki quick-drop -->
+    <form
+      class="rounded-md border border-zinc-800 bg-zinc-900/30 p-4 space-y-3"
+      @submit.prevent="submitDrop"
+    >
+      <div>
+        <h3 class="text-sm font-medium text-zinc-200">Drop something</h3>
+        <p class="text-xs text-zinc-500 mt-0.5">
+          Push over a video, a website, a file, or a piece of text — it gets classified and
+          auto-sorted into the right world/wiki/project (or a new one is proposed for approval).
+        </p>
+      </div>
+
+      <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <label
+          v-for="opt in (['url','video','file','text'] as const)"
+          :key="opt"
+          class="flex items-center gap-2 text-sm text-zinc-300 cursor-pointer px-2 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800"
+          :class="dropKind === opt ? 'border-emerald-600 bg-emerald-950/30' : ''"
+        >
+          <input v-model="dropKind" type="radio" :value="opt" class="accent-emerald-500" />
+          <span class="capitalize">{{ opt }}</span>
+        </label>
+      </div>
+
+      <div v-if="dropKind === 'file'">
+        <label class="block text-xs uppercase tracking-wide text-zinc-500 mb-1">File</label>
+        <input
+          type="file"
+          class="w-full text-sm text-zinc-300 file:mr-3 file:px-3 file:py-1.5 file:rounded file:border file:border-zinc-700 file:bg-zinc-800 file:text-zinc-200 file:text-xs"
+          @change="onDropFileChange"
+        />
+      </div>
+      <div v-else>
+        <label class="block text-xs uppercase tracking-wide text-zinc-500 mb-1">
+          {{ dropKind === 'text' ? 'Doc slug' : 'URL' }}
+        </label>
+        <input
+          v-model="dropRef"
+          type="text"
+          :placeholder="dropRefPlaceholder"
+          class="w-full px-3 py-2 rounded border border-zinc-700 bg-zinc-950 text-sm font-mono focus:border-zinc-500 focus:outline-none"
+        />
+      </div>
+
+      <div>
+        <label class="block text-xs uppercase tracking-wide text-zinc-500 mb-1">
+          Instructions (optional)
+        </label>
+        <textarea
+          v-model="dropInstruction"
+          rows="2"
+          placeholder="e.g. this is an AI video — review it for new information that can benefit us and file those things away"
+          class="w-full px-3 py-2 rounded border border-zinc-700 bg-zinc-950 text-sm focus:border-zinc-500 focus:outline-none resize-y"
+        ></textarea>
+        <p class="text-xs text-zinc-500 mt-1">
+          Left blank, it auto-classifies and auto-files (auto-magic). Given, it becomes the
+          extraction purpose.
+        </p>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <button
+          type="submit"
+          :disabled="dropSubmitting || !dropCanSubmit"
+          class="px-4 py-2 rounded bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {{ dropSubmitting ? 'dropping…' : 'Drop it' }}
+        </button>
+        <span v-if="dropError" class="text-sm text-red-400">{{ dropError }}</span>
+      </div>
+
+      <div
+        v-if="dropResult"
+        class="rounded-md border border-emerald-900/40 bg-emerald-950/20 p-3 space-y-1"
+      >
+        <div class="text-sm text-emerald-300">✓ dropped — routing it now</div>
+        <div class="text-xs font-mono text-zinc-400">id: {{ dropResult.id }}</div>
+        <button
+          type="button"
+          class="text-xs px-3 py-1 rounded border border-emerald-700 hover:bg-emerald-900/30 text-emerald-200"
+          @click="goToDropWorkItem"
+        >
+          open detail →
+        </button>
+      </div>
+    </form>
 
     <form class="space-y-4" @submit.prevent="submit">
       <div>

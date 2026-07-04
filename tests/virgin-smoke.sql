@@ -4770,4 +4770,207 @@ BEGIN
     RAISE NOTICE 'OK 96: wiki assets — serve-url/markdown/caption enqueue+collect functions present over 92''s wiki_assets (extraction itself is bridge-side; real proof = the Cosmere rulebook backfill, 40/40)';
 END $$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→96) is sound =='
+-- 99: route-intake (the raw-to-wiki router). Real route_intake() call for
+-- the entry point + pipeline shape; disposition/dispatch exercised directly
+-- against SEEDED stage_results (94's verify pattern — no live LLM/model
+-- needed). BRIDGE (97, world_to_wiki) and CRAWLER (98, crawl_start) are NOT
+-- in this chain, so their guards are provably exercised (to_regprocedure
+-- IS NULL) rather than assumed; the yt overlay (playlist_add, examples/) is
+-- absent for the same reason.
+DO $$
+DECLARE
+    v_wi_id          uuid;
+    v_input          jsonb;
+    v_stages         jsonb;
+    v_stage_names    text[];
+    v_wiki_id        uuid;
+    v_matched_wi     uuid;
+    v_disp_result    jsonb;
+    v_wo_wi_exists   boolean;
+    v_video_wi       uuid;
+    v_video_result   jsonb;
+    v_unmatched_wi   uuid;
+    v_prop_result    jsonb;
+    v_hid            bigint;
+    v_hstatus        text;
+    v_wikis_created  int;
+    v_world_wi       uuid;
+    v_world_hid      bigint;
+    v_world_result   jsonb;
+    v_theme_hits     int;
+    v_notheme_hits   int;
+BEGIN
+    -- ---- §1: scope_candidates — FTS-ranked, honest-empty on no match ----
+    INSERT INTO stewards.projects (slug, name, description) VALUES
+        ('vs99-xylophone-project', 'VS99 Xylophone Project', 'a route-intake probe project about xylophonevs99marker instruments')
+    ON CONFLICT (slug) DO UPDATE SET description = EXCLUDED.description;
+
+    SELECT count(*) INTO v_theme_hits
+      FROM stewards.scope_candidates('xylophonevs99marker instruments', 5)
+     WHERE slug = 'vs99-xylophone-project' AND kind = 'project';
+    ASSERT v_theme_hits = 1,
+        '99: scope_candidates must find the seeded project by its theme words';
+
+    SELECT count(*) INTO v_notheme_hits FROM stewards.scope_candidates('zzz-no-such-theme-anywhere-vs99', 5);
+    ASSERT v_notheme_hits = 0,
+        '99: scope_candidates must return an HONEST EMPTY set when nothing matches, not a guess';
+
+    -- ---- §2: route_intake() creates + dispatches a real work_item ----
+    v_wi_id := stewards.route_intake('text', 'vs99-some-doc-slug', 'a test instruction');
+    SELECT input INTO v_input FROM stewards.work_items WHERE id = v_wi_id;
+    ASSERT (SELECT pipeline_family FROM stewards.work_items WHERE id = v_wi_id) = 'route-intake',
+        '99: route_intake must create a work_item on the route-intake pipeline';
+    ASSERT v_input ->> 'kind' = 'text' AND v_input ->> 'ref' = 'vs99-some-doc-slug'
+           AND v_input ->> 'instruction' = 'a test instruction',
+        format('99: route_intake must carry kind/ref/instruction onto the work_item input, got %s', v_input);
+
+    -- ---- §3: classify/match stage defs exist on the pipeline ----
+    SELECT stages INTO v_stages FROM stewards.pipelines WHERE family = 'route-intake';
+    ASSERT v_stages IS NOT NULL, '99: route-intake pipeline must exist';
+    SELECT array_agg(s ->> 'name') INTO v_stage_names FROM jsonb_array_elements(v_stages) s;
+    ASSERT v_stage_names = ARRAY['classify','match'],
+        format('99: route-intake pipeline must have exactly stages [classify, match], got %s', v_stage_names);
+    ASSERT to_regprocedure('stewards.route_intake(text,text,text)') IS NOT NULL, '99: route_intake missing';
+    ASSERT to_regprocedure('stewards.route_intake_disposition(uuid)') IS NOT NULL, '99: route_intake_disposition missing';
+    ASSERT to_regprocedure('stewards.route_intake_dispatch(uuid,jsonb,text)') IS NOT NULL, '99: route_intake_dispatch missing';
+    ASSERT to_regprocedure('stewards.scope_candidates(text,int)') IS NOT NULL, '99: scope_candidates missing';
+
+    -- ---- §4: disposition on a SEEDED MATCH — files correctly (act-and-report) ----
+    v_wiki_id := stewards.wiki_create('vs99-wiki', 'VS99 Wiki', 'collection', '{}'::jsonb);
+
+    v_matched_wi := stewards.work_item_create('route-intake',
+        jsonb_build_object('kind','text','ref','vs99-doc-1','instruction', NULL,
+                            'binding_question','vs99 synthetic matched-scope test'),
+        'vs99-route-intake-matched');
+    UPDATE stewards.work_items
+       SET stage_results = jsonb_build_object(
+               'classify', jsonb_build_object('output', jsonb_build_object(
+                   'category','reference','theme','vs99 test theme','purpose','a seeded purpose')),
+               'match', jsonb_build_object('output', jsonb_build_object(
+                   'matched', true,
+                   'scope', jsonb_build_object('kind','wiki','slug','vs99-wiki','title','VS99 Wiki'),
+                   'proposed_scope', NULL,
+                   'purpose', 'file the seeded doc into vs99-wiki')))
+     WHERE id = v_matched_wi;
+
+    v_disp_result := stewards.route_intake_disposition(v_matched_wi);
+    ASSERT v_disp_result ->> 'disposition' = 'filed',
+        format('99: disposition on a matched scope must file (act-and-report), got %s', v_disp_result);
+    ASSERT (v_disp_result -> 'dispatch' ->> 'dispatched')::boolean = true
+           AND v_disp_result -> 'dispatch' ->> 'target' = 'wiki-organize',
+        format('99: a matched kind=text scope must dispatch to wiki_organize_start (94, real), got %s', v_disp_result -> 'dispatch');
+    SELECT EXISTS (SELECT 1 FROM stewards.work_items
+                    WHERE pipeline_family = 'wiki-organize' AND input ->> 'wiki_slug' = 'vs99-wiki')
+      INTO v_wo_wi_exists;
+    ASSERT v_wo_wi_exists,
+        '99: a real wiki-organize work_item must have been created for the matched wiki';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.hinge_reviews WHERE payload ->> 'work_item_id' = v_matched_wi::text),
+        '99: a matched-scope disposition must NOT park a Hinge review (no gate on filing into an existing scope)';
+
+    -- ---- §5: matched kind=video — playlist_add (yt overlay) absent, honest degrade ----
+    v_video_wi := stewards.work_item_create('route-intake',
+        jsonb_build_object('kind','video','ref','https://youtu.be/vs99testvideo'),
+        'vs99-route-intake-video');
+    UPDATE stewards.work_items
+       SET stage_results = jsonb_build_object(
+               'match', jsonb_build_object('output', jsonb_build_object(
+                   'matched', true,
+                   'scope', jsonb_build_object('kind','wiki','slug','vs99-wiki','title','VS99 Wiki'),
+                   'purpose', 'digest this test video')))
+     WHERE id = v_video_wi;
+    v_video_result := stewards.route_intake_disposition(v_video_wi);
+    ASSERT to_regprocedure('stewards.playlist_add(text,text,int)') IS NULL,
+        '99: this chain (00-99, no examples/ overlay) must NOT have playlist_add — the guard test requires it absent';
+    ASSERT (v_video_result -> 'dispatch' ->> 'dispatched')::boolean = false
+           AND (v_video_result -> 'dispatch' ->> 'note') ILIKE '%playlist_add%',
+        format('99: video dispatch must degrade honestly when playlist_add (yt overlay) is absent, got %s', v_video_result -> 'dispatch');
+
+    -- ---- §6: crawl_start (98) absence — the standalone guard check; the
+    -- full end-to-end proof (a real kind=url dispatch degrading honestly)
+    -- is §8 below, once a scope exists for it to dispatch against. ----
+    ASSERT to_regprocedure('stewards.crawl_start(text,text,jsonb)') IS NULL,
+        '99: this worktree must NOT have crawl_start (98, sibling CRAWLER builder) — the guard test requires it absent';
+
+    -- ---- §7: disposition on NO MATCH — lands a mountain-tier new-scope Hinge row ----
+    v_unmatched_wi := stewards.work_item_create('route-intake',
+        jsonb_build_object('kind','url','ref','https://example.com/vs99-lore-site'),
+        'vs99-route-intake-unmatched');
+    UPDATE stewards.work_items
+       SET stage_results = jsonb_build_object(
+               'classify', jsonb_build_object('output', jsonb_build_object(
+                   'category','lore/fiction','theme','vs99 lore theme','purpose','crawl the lore')),
+               'match', jsonb_build_object('output', jsonb_build_object(
+                   'matched', false, 'scope', NULL,
+                   'proposed_scope', jsonb_build_object('kind','wiki','slug','vs99-new-wiki',
+                       'title','VS99 New Wiki','rationale','a genuinely new topic, seeded for the test'))))
+     WHERE id = v_unmatched_wi;
+    v_prop_result := stewards.route_intake_disposition(v_unmatched_wi);
+    ASSERT v_prop_result ->> 'disposition' = 'proposed',
+        format('99: disposition with no matched scope must propose, got %s', v_prop_result);
+    v_hid := (v_prop_result ->> 'hinge_review_id')::bigint;
+    SELECT status INTO v_hstatus FROM stewards.hinge_reviews WHERE id = v_hid;
+    ASSERT v_hstatus = 'pending' AND EXISTS (
+        SELECT 1 FROM stewards.hinge_reviews
+         WHERE id = v_hid AND kind = 'new-scope'
+           AND payload ->> 'work_item_id' = v_unmatched_wi::text
+           AND payload -> 'proposed_scope' ->> 'slug' = 'vs99-new-wiki'),
+        '99: an unmatched disposition must land a pending kind=new-scope Hinge row carrying the work_item_id + proposed_scope';
+
+    -- new-scope must be bound to hinge_escalate_always_kinds (mountain tier
+    -- — Michael approves new scope creation, defense-in-depth as wiki-merge).
+    ASSERT (SELECT value FROM stewards.config WHERE key = 'hinge_escalate_always_kinds') ? 'new-scope',
+        '99: new-scope must be appended to hinge_escalate_always_kinds';
+
+    -- ---- §8: Michael's approval creates the WIKI + dispatches (crawl_start
+    -- absent -> honest degrade, proving the 98 guard end-to-end) ----
+    SELECT count(*) INTO v_wikis_created FROM stewards.wikis WHERE slug = 'vs99-new-wiki';
+    ASSERT v_wikis_created = 0, '99: vs99-new-wiki must not exist before approval';
+    PERFORM stewards.hinge_record_verdict(v_hid, 'approve', 'golden-test approval', 'michael');
+    SELECT status INTO v_hstatus FROM stewards.hinge_reviews WHERE id = v_hid;
+    ASSERT v_hstatus = 'applied',
+        format('99: Michael''s approval must trigger route_intake_new_scope_apply_trigger to completion (status=applied), got %s', v_hstatus);
+    SELECT count(*) INTO v_wikis_created FROM stewards.wikis WHERE slug = 'vs99-new-wiki';
+    ASSERT v_wikis_created = 1, '99: approval must create the proposed wiki (stewards.wikis row)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.hinge_reviews
+                    WHERE id = v_hid AND (payload -> 'dispatch' ->> 'dispatched')::boolean = false
+                      AND (payload -> 'dispatch' ->> 'note') ILIKE '%crawler%'),
+        '99: post-approval dispatch (kind=url, crawl_start absent) must degrade honestly, recorded on the review payload';
+
+    -- ---- §9: world path — asserted BY SHAPE, since 97 (world_to_wiki) is
+    -- absent in this worktree: the world row is created and the trigger
+    -- completes cleanly despite the missing sibling (no crash). ----
+    ASSERT to_regprocedure('stewards.world_to_wiki(text)') IS NULL,
+        '99: this worktree must NOT have world_to_wiki (97, sibling BRIDGE builder) — the shape-only assertion requires it absent';
+    v_world_wi := stewards.work_item_create('route-intake',
+        jsonb_build_object('kind','file','ref','999999'),
+        'vs99-route-intake-world-file');
+    v_world_hid := stewards.hinge_enqueue('new-scope', 'vs99 world proposal',
+        jsonb_build_object('work_item_id', v_world_wi::text,
+            'proposed_scope', jsonb_build_object('kind','world','slug','vs99-new-world',
+                'title','VS99 New World','rationale','a fictional setting, seeded for the test'),
+            'kind','file','ref','999999','purpose','build this world'),
+        'test');
+    PERFORM stewards.hinge_record_verdict(v_world_hid, 'approve', 'golden-test approval', 'michael');
+    SELECT status INTO v_hstatus FROM stewards.hinge_reviews WHERE id = v_world_hid;
+    ASSERT v_hstatus = 'applied',
+        '99: the world-shaped approval trigger must complete (status=applied) even though 97/world_to_wiki is absent';
+    ASSERT EXISTS (SELECT 1 FROM stewards.worlds WHERE slug = 'vs99-new-world'),
+        '99: approval must create the proposed world (stewards.worlds row) regardless of whether 97 is installed';
+    SELECT payload -> 'dispatch' INTO v_world_result FROM stewards.hinge_reviews WHERE id = v_world_hid;
+    ASSERT (v_world_result ->> 'dispatched')::boolean = false AND (v_world_result ->> 'note') ILIKE '%world-build%',
+        format('99: a world-shaped file/text dispatch must honestly note world-build has no SQL entry point, got %s', v_world_result);
+
+    -- ---- clean up the vs99 fixtures ----
+    DELETE FROM stewards.work_items WHERE slug LIKE 'vs99-route-intake-%' OR pipeline_family = 'wiki-organize' AND input ->> 'wiki_slug' = 'vs99-wiki';
+    DELETE FROM stewards.work_items WHERE id = v_wi_id;
+    DELETE FROM stewards.hinge_reviews WHERE id IN (v_hid, v_world_hid);
+    DELETE FROM stewards.wiki_members WHERE wiki_id = v_wiki_id;
+    DELETE FROM stewards.wikis WHERE slug IN ('vs99-wiki','vs99-new-wiki');
+    DELETE FROM stewards.worlds WHERE slug = 'vs99-new-world';
+    DELETE FROM stewards.projects WHERE slug = 'vs99-xylophone-project';
+    UPDATE stewards.config SET value = value - 'new-scope' WHERE key = 'hinge_escalate_always_kinds';
+
+    RAISE NOTICE 'OK 99: route-intake (raw-to-wiki router) — scope_candidates FTS-matches a seeded project and honestly empties on no theme; route_intake creates + carries kind/ref/instruction onto a real route-intake work_item; the pipeline has exactly [classify, match] stages; disposition on a SEEDED matched scope files act-and-report (real wiki_organize_start/94 dispatch, no Hinge gate); a matched video dispatch degrades honestly (playlist_add/yt-overlay absent); disposition on NO MATCH lands a pending kind=new-scope Hinge row bound to hinge_escalate_always_kinds; Michael''s approval creates the wiki and dispatches (crawl_start/98 absent -> honest degrade, recorded on the review); the world path is created by shape with world_to_wiki/97 absent, and a world-shaped file dispatch honestly names the missing world-build SQL entry point';
+END $$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→96, 99) is sound =='
