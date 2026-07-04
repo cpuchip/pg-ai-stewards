@@ -1,20 +1,25 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, computed } from 'vue'
-import { useRoute, RouterLink } from 'vue-router'
+import { useRoute, useRouter, RouterLink } from 'vue-router'
 import MarkdownIt from 'markdown-it'
 import { api, type StudyDetail } from '@/api'
+import SourcesPulledPanel from './wiki/SourcesPulledPanel.vue'
 
 const route = useRoute()
+const router = useRouter()
 const md = new MarkdownIt({ html: false, linkify: true, typographer: false })
 
 const study = ref<StudyDetail | null>(null)
 const error = ref<string>('')
 const loading = ref(false)
+// "Sources pulled" tab (WIKI-GRAPH item 4) — reset whenever the slug changes.
+const tab = ref<'doc' | 'sources'>('doc')
 
 async function load(slug: string) {
   loading.value = true
   error.value = ''
   study.value = null
+  tab.value = 'doc'
   try {
     study.value = await api.studyGet(slug)
   } catch (e) {
@@ -63,9 +68,18 @@ function fmtDate(s?: string) {
         </div>
       </header>
 
+      <!-- Doc ⇄ Sources pulled tab strip (WIKI-GRAPH item 4) -->
+      <div class="inline-flex rounded overflow-hidden border border-zinc-700 text-xs">
+        <button class="px-2 py-1" :class="tab === 'doc' ? 'bg-sky-900/50 text-sky-200' : 'text-zinc-400 hover:bg-zinc-800'"
+                @click="tab = 'doc'">Doc</button>
+        <button class="px-2 py-1 border-l border-zinc-700" :class="tab === 'sources' ? 'bg-sky-900/50 text-sky-200' : 'text-zinc-400 hover:bg-zinc-800'"
+                @click="tab = 'sources'">Sources pulled</button>
+      </div>
+
       <!-- doc-theme (THEME, audit §V): the same render-time skin ArtifactPanel
            uses, replacing this ad hoc prose-* utility soup with one shared class. -->
-      <article class="doc-theme prose prose-invert max-w-none" v-html="renderedBody"></article>
+      <article v-if="tab === 'doc'" class="doc-theme prose prose-invert max-w-none" v-html="renderedBody"></article>
+      <SourcesPulledPanel v-else :doc-ref="study.slug" @open="(ref) => router.push(`/studies/${encodeURIComponent(ref)}`)" />
 
       <!-- Citations -->
       <section

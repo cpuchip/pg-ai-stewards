@@ -610,6 +610,49 @@ export const api = {
     const qs = q.toString()
     return getJSON<CosmosResp>(`/api/world/cosmos${qs ? `?${qs}` : ''}`)
   },
+
+  // Wiki reader + graph.
+  wikiWikis: () => getJSON<{ available: boolean; items: WikiBrief[] }>('/api/wiki/wikis'),
+  wikiPages: (wiki?: string, status?: string) => {
+    const q = new URLSearchParams()
+    if (wiki) q.set('wiki', wiki)
+    if (status) q.set('status', status)
+    const qs = q.toString()
+    return getJSON<{ available: boolean; items: WikiPageBrief[] }>(`/api/wiki/pages${qs ? `?${qs}` : ''}`)
+  },
+  wikiPage: (slug: string) =>
+    getJSON<{ available: boolean; page?: WikiPageDetail }>(`/api/wiki/page?slug=${encodeURIComponent(slug)}`),
+  wikiGraph: (wiki?: string, includeDocs = false) => {
+    const q = new URLSearchParams()
+    if (wiki) q.set('wiki', wiki)
+    if (includeDocs) q.set('include_docs', '1')
+    const qs = q.toString()
+    return getJSON<WikiGraphResp>(`/api/wiki/graph${qs ? `?${qs}` : ''}`)
+  },
+  wikiLocalGraph: (slug: string, hops = 2) =>
+    getJSON<WikiGraphResp>(`/api/wiki/local-graph?slug=${encodeURIComponent(slug)}&hops=${hops}`),
+  wikiCreateStub: async (slug: string, wiki?: string): Promise<{ slug: string }> => {
+    const r = await fetch('/api/wiki/page/stub', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ slug, wiki }),
+    })
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`
+      try { const b = await r.json(); if (b.error) msg = b.error } catch { /* ignore */ }
+      throw new Error(msg)
+    }
+    return r.json()
+  },
+
+  // "Show the wiki the agent pulled" — a doc's provenance ledger + a coverage
+  // diff against the full source (the blind-spot view).
+  docPullSources: (doc: string) =>
+    getJSON<DocPullSourcesResp>(`/api/doc/pull-sources?doc=${encodeURIComponent(doc)}`),
+  docBlindSpots: (doc: string, scope?: Record<string, unknown>) => {
+    const q = new URLSearchParams({ doc })
+    if (scope) q.set('scope', JSON.stringify(scope))
+    return getJSON<DocBlindSpotsResp>(`/api/doc/blind-spots?${q}`)
+  },
   workItemCreate: async (req: WorkItemCreateReq): Promise<WorkItemCreateResp> => {
     const r = await fetch('/api/work-items/create', {
       method: 'POST',
@@ -1198,6 +1241,41 @@ export type CosmosResp = {
   modularity: number
   black_hole: boolean
 }
+
+// Wiki reader + graph (WIKI-GRAPH, over WIKI-CORE's 92 schema). Every response
+// carries `available` — false when 92's tables/functions haven't landed in the
+// DB this UI is pointed at (see cmd/stewards-ui/api/wiki.go's contract note).
+// Screens degrade to an "not available yet" state rather than erroring.
+export type WikiBrief = { slug: string; name: string; page_count: number }
+export type WikiPageBrief = { slug: string; title: string; status: string; updated_at?: string }
+export type WikiPageLink = { to_slug: string; kind?: string; exists: boolean; title?: string }
+export type WikiBacklink = { from_slug: string; title?: string; kind?: string }
+export type WikiPageDetail = {
+  slug: string
+  wiki: string
+  title: string
+  content: string
+  status: string
+  superseded_by?: string
+  updated_at?: string
+  outbound: WikiPageLink[]
+  backlinks: WikiBacklink[]
+  sources: Record<string, unknown>[]
+}
+export type WikiGraphNode = {
+  id: string; label: string; status?: string; exists: boolean; is_doc?: boolean
+  // 3d-force-graph/cytoscape-adjacent libs sometimes mutate position in place:
+  x?: number; y?: number
+}
+export type WikiGraphEdge = { source: string; target: string; kind?: string }
+export type WikiGraphResp = { available: boolean; nodes: WikiGraphNode[]; edges: WikiGraphEdge[] }
+
+// doc_pull_sources / doc_blind_spots (also 92's contract) — "show the wiki the
+// agent pulled... then diff that against the full source to see blind spots."
+// Rows are decoded generically server-side (unknown real column set), so the
+// frontend treats them as loosely-typed records and renders defensively.
+export type DocPullSourcesResp = { available: boolean; sources: Record<string, unknown>[] }
+export type DocBlindSpotsResp = { available: boolean; rows: Record<string, unknown>[]; coverage_pct?: number }
 
 
 export type PassRow = {

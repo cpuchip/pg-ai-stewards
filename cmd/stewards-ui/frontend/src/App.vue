@@ -42,6 +42,7 @@ const NAV_LINKS = [
   { to: '/studies', label: 'Studies' },
   { to: '/models', label: 'Models' },
   { to: '/', label: 'Dashboard' },
+  { to: '/wiki', label: 'Wiki' },
   { to: '/sessions', label: 'Sessions' },
   { to: '/watchman', label: 'Watchman' },
   { to: '/scheduled', label: 'Scheduled' },
@@ -78,6 +79,7 @@ const NAV_LINKS = [
         <RouterLink to="/scheduled" class="hover:text-zinc-100">Scheduled</RouterLink>
         <RouterLink to="/bridge" class="hover:text-zinc-100">Bridge</RouterLink>
         <RouterLink to="/graph" class="hover:text-zinc-100">Graph</RouterLink>
+        <RouterLink to="/wiki" class="hover:text-zinc-100">Wiki</RouterLink>
         <RouterLink to="/new" class="hover:text-zinc-100">New work</RouterLink>
         <RouterLink to="/brainstorm" class="hover:text-zinc-100">Brainstorm</RouterLink>
         <span class="text-zinc-700">|</span>

@@ -27,6 +27,7 @@ const Brainstorm = () => import('./views/Brainstorm.vue')
 const Models = () => import('./views/Models.vue')
 const Stewdio = () => import('./views/Stewdio.vue')
 const Search = () => import('./views/Search.vue')
+const WikiReader = () => import('./views/WikiReader.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/',           name: 'dashboard',  component: Dashboard },
@@ -53,6 +54,13 @@ const routes: RouteRecordRaw[] = [
   { path: '/brainstorm', name: 'brainstorm', component: Brainstorm, meta: { title: 'Brainstorm' } },
   { path: '/models',     name: 'models',     component: Models, meta: { title: 'Providers & models' } },
   { path: '/stewdio',    name: 'stewdio',    component: Stewdio, meta: { title: 'Stewdio' } },
+  // Wiki reader: /wiki (optionally ?wiki=<slug> to scope the switcher) shows
+  // the wikis switcher + page list; /wiki/page/:slug is a single page (the
+  // route wiki-links resolve to — see useWikiLinks in WikiReader.vue). Kept as
+  // two static routes rather than one `/wiki/:slug?` so "page" never collides
+  // with a wiki's own slug.
+  { path: '/wiki',           name: 'wiki',      component: WikiReader, meta: { title: 'Wiki' } },
+  { path: '/wiki/page/:slug', name: 'wiki-page', component: WikiReader, props: true, meta: { title: 'Wiki page' } },
 ]
 
 export default createRouter({

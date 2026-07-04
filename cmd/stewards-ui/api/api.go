@@ -59,7 +59,9 @@ func Register(mux *http.ServeMux, deps *Deps) {
 	deps.registerAttention(mux)
 	deps.registerCredentials(mux) // 88/#256: the setup wizard (keys + models + budgets)
 	deps.registerSearch(mux)      // 93: the human-facing hybrid/keyword/graph search page
-	deps.registerWiki(mux)        // lab-and-wiki Part 2: the "+ wiki" add-to-collection action
+	deps.registerWikiCollect(mux) // 93: the "+ wiki" add-to-collection action (list/add)
+	deps.registerWiki(mux)        // WIKI-GRAPH: wiki reader + graph over 92's schema (degrades if absent)
+	deps.registerDocSources(mux)  // WIKI-GRAPH: doc_pull_sources / doc_blind_spots (also 92's, same degrade)
 }
 
 // writeJSON marshals v to JSON, sets the Content-Type header, and
