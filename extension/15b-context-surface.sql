@@ -1756,9 +1756,19 @@ DECLARE
     parent_model   text;
     parent_provider text;
     v_judge_pending int;
+    -- #328 (2026-07-04): waiting_for_tools had NO deadline — a tool child that
+    -- never resolved (a hung mcp_proxy fan-out, a search that never returns)
+    -- wedged the whole work_item indefinitely. The route_on hop-cap and step
+    -- budgets guard the LLM ROUNDS; nothing guarded a stuck tool WAIT. This
+    -- reaper gives every wait a hard ceiling: past it, unresolved children
+    -- become synthetic error tool-results and the parent proceeds, so the
+    -- model's loop recovers instead of hanging.
+    v_wait_timeout  int := coalesce((SELECT (value#>>'{}')::int FROM stewards.config
+                                      WHERE key = 'tool_wait_timeout_seconds'), 180);
+    v_timed_out     boolean;
 BEGIN
     FOR parent_row IN
-        SELECT id, payload, result, provider
+        SELECT id, payload, result, provider, created_at
           FROM stewards.work_queue
          WHERE kind = 'tool_dispatch'
            AND status = 'waiting_for_tools'
@@ -1770,6 +1780,7 @@ BEGIN
         all_done := true;
         final_msgs := '[]'::jsonb;
         final_msgs := resolved_arr;
+        v_timed_out := parent_row.created_at < now() - (v_wait_timeout || ' seconds')::interval;
 
         FOR pending_elem IN SELECT * FROM jsonb_array_elements(pending_arr)
         LOOP
@@ -1779,8 +1790,20 @@ BEGIN
              WHERE id = (pending_elem ->> 'child_work_id')::bigint;
 
             IF child_row.status NOT IN ('done', 'error') THEN
-                all_done := false;
-                EXIT;
+                -- #328: within grace, keep waiting (next tick re-checks). Past
+                -- the deadline, treat this child as a timed-out error so the
+                -- turn completes rather than wedging forever.
+                IF NOT v_timed_out THEN
+                    all_done := false;
+                    EXIT;
+                END IF;
+                final_msgs := final_msgs || jsonb_build_array(jsonb_build_object(
+                    'tc_id',   pending_elem ->> 'tc_id',
+                    'name',    pending_elem ->> 'name',
+                    'content', jsonb_build_object('error',
+                        format('tool timed out: child work %s did not resolve within %ss (waiting_for_tools reaper, #328)',
+                               pending_elem ->> 'child_work_id', v_wait_timeout))::text));
+                CONTINUE;
             END IF;
 
             DECLARE
