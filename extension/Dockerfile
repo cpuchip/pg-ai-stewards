@@ -87,7 +87,8 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      87-lab.sql 88-credentials.sql 89-attention.sql \
      90-harness-executor.sql 91-core-compat.sql \
      92-wiki.sql 93-recall.sql \
-     94-wiki-curator.sql 95-model-role-toggles.sql 96-wiki-assets.sql ./
+     94-wiki-curator.sql 95-model-role-toggles.sql 96-wiki-assets.sql \
+     98-crawler.sql ./
 
 # 100-schedule-chat.sql (SCHED, 2026-07-03) — own continuation-free COPY line
 # so parallel siblings landing 97/98/99 in the block above don't collide with

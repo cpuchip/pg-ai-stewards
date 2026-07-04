@@ -4770,4 +4770,143 @@ BEGIN
     RAISE NOTICE 'OK 96: wiki assets — serve-url/markdown/caption enqueue+collect functions present over 92''s wiki_assets (extraction itself is bridge-side; real proof = the Cosmere rulebook backfill, 40/40)';
 END $$;
 
+-- 98: the purpose-crawler — frontier dedup + budget floors (page/byte/
+-- depth) + the domain wall + the status surface. Pure SQL against fake
+-- hosts: the politeness half (robots.txt + rate limit) is Go-side and
+-- proven by cmd/fetch-md-mcp's tests; THIS block proves the model-
+-- proposes-SQL-disposes floor no prompt can loosen.
+DO $$
+DECLARE
+    v_id  uuid;
+    v_id2 uuid;
+    v_res jsonb;
+    v_st  jsonb;
+    v_n   int;
+BEGIN
+    -- surface present + the deny-by-default grant shape
+    ASSERT to_regprocedure('stewards.crawl_start(text,text,jsonb,text,boolean)') IS NOT NULL, '98: crawl_start missing';
+    ASSERT to_regprocedure('stewards.crawl_next_tool(jsonb)') IS NOT NULL, '98: crawl_next_tool missing';
+    ASSERT to_regprocedure('stewards.crawl_save_tool(jsonb)') IS NOT NULL, '98: crawl_save_tool missing';
+    ASSERT to_regprocedure('stewards.crawl_enqueue_tool(jsonb)') IS NOT NULL, '98: crawl_enqueue_tool missing';
+    ASSERT to_regprocedure('stewards.crawl_status(uuid)') IS NOT NULL, '98: crawl_status missing';
+    SELECT count(*)::int INTO v_n FROM stewards.agent_tool_perms
+     WHERE agent_family = 'crawler' AND action = 'allow';
+    ASSERT v_n = 5,
+        format('98: the crawler family holds EXACTLY five allows (crawl_next/save/enqueue + fetch_url + extract_links); found %s', v_n);
+
+    -- URL hygiene + the domain wall (unit shape)
+    ASSERT stewards.crawl_url_normalize('HTTPS://Fixture98.test:443/a/b/#frag') = 'https://fixture98.test/a/b',
+        '98: normalization must lowercase, drop :443, drop fragment, trim trailing slash';
+    ASSERT stewards.crawl_url_normalize('ftp://x.test/a') IS NULL, '98: non-http(s) normalizes to NULL (rejected by the floor)';
+    ASSERT stewards.crawl_domain_allowed('https://fixture98.test/', '["ally.test"]'::jsonb, 'https://sub.ally.test/x'),
+        '98: allow_domains admits a subdomain of an allowlisted host';
+    ASSERT NOT stewards.crawl_domain_allowed('https://fixture98.test/', '[]'::jsonb, 'https://evil.test/x'),
+        '98: an empty allowlist stays root-host-only (fail closed)';
+    ASSERT NOT stewards.crawl_domain_allowed('https://fixture98.test/', '["*"]'::jsonb, 'https://evil.test/x'),
+        '98: a literal "*" allowlist entry is IGNORED — no wide-open mode exists';
+
+    -- config clamps: the hard ceilings hold against an absurd ask
+    v_res := stewards.crawl_config('{"config":{"max_pages":999999,"rate_ms":1,"max_total_bytes":999999999999}}'::jsonb);
+    ASSERT (v_res->>'max_pages')::int <= 200, '98: max_pages clamps to crawl_hard_max_pages';
+    ASSERT (v_res->>'rate_ms')::int >= 500, '98: rate_ms floors at 500 (the politeness floor is structural)';
+    ASSERT (v_res->>'max_total_bytes')::bigint <= 100000000, '98: max_total_bytes clamps to crawl_hard_max_bytes';
+
+    -- ── crawl A: page + byte budgets. max_pages 2, max_total_bytes 600.
+    v_id := stewards.crawl_start('https://fixture98.test/index.html', 'smoke: prove the budget floor',
+              '{"max_pages":2,"max_depth":2,"max_total_bytes":600,"allow_domains":["ally.test"]}'::jsonb,
+              'virgin-smoke', false);
+    ASSERT (SELECT count(*) FROM stewards.crawl_frontier WHERE work_item_id = v_id) = 1,
+        '98: crawl_start seeds exactly the root frontier row';
+
+    v_res := stewards.crawl_next_tool(jsonb_build_object('work_item_id', v_id::text));
+    ASSERT NOT coalesce((v_res->>'done')::boolean, false)
+       AND v_res->>'url' = 'https://fixture98.test/index.html',
+        format('98: first pop must hand out the root; got %s', v_res);
+    ASSERT (v_res #>> '{fetch_args,enforce_robots}')::boolean,
+        '98: fetch_args must bake in enforce_robots=true — politeness is copy-paste, not memory';
+
+    -- model proposes 5 links; SQL disposes: 2 land (relevant1, allowlisted
+    -- subdomain), 3 rejected (duplicate, offsite-despite-priority-0.99, non-http)
+    v_res := stewards.crawl_enqueue_tool(jsonb_build_object(
+        'work_item_id', v_id::text,
+        'discovered_from', 'https://fixture98.test/index.html',
+        'links', jsonb_build_array(
+            jsonb_build_object('url', 'https://fixture98.test/relevant1.html', 'priority', 0.9),
+            jsonb_build_object('url', 'https://sub.ally.test/page.html', 'priority', 0.6),
+            jsonb_build_object('url', 'https://fixture98.test/relevant1.html', 'priority', 0.9),
+            jsonb_build_object('url', 'https://evil.test/x.html', 'priority', 0.99),
+            jsonb_build_object('url', 'ftp://fixture98.test/file'))));
+    ASSERT (v_res->>'enqueued')::int = 2, format('98: 2 of 5 proposals should land; got %s', v_res);
+    SELECT count(*)::int INTO v_n FROM jsonb_array_elements(v_res->'rejected') r
+     WHERE r->>'reason' LIKE 'outside the domain boundary%';
+    ASSERT v_n = 1, '98: the offsite link must be rejected by the domain wall DESPITE priority 0.99';
+    SELECT count(*)::int INTO v_n FROM jsonb_array_elements(v_res->'rejected') r
+     WHERE r->>'reason' LIKE 'duplicate%';
+    ASSERT v_n = 1, '98: the re-proposed URL must be rejected as a duplicate (frontier dedup)';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.crawl_frontier WHERE work_item_id = v_id AND url ~ 'evil'),
+        '98: the offsite URL must never enter the frontier';
+
+    -- pop 2 follows the model's priority (0.9 beats 0.6)
+    v_res := stewards.crawl_next_tool(jsonb_build_object('work_item_id', v_id::text));
+    ASSERT v_res->>'url' = 'https://fixture98.test/relevant1.html',
+        format('98: second pop must take the higher-priority link; got %s', v_res->>'url');
+
+    -- byte accounting: 300 bytes lands as a doc with url provenance
+    v_res := stewards.crawl_save_tool(jsonb_build_object(
+        'work_item_id', v_id::text, 'url', 'https://fixture98.test/relevant1.html',
+        'title', 'Relevant 1', 'content', repeat('x', 300)));
+    ASSERT (v_res->>'ok')::boolean AND (v_res->>'bytes_saved_total')::bigint = 300,
+        format('98: first save should land at 300 bytes; got %s', v_res);
+    ASSERT EXISTS (SELECT 1 FROM stewards.docs
+                    WHERE slug = v_res->>'doc_slug' AND kind = 'crawl-page'
+                      AND frontmatter->>'source_url' = 'https://fixture98.test/relevant1.html'),
+        '98: crawl_save must write a crawl-page doc carrying source_url provenance';
+
+    -- the byte wall: 400 more would cross 600 — refused BEFORE the write
+    v_res := stewards.crawl_save_tool(jsonb_build_object(
+        'work_item_id', v_id::text, 'url', 'https://fixture98.test/index.html',
+        'title', 'Index', 'content', repeat('y', 400)));
+    ASSERT NOT (v_res->>'ok')::boolean AND (v_res->>'done')::boolean
+       AND v_res->>'reason' LIKE 'byte budget exhausted%',
+        format('98: a save crossing the byte wall must be refused with done=true; got %s', v_res);
+    ASSERT (SELECT count(*) FROM stewards.docs WHERE frontmatter->>'crawl_work_item' = v_id::text) = 1,
+        '98: the refused save must not have written a doc';
+
+    -- the page wall: 2 pops consumed max_pages=2 — the third is done, period
+    v_res := stewards.crawl_next_tool(jsonb_build_object('work_item_id', v_id::text));
+    ASSERT (v_res->>'done')::boolean AND v_res->>'reason' LIKE 'page budget exhausted%',
+        format('98: crawl_next past max_pages must return done (the model cannot pop past the wall); got %s', v_res);
+
+    -- status shape + the work-item-card surface
+    v_st := stewards.crawl_status(v_id);
+    ASSERT v_st ? 'pages' AND v_st ? 'bytes' AND v_st ? 'budget' AND v_st ? 'frontier_pending_by_depth',
+        format('98: crawl_status shape (pages/bytes/budget/frontier_pending_by_depth); got %s', v_st);
+    ASSERT (v_st #>> '{bytes,saved}')::bigint = 300, '98: crawl_status must carry the byte accounting';
+    ASSERT (SELECT stage_results ? 'crawl_status' FROM stewards.work_items WHERE id = v_id),
+        '98: crawl_status must be pinned into stage_results (the existing Stewdio card is the UI — no new Vue)';
+
+    -- ── crawl B: the depth wall. max_depth 1: child lands, grandchild rejected.
+    v_id2 := stewards.crawl_start('https://fixture98b.test/', 'smoke: depth wall',
+               '{"max_depth":1,"max_pages":10}'::jsonb, 'virgin-smoke', false);
+    PERFORM stewards.crawl_next_tool(jsonb_build_object('work_item_id', v_id2::text)); -- pop root (depth 0)
+    v_res := stewards.crawl_enqueue_tool(jsonb_build_object(
+        'work_item_id', v_id2::text, 'discovered_from', 'https://fixture98b.test/',
+        'links', jsonb_build_array(jsonb_build_object('url', 'https://fixture98b.test/child.html', 'priority', 0.8))));
+    ASSERT (v_res->>'enqueued')::int = 1, '98: depth-1 child enqueues under max_depth 1';
+    PERFORM stewards.crawl_next_tool(jsonb_build_object('work_item_id', v_id2::text)); -- pop the child (depth 1)
+    v_res := stewards.crawl_enqueue_tool(jsonb_build_object(
+        'work_item_id', v_id2::text, 'discovered_from', 'https://fixture98b.test/child.html',
+        'links', jsonb_build_array(jsonb_build_object('url', 'https://fixture98b.test/grandchild.html', 'priority', 0.9))));
+    ASSERT (v_res->>'enqueued')::int = 0, '98: a depth-2 grandchild must not enqueue under max_depth 1';
+    SELECT count(*)::int INTO v_n FROM jsonb_array_elements(v_res->'rejected') r
+     WHERE r->>'reason' LIKE 'depth%';
+    ASSERT v_n = 1, '98: the grandchild rejection must name the depth wall';
+
+    -- cleanup (crawl_frontier cascades with the work items)
+    DELETE FROM stewards.docs WHERE frontmatter->>'crawl_work_item' IN (v_id::text, v_id2::text);
+    DELETE FROM stewards.work_items WHERE id IN (v_id, v_id2);
+
+    RAISE NOTICE 'OK 98: purpose-crawler — frontier dedup + page/byte/depth budget floors hold against the tool surface (model proposes, SQL disposes: the third pop is done, the crossing save is refused pre-write, the grandchild never enqueues), the domain wall rejects offsite despite priority 0.99 while allow_domains admits its subdomain, config clamps to the crawl_hard_max_* ceilings with the 500ms rate floor, and crawl_status ships the right shape pinned into stage_results.crawl_status';
+END $$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→96) is sound =='

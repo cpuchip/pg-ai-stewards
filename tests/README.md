@@ -57,6 +57,21 @@ Makes real LLM calls (~1–2 min, small cost) — run on demand, **not** in
 every-commit CI. Exit 0 = invariants hold. (The persona-host's Go consult-ordering
 fix is additionally covered by the `cmd/persona-host` go tests.)
 
+## `fixtures/crawl-site/` — the purpose-crawler's sandbox
+
+A tiny static site (7 pages + `robots.txt`) for the 98-crawler oracle: an
+index linking a relevant chain (`relevant1 → relevant2 → deep3 → deep4`), an
+irrelevant merch page, a robots-disallowed path (`/secret/`), and an offsite
+link. Real crawls are NOT grindable (they hit live sites); this fixture is
+the resettable sandbox that is. Two halves consume it:
+
+- **Go** — `cmd/fetch-md-mcp`'s `TestCrawlFixtureSite` serves it via httptest
+  and drives the real tool handlers in `enforce_robots` mode (robots block,
+  link categorization, markdown extraction, redirect-hop re-check).
+- **SQL** — virgin-smoke's `OK 98` block proves the frontier machinery's
+  structural floor (page/byte/depth budgets, domain wall, dedup) against the
+  same shapes, pure SQL, no network.
+
 ## CI
 
 `.github/workflows/ci.yml` runs exactly this smoke on every push to `main` and

@@ -1070,19 +1070,34 @@ extension_sql_file!(
     requires = ["create_model_role_toggles"],
 );
 
+// 98 — the purpose-crawler (ingestion fleet, 2026-07-03; spec
+// .spec/proposals/ingestion-crawler-and-raw-to-wiki.md Part 1): the
+// LLM-driven, guardrailed crawl. crawl_frontier (queue-as-rows, resumable),
+// crawl_start/crawl_next/crawl_save/crawl_enqueue (model proposes, SQL
+// disposes — page/byte/depth budgets + domain wall + dedup are a structural
+// floor the model can only stay under), the single-stage 'crawl' pipeline
+// looping via route_on (42), the 'crawler' agent family (exactly five
+// tools), and crawl_status written into stage_results.crawl_status so the
+// existing work-item card is the UI. The politeness half (robots.txt +
+// per-domain rate floor) lives in cmd/fetch-md-mcp/politeness.go behind the
+// enforce_robots param. requires create_wiki_assets (96) — the tail of the
+// chain in THIS worktree; a parallel builder owns 97, and the integrator
+// re-stitches this to require 97's registered name when both land.
+extension_sql_file!(
+    "../98-crawler.sql",
+    name = "create_crawler",
+    requires = ["create_wiki_assets"],
+);
+
 // 100 — SCHED (2026-07-03): chat HANDS for 18-scheduler's scheduled_pipelines
 // (Michael's ask: "create/edit a crawler cron through chat, so corpus can grow
 // automagically"). Four SQL functions (schedule_create/list/update/delete) +
 // *_tool(jsonb) wrappers + tool_defs, granted to work-item-chat. Reuses 18's
 // cron_field_values/cron_next_after UNMODIFIED via a new cron_validate(text).
-// requires create_wiki_assets (96 = the last entry found in THIS worktree;
-// three siblings are landing 97/98/99 in parallel — the integrator re-stitches
-// this to whatever the real chain tail turns out to be, same forward-ref
-// discipline 93/94's own headers name for their 92 sibling).
 extension_sql_file!(
     "../100-schedule-chat.sql",
     name = "create_schedule_chat",
-    requires = ["create_wiki_assets"],
+    requires = ["create_crawler"],
 );
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions

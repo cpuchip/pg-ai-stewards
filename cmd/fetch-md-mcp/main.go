@@ -61,6 +61,9 @@ func main() {
 		HTTPClient: client,
 		UserAgent:  *userAgent,
 		MaxBytes:   *maxBytes,
+		// Politeness floor (robots.txt + per-domain rate limit) for
+		// calls that set enforce_robots=true — see politeness.go.
+		Gate: newPoliteGate(client, *userAgent),
 	}
 
 	srv := mcp.NewServer(&mcp.Implementation{
