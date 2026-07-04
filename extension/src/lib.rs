@@ -997,6 +997,26 @@ extension_sql_file!(
 extension_sql_file!(
     "../95-model-role-toggles.sql",
     name = "create_model_role_toggles",
+    requires = ["create_wiki"],
+);
+
+// 92 — the Wiki (WIKI-CORE, first of a 6-builder fleet; lab-and-wiki.md
+// Part 2): wiki_pages/wiki_page_revisions (regenerable pages + their
+// safety-net ledger), wiki_assets (schema only — the assets builder fills
+// it), page_links (red links allowed) + page_sources (per-claim-cluster
+// provenance), wikis/wiki_members (a wiki is a named scope over many
+// pages). Functions: wiki_page_upsert (revision-aware), wiki_create,
+// wiki_add_member, wiki_page_dedup_check{,_vec} (the >=0.90 lightning-tier
+// dedup gate), wiki_merge_propose + a Hinge-applied trigger (mountain-tier
+// merges are never auto). Also doc_pull_sources/doc_blind_spots — pure
+// views mining a produced doc's producing work_item for what it actually
+// retrieved vs. what it never touched in scope (Michael's "diff that
+// against the full source and see blind spots" ask). Reuses hinge_enqueue
+// (39), work_items.session_ids (04), docs (schema.rs), chat_attachments
+// (48), embed_query (this file). Installs at the tail of the chain.
+extension_sql_file!(
+    "../92-wiki.sql",
+    name = "create_wiki",
     requires = ["create_core_compat"],
 );
 // ---------------------------------------------------------------------------
