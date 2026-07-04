@@ -89,6 +89,11 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      92-wiki.sql 93-recall.sql \
      94-wiki-curator.sql 95-model-role-toggles.sql 96-wiki-assets.sql ./
 
+# 100-schedule-chat.sql (SCHED, 2026-07-03) — own continuation-free COPY line
+# so parallel siblings landing 97/98/99 in the block above don't collide with
+# this addition on the same diff hunk. Merge/renumber at fleet integration.
+COPY 100-schedule-chat.sql ./
+
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
 # and generated .sql under the standard pg_config paths.

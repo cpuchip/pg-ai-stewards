@@ -1069,6 +1069,21 @@ extension_sql_file!(
     name = "create_wiki_assets",
     requires = ["create_model_role_toggles"],
 );
+
+// 100 — SCHED (2026-07-03): chat HANDS for 18-scheduler's scheduled_pipelines
+// (Michael's ask: "create/edit a crawler cron through chat, so corpus can grow
+// automagically"). Four SQL functions (schedule_create/list/update/delete) +
+// *_tool(jsonb) wrappers + tool_defs, granted to work-item-chat. Reuses 18's
+// cron_field_values/cron_next_after UNMODIFIED via a new cron_validate(text).
+// requires create_wiki_assets (96 = the last entry found in THIS worktree;
+// three siblings are landing 97/98/99 in parallel — the integrator re-stitches
+// this to whatever the real chain tail turns out to be, same forward-ref
+// discipline 93/94's own headers name for their 92 sibling).
+extension_sql_file!(
+    "../100-schedule-chat.sql",
+    name = "create_schedule_chat",
+    requires = ["create_wiki_assets"],
+);
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
