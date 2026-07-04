@@ -85,7 +85,7 @@ COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
      82-world-graph.sql 83-code-graph.sql \
      84-tool-effect-gate.sql 85-world-chat.sql 86-sticky-agent-family.sql \
      87-lab.sql 88-credentials.sql 89-attention.sql \
-     90-harness-executor.sql 91-core-compat.sql ./
+     90-harness-executor.sql 91-core-compat.sql 92-wiki.sql ./
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
