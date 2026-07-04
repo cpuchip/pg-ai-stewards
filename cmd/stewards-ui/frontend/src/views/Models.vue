@@ -6,6 +6,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { api, type ModelRow, type ProviderRow } from '@/api'
 import ProvidersWizard from './ProvidersWizard.vue'
+import RolesPanel from './RolesPanel.vue'
 
 const models = ref<ModelRow[]>([])
 const providers = ref<ProviderRow[]>([])
@@ -80,6 +81,8 @@ onMounted(load)
     </header>
 
     <ProvidersWizard @changed="load" />
+
+    <RolesPanel />
 
     <div class="controls">
       <input

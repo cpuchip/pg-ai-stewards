@@ -656,6 +656,15 @@ export const api = {
   modelProbe: (req: { provider: string; model: string }) =>
     postJSON<{ work_queue_id: number }>('/api/models/probe', req),
 
+  // 95 model-role toggles: per-member enable/disable + priority reorder + the
+  // "rest all local models" bulk switch (+ its inverse) — click, not SQL.
+  aliasEnabled: (req: { alias: string; provider: string; model: string; enabled: boolean }) =>
+    postJSON<{ updated: boolean }>('/api/models/aliases/enabled', req),
+  aliasPriority: (req: { alias: string; provider: string; model: string; priority: number }) =>
+    postJSON<{ updated: boolean }>('/api/models/aliases/priority', req),
+  aliasRestLocal: (enabled: boolean) =>
+    postJSON<{ changed: number; enabled: boolean }>('/api/models/aliases/rest-local', { enabled }),
+
   // Stewdio chat-with-a-work-item (P1). chatSend appends a turn + dispatches it;
   // the reply is streamed separately via EventSource('/api/chat/stream?session_id=').
   // rich-docs P2: attachment_ids inject uploaded media as subject material.
@@ -757,6 +766,8 @@ export type AliasRow = {
   model: string
   priority: number
   usable?: boolean
+  enabled: boolean     // 95: operator on/off switch — what pick_alias_member skips on
+  is_local: boolean    // 95: lm_studio/flexllama (mirrors activity.go's localProviders)
   notes?: string
 }
 
