@@ -79,6 +79,8 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	loom "github.com/cpuchip/loom"
 )
 
 // The ratified read-only substrate toolset (council 2026-06-30). EXPLICITLY
@@ -292,6 +294,18 @@ func runHarness(ctx context.Context, in *HarnessRunInput) (loomReply, string, er
 
 	warn := ""
 
+	// Serve transport (2026-07-04, Michael's directive): when STEWARDS_LOOM_URL
+	// is set, dispatch over `loom serve` on the HOST instead of exec'ing a loom
+	// binary here. This is what makes harness_run work from the CONTAINERIZED
+	// bridge without shipping loom + the docker socket + claude credentials into
+	// the container: the host keeps every powerful piece behind one token-gated
+	// websocket, and every path in SessionOpts is a HOST path prepared by the
+	// operator (claude-home from harness-home-init; a scratch dir for
+	// workdir-less runs).
+	if serveURL := strings.TrimSpace(os.Getenv("STEWARDS_LOOM_URL")); serveURL != "" {
+		return runHarnessViaServe(ctx, serveURL, backend, model, in, timeout)
+	}
+
 	// The workdir is the corpus. When the caller gives none, mount an empty
 	// scratch dir — NEVER this process's cwd (that would leak whatever the
 	// bridge happens to run in through the filesystem wall).
@@ -418,6 +432,92 @@ func runHarness(ctx context.Context, in *HarnessRunInput) (loomReply, string, er
 		return loomReply{}, "", fmt.Errorf("no --json Reply found on loom stdout (stderr tail: %s)", tail)
 	}
 	log.Printf("harness_run: reply in %s (session=%s cost=$%.4f turns=%d err=%q)",
+		elapsed, reply.SessionID, reply.CostUSD, reply.Turns, reply.Error)
+	return reply, warn, nil
+}
+
+// runHarnessViaServe dispatches over the host's `loom serve` websocket using
+// loom's own ConnectBackend (the same Backend interface the CLI drives). Env:
+//
+//	STEWARDS_LOOM_URL         ws://host.docker.internal:7777 (presence selects this path)
+//	STEWARDS_LOOM_TOKEN       token minted by `loom serve --add-token`
+//	STEWARDS_LOOM_CLAUDE_HOME HOST path of the harness claude-home (the container
+//	                          cannot guess the host's layout — set explicitly)
+//	STEWARDS_LOOM_SCRATCH_DIR HOST path mounted for workdir-less runs (empty dir)
+//
+// The hinge mcp-config is NOT written here (the bridge cannot reach the host
+// fs): it must already exist inside claude-home as stewards-harness-mcp.json —
+// any prior host-side harness_run wrote it, and harness-home-init seeds it.
+func runHarnessViaServe(ctx context.Context, serveURL, backend, model string, in *HarnessRunInput, timeout int) (loomReply, string, error) {
+	warn := ""
+	workdir := strings.TrimSpace(in.Workdir)
+	if workdir == "" {
+		workdir = strings.TrimSpace(os.Getenv("STEWARDS_LOOM_SCRATCH_DIR"))
+		if workdir == "" {
+			return loomReply{}, "", fmt.Errorf(
+				"harness_run via loom serve: no workdir given and STEWARDS_LOOM_SCRATCH_DIR is unset — set it to an empty HOST directory")
+		}
+		warn = "no workdir given — the harness ran against the host scratch dir"
+	}
+	claudeHome := strings.TrimSpace(os.Getenv("STEWARDS_LOOM_CLAUDE_HOME"))
+	if claudeHome == "" {
+		return loomReply{}, "", fmt.Errorf(
+			"harness_run via loom serve: STEWARDS_LOOM_CLAUDE_HOME is unset — set it to the HOST harness claude-home path")
+	}
+
+	opts := loom.SessionOpts{
+		Workdir:         workdir,
+		Model:           model,
+		Isolate:         true,
+		SkipPermissions: true,
+		ClaudeHome:      claudeHome,
+	}
+	if mcpURL := strings.TrimSpace(os.Getenv("STEWARDS_HARNESS_MCP_URL")); mcpURL != "" {
+		opts.MCPConfig = containerClaudeDir + "/" + harnessMCPConfigName
+		allowed := strings.TrimSpace(os.Getenv("STEWARDS_HARNESS_ALLOWED_TOOLS"))
+		if allowed == "" {
+			tools := append([]string{}, harnessClaudeReadTools...)
+			tools = append(tools, harnessSubstrateReadTools...)
+			tools = append(tools, harnessSubstrateWriteTools...)
+			allowed = strings.Join(tools, ",")
+		}
+		opts.AllowedTools = allowed
+	}
+
+	cb := loom.ConnectBackend{
+		URL:   serveURL,
+		Token: strings.TrimSpace(os.Getenv("STEWARDS_LOOM_TOKEN")),
+		Agent: backend,
+	}
+
+	tctx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	defer cancel()
+
+	log.Printf("harness_run: dispatching via loom serve %s (backend=%s workdir=%s hinge=%v timeout=%ds)",
+		serveURL, backend, workdir, opts.MCPConfig != "", timeout)
+	start := time.Now()
+	sess, err := cb.Open(tctx, opts)
+	if err != nil {
+		return loomReply{}, "", fmt.Errorf("loom serve open (%s): %w", serveURL, err)
+	}
+	defer sess.Close()
+	r, err := sess.Send(tctx, in.Prompt)
+	elapsed := time.Since(start).Round(time.Second)
+	if err != nil {
+		if tctx.Err() == context.DeadlineExceeded {
+			return loomReply{}, "", fmt.Errorf("loom serve: timed out after %ds with no reply", timeout)
+		}
+		return loomReply{}, "", fmt.Errorf("loom serve send: %w", err)
+	}
+	reply := loomReply{
+		Backend:   r.Backend,
+		Text:      r.Text,
+		SessionID: r.SessionID,
+		CostUSD:   r.CostUSD,
+		Turns:     r.Turns,
+		Error:     r.Err,
+	}
+	log.Printf("harness_run: serve reply in %s (session=%s cost=$%.4f turns=%d err=%q)",
 		elapsed, reply.SessionID, reply.CostUSD, reply.Turns, reply.Error)
 	return reply, warn, nil
 }
