@@ -28,6 +28,7 @@ const Models = () => import('./views/Models.vue')
 const Stewdio = () => import('./views/Stewdio.vue')
 const Search = () => import('./views/Search.vue')
 const WikiReader = () => import('./views/WikiReader.vue')
+const NotFound = () => import('./views/NotFound.vue')
 
 const routes: RouteRecordRaw[] = [
   { path: '/',           name: 'dashboard',  component: Dashboard },
@@ -61,6 +62,8 @@ const routes: RouteRecordRaw[] = [
   // with a wiki's own slug.
   { path: '/wiki',           name: 'wiki',      component: WikiReader, meta: { title: 'Wiki' } },
   { path: '/wiki/page/:slug', name: 'wiki-page', component: WikiReader, props: true, meta: { title: 'Wiki page' } },
+  // Catch-all — an unknown URL rendered a silent blank RouterView before this.
+  { path: '/:pathMatch(.*)*', name: 'not-found', component: NotFound, meta: { title: 'Not found' } },
 ]
 
 export default createRouter({
