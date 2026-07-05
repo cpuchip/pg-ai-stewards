@@ -285,9 +285,24 @@ COMMENT ON FUNCTION stewards.trigger_log_model_substitution() IS
 -- =====================================================================
 -- §4 — m4: model auto-probe (test a model over the real streaming path).
 -- =====================================================================
--- enqueue_model_probe inserts a tiny chat DIRECTLY into work_queue (bypassing
--- the dispatcher so the M.2 substitution does not swap the model under test);
--- the terminal-transition trigger records the verdict into model_capability.
+-- #item2 (2026-07-05): the probe now sends a tool-bearing request (below), and
+-- a model MAY answer with a tool_call. The bgworker's generic loop would then
+-- enqueue a tool_dispatch continuation (up to agent.steps extra calls) — but a
+-- probe must be exactly ONE call. Register a zero-step 'model-probe' agent: the
+-- continuation is gated on `iteration_count < resolve_agent(family,model).steps`,
+-- so steps=0 hard-caps it at one dispatch regardless of what the model returns.
+-- (SQL-only — no bgworker change, so live pg never restarts. The probe body is
+-- pre-built and sent as-is; this agent only feeds the continuation's step cap.)
+INSERT INTO stewards.agents (family, model_match, description, mode, prompt, steps, active)
+VALUES ('model-probe', '*',
+        'Internal plumbing family for the M.4 model auto-probe. steps=0 caps the probe at a single dispatch (no tool-execution loop). Not a user-facing agent.',
+        'all', 'Model dispatchability probe.', 0, true)
+ON CONFLICT (family, model_match) DO UPDATE
+    SET steps = 0, active = true, description = EXCLUDED.description;
+
+-- enqueue_model_probe inserts a chat DIRECTLY into work_queue (bypassing the
+-- dispatcher so the M.2 substitution does not swap the model under test); the
+-- terminal-transition trigger records the verdict into model_capability.
 CREATE OR REPLACE FUNCTION stewards.enqueue_model_probe(
     p_provider text,
     p_model    text
@@ -308,20 +323,42 @@ BEGIN
     VALUES (v_session, format('model probe %s/%s', p_provider, p_model), 'agent')
     ON CONFLICT (id) DO NOTHING;
 
+    -- #item2 (2026-07-05): a REALISTIC, tool-bearing probe. The old body stripped
+    -- tools and asked for a 2-char echo — so kimi-k2.7-code "passed" on ~2 chars
+    -- while REAL requests 400 ("Console Go: Upstream request failed"; "When using
+    -- tool_choice, tools must be set"). This body asks for ~60-120 words AND ships
+    -- a tool + tool_choice, exercising the exact path a real agent request uses. The
+    -- tool is deliberately IRRELEVANT to the question, so a healthy model answers in
+    -- prose (no tool call → no continuation) while a model whose gateway trips on
+    -- tool schemas 400s → recorded unusable. tools_disabled=false so the bgworker
+    -- forwards body.tools instead of stripping them.
     v_payload := jsonb_build_object(
         'session_id',      v_session,
         'agent_family',    'model-probe',
         'requested_model', p_model,
-        'tools_disabled',  true,
+        'tools_disabled',  false,
         'body', jsonb_build_object(
-            'model',      p_model,
-            'max_tokens', 256,
-            'messages',   jsonb_build_array(
+            'model',       p_model,
+            'max_tokens',  400,
+            'temperature', 0,
+            'messages',    jsonb_build_array(
+                jsonb_build_object('role', 'system',
+                    'content', 'You are a model dispatchability probe. Answer briefly and directly.'),
+                jsonb_build_object('role', 'user',
+                    'content', 'In 2-4 sentences (about 60-120 words), state which model you are and one task you are good at. A weather tool is offered but is NOT relevant to this question — just answer in prose.')
+            ),
+            'tools', jsonb_build_array(
                 jsonb_build_object(
-                    'role', 'user',
-                    'content', 'Reply with exactly: OK'
-                )
-            )
+                    'type', 'function',
+                    'function', jsonb_build_object(
+                        'name', 'get_current_weather',
+                        'description', 'Get the current weather for a location. Offered only to exercise the tool-call path; not relevant to the probe question.',
+                        'parameters', jsonb_build_object(
+                            'type', 'object',
+                            'properties', jsonb_build_object(
+                                'location', jsonb_build_object('type', 'string', 'description', 'City name')),
+                            'required', jsonb_build_array('location'))))),
+            'tool_choice', 'auto'
         ),
         '_probe', jsonb_build_object('provider', p_provider, 'model', p_model)
     );
@@ -337,41 +374,58 @@ END;
 $func$;
 
 COMMENT ON FUNCTION stewards.enqueue_model_probe(text, text) IS
-'M.4: enqueue a tiny streaming chat to test whether (provider, model) is dispatchable. Direct work_queue insert (bypasses the M.2 substitution gate). The work_queue terminal-transition trigger records the verdict into model_capability.';
+'M.4 (#item2): enqueue a REALISTIC, tool-bearing chat (~60-120 word prompt + a tool + tool_choice) to test whether (provider, model) is dispatchable on the path real agent requests use — not a 2-char echo that false-passed tool-broken models. Direct work_queue insert (bypasses the M.2 substitution gate); the model-probe agent (steps=0) caps it at one call. The terminal-transition trigger records the verdict into model_capability.';
 
 CREATE OR REPLACE FUNCTION stewards.trigger_resolve_model_probe()
 RETURNS trigger LANGUAGE plpgsql AS $FN$
 DECLARE
-    v_provider text;
-    v_model    text;
-    v_session  text;
-    v_content  text;
-    v_finish   text;
-    v_usable   boolean;
-    v_detail   text;
+    v_provider   text;
+    v_model      text;
+    v_session    text;
+    v_content    text;
+    v_finish     text;
+    v_tool_calls jsonb;
+    v_has_tools  boolean;
+    v_usable     boolean;
+    v_detail     text;
 BEGIN
     v_provider := NEW.payload -> '_probe' ->> 'provider';
     v_model    := NEW.payload -> '_probe' ->> 'model';
     v_session  := NEW.payload ->> 'session_id';
 
     IF NEW.status = 'error' THEN
+        -- #item2: a tool-bearing request that 400s/5xxs (the kimi failure) lands
+        -- here — the probe's whole point is to make that failure visible.
         v_usable := false;
         v_detail := 'auto-probe: dispatch error: '
                     || left(COALESCE(NEW.error, '(no error text)'), 240);
     ELSE
-        -- done: did content arrive over the streaming path?
-        SELECT content, finish_reason INTO v_content, v_finish
+        -- done: did the tool-bearing request produce a usable response? Read the
+        -- last assistant message. Success = real prose content OR a valid tool
+        -- call (auto tool_choice yields empty content + a tool_calls array, still
+        -- a dispatchable response). A bare ~2-char echo (the old false-positive)
+        -- fails the content floor and, absent a tool call, is marked unusable.
+        SELECT content, finish_reason, tool_calls
+          INTO v_content, v_finish, v_tool_calls
           FROM stewards.messages
          WHERE session_id = v_session AND role = 'assistant'
          ORDER BY id DESC LIMIT 1;
 
-        v_usable := length(trim(COALESCE(v_content, ''))) > 0;
+        v_has_tools := v_tool_calls IS NOT NULL
+                       AND jsonb_typeof(v_tool_calls) = 'array'
+                       AND jsonb_array_length(v_tool_calls) > 0;
+
+        v_usable := length(trim(COALESCE(v_content, ''))) >= 16 OR v_has_tools;
         IF v_usable THEN
-            v_detail := format('auto-probe: ok — %s content chars, finish=%s',
-                               length(v_content), COALESCE(v_finish, '(null)'));
-        ELSE
-            v_detail := format('auto-probe: streaming returned empty content (0 chars), finish=%s',
+            v_detail := format('auto-probe: ok — %s content chars%s, finish=%s',
+                               length(COALESCE(v_content, '')),
+                               CASE WHEN v_has_tools
+                                    THEN format(' + %s tool_call(s)', jsonb_array_length(v_tool_calls))
+                                    ELSE '' END,
                                COALESCE(v_finish, '(null)'));
+        ELSE
+            v_detail := format('auto-probe: no usable output (%s content chars, no tool_calls), finish=%s',
+                               length(COALESCE(v_content, '')), COALESCE(v_finish, '(null)'));
         END IF;
     END IF;
 
@@ -405,7 +459,7 @@ WHEN (NEW.status IN ('done', 'error')
 EXECUTE FUNCTION stewards.trigger_resolve_model_probe();
 
 COMMENT ON FUNCTION stewards.trigger_resolve_model_probe() IS
-'M.4: on a probe work_queue row reaching done/error, records the verdict into model_capability. error -> unusable; done+empty content -> unusable (streaming-empty); done+content -> usable. probed_via=auto-probe.';
+'M.4 (#item2): on a probe work_queue row reaching done/error, records the verdict into model_capability. error (incl. the tool-schema 400 the realistic probe now provokes) -> unusable; done with real prose content (>=16 chars) OR a valid tool_call -> usable; done with only a trivial/empty reply -> unusable. probed_via=auto-probe.';
 
 
 -- =====================================================================

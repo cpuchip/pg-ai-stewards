@@ -24,6 +24,27 @@
 -- Generic core; pairs with the page-in tools (33) for bounded source reads.
 -- =====================================================================
 
+-- ── provenance: tie a pooled doc back to the work item that produced it ──
+-- A pooled doc had no reliable link to its producing work item: docs.frontmatter
+-- .session stamps the FINALIZING caller's session, which for a loom/arc-c critic
+-- is the CRITIC's session (arc-c-*), not the wi--<uuid8> builder. Add a real FK-ish
+-- column. Chosen over a doc_provenance(slug, work_item_id) table because the
+-- provenance we need is "the work item that produced the CURRENTLY-pooled body":
+-- import_doc's ON CONFLICT(slug) DO UPDATE already models "latest producer wins"
+-- for the body, and a single column shares that lifecycle exactly (stamped
+-- alongside the body on each finalize). It answers both UI directions (this
+-- work item's doc / this doc's work item) without a join, and is losslessly
+-- supersedable by a history table later (backfill from the column) if an audit
+-- of every producer is ever needed. Lives here (not create_docs) because its
+-- meaning is defined by this subsystem — the same rationale as 03's
+-- last_consolidated_at. Nullable: pure-chat drafts have no wi-- producer.
+ALTER TABLE stewards.docs
+    ADD COLUMN IF NOT EXISTS work_item_id uuid;
+CREATE INDEX IF NOT EXISTS docs_work_item_id_idx
+    ON stewards.docs (work_item_id) WHERE work_item_id IS NOT NULL;
+COMMENT ON COLUMN stewards.docs.work_item_id IS
+'34: the work item whose pipeline built this doc (stamped by doc_finalize from the DRAFT''s creating wi--<uuid8> session, robust to a critic finalizing under a different arc-c-* session). NULL for pure-chat drafts. The reliable doc→work-item tie the frontmatter.session text could not give.';
+
 -- ── WIP drafts: the model's scratch artifact, keyed by its building session ──
 CREATE TABLE IF NOT EXISTS stewards.doc_drafts (
     handle      text PRIMARY KEY DEFAULT substr(md5(random()::text || clock_timestamp()::text), 1, 8),
@@ -178,6 +199,7 @@ DECLARE
     v_d      stewards.doc_drafts%ROWTYPE;
     v_doc_id text;
     v_proj   text;
+    v_wi     uuid;
 BEGIN
     IF v_sess IS NULL OR v_sess = '' THEN RETURN jsonb_build_object('error', 'no session context'); END IF;
     IF v_handle = '' THEN RETURN jsonb_build_object('error', 'handle required'); END IF;
@@ -190,17 +212,30 @@ BEGIN
     -- pool it (import_doc returns the doc id, not the slug)
     v_doc_id := stewards.import_doc(v_slug, '', v_d.title, v_d.body,
                     jsonb_build_object('built_by', 'doc-construction', 'session', v_sess), 'doc');
-    -- Project-tag the pooled doc so it is findable in the intent pool. Prefer the
-    -- draft's explicit project; else fall back to the WORK ITEM's project (a research
-    -- digest has no static project like a book does — its project comes from the
-    -- intent->project map on the work_item). The session is wi--<uuid8>--<stage>, so
-    -- the work item's id begins with that uuid8.
-    v_proj := nullif(btrim(coalesce(v_d.project, '')), '');
-    IF v_proj IS NULL AND left(v_sess, 4) = 'wi--' THEN
-        SELECT project_association INTO v_proj FROM stewards.work_items
-         WHERE left(id::text, 8) = split_part(v_sess, '--', 2)
-           AND project_association IS NOT NULL
+    -- Provenance: resolve the producing work item from the DRAFT's creating
+    -- session (wi--<uuid8>--<stage>), NOT the finalizing caller (v_sess). A
+    -- loom/arc-c critic finalizes under an arc-c-* session, so keying on the
+    -- caller silently missed BOTH the work_item link and the project tag for
+    -- every critic-finalized doc. The draft row carries the builder's session.
+    IF left(v_d.session_id, 4) = 'wi--' THEN
+        SELECT id INTO v_wi FROM stewards.work_items
+         WHERE left(id::text, 8) = split_part(v_d.session_id, '--', 2)
+         ORDER BY created_at DESC
          LIMIT 1;
+    END IF;
+    IF v_wi IS NOT NULL THEN
+        UPDATE stewards.docs SET work_item_id = v_wi WHERE slug = v_slug;
+    END IF;
+
+    -- Project-tag the pooled doc so it is findable in the intent pool. Prefer the
+    -- draft's explicit project; else fall back to the producing WORK ITEM's project
+    -- (a research digest has no static project like a book does — its project comes
+    -- from the intent->project map on the work_item). Resolved via v_wi above so it
+    -- works even when the finalizing caller is an out-of-band critic (same fix).
+    v_proj := nullif(btrim(coalesce(v_d.project, '')), '');
+    IF v_proj IS NULL AND v_wi IS NOT NULL THEN
+        SELECT project_association INTO v_proj FROM stewards.work_items
+         WHERE id = v_wi AND project_association IS NOT NULL;
     END IF;
     IF v_proj IS NOT NULL THEN
         UPDATE stewards.docs SET project_association = v_proj WHERE slug = v_slug;
@@ -211,7 +246,7 @@ BEGIN
         'note', 'pooled to the docs corpus and the draft cleared. Your chat reply now is the JOURNAL: what you read, chose, and produced.');
 END;
 $fn$;
-COMMENT ON FUNCTION stewards.doc_finalize_tool(jsonb) IS '34: pool a finished draft via import_doc + delete the draft.';
+COMMENT ON FUNCTION stewards.doc_finalize_tool(jsonb) IS '34: pool a finished draft via import_doc + delete the draft. Stamps docs.work_item_id (and the project tag) from the DRAFT''s wi--<uuid8> creating session, so the doc→work-item tie survives an arc-c/loom critic finalizing under a different session.';
 
 -- ── doc_current: find the active draft for THIS work item (cross-stage) ──
 -- A later stage (critic / publish) needs the handle of the draft an earlier
