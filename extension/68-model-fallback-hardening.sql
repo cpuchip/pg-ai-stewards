@@ -46,7 +46,11 @@ BEGIN
     -- Transient: any 5xx (incl. Cloudflare 52x), 408, 429/rate limits, network
     -- blips, and the common overload / "web server is down" phrasings. Provider
     -- issue, not a model-capability issue.
-    IF v_lower ~ '(408|429|rate.?limit|5[0-9][0-9]|network|connection (refused|reset)|temporarily unavailable|service unavailable|overloaded|web server (is down|returned|error))' THEN
+    -- #326 (2026-07-04): gateways (opencode.ai "Console Go") wrap a failed UPSTREAM
+    -- in an HTTP 400 — e.g. `Error from provider (Console Go): Upstream request
+    -- failed`. That is a transient upstream blip, NOT a malformed request, so match
+    -- the "upstream …" phrasing. Bare 400s (real client errors) stay non-transient.
+    IF v_lower ~ '(408|429|rate.?limit|5[0-9][0-9]|network|connection (refused|reset)|temporarily unavailable|service unavailable|overloaded|web server (is down|returned|error)|upstream (request )?(failed|error|unavailable|timeout))' THEN
         RETURN 'transient';
     END IF;
 
@@ -72,7 +76,7 @@ BEGIN
 END;
 $func$;
 COMMENT ON FUNCTION stewards.diagnose_failure(text, int) IS
-'68 (re-authors 32): classify a failure into (transient | timeout | model_limit | tool_error | unknown). Transient now ALSO covers a pulled/unloaded model — the rig''s 404 "no local slot or reachable peer serves model X" and cloud "model not found / no such model" — so alias failover walks to a live member instead of hard-failing when a model is taken offline.';
+'68 (re-authors 32): classify a failure into (transient | timeout | model_limit | tool_error | unknown). Transient covers a pulled/unloaded model — the rig''s 404 "no local slot or reachable peer serves model X" and cloud "model not found / no such model" — and (#326) a gateway-wrapped upstream 400 ("Error from provider (X): Upstream request failed") — so failover/retry engages on real upstream blips instead of hard-failing. Bare 400s stay non-transient.';
 
 -- ── §2 — the local MoE pair are mutual fallback members ─────────────
 -- Drop any prior ad-hoc routing of these aliases to a single local, then seed a

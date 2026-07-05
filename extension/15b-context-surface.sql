@@ -1775,6 +1775,13 @@ BEGIN
          ORDER BY created_at
          FOR UPDATE SKIP LOCKED
     LOOP
+      BEGIN  -- #330 (2026-07-04): per-row isolation. The promotion path calls
+             -- chat_post_internal → compose_messages, which RAISEs on a provider
+             -- spend cap. Without this sub-block that RAISE aborts the ENTIRE sweep
+             -- transaction — so ONE spend-capped stuck row rolled back EVERY
+             -- promotion, wedging all pipelines (opencode_zen cap hit → nothing on
+             -- any provider promoted for hours). Now a failing row marks ITSELF
+             -- error and the loop keeps promoting the healthy rows.
         resolved_arr := coalesce(parent_row.result -> 'resolved', '[]'::jsonb);
         pending_arr  := coalesce(parent_row.result -> 'pending',  '[]'::jsonb);
         all_done := true;
@@ -1889,6 +1896,21 @@ BEGIN
          WHERE id = parent_row.id;
 
         completed_n := completed_n + 1;
+      EXCEPTION WHEN OTHERS THEN
+        -- #330: this row's promotion failed (spend cap, dead session, bad
+        -- payload…). Roll it out of the batch by marking it error so it stops
+        -- poisoning the sweep, then continue — the other waiting rows still
+        -- promote. (A capped row is halted by design; refill + re-dispatch to resume.)
+        BEGIN
+            UPDATE stewards.work_queue
+               SET status  = 'error',
+                   error   = left('promotion failed (#330 per-row isolation): ' || SQLERRM, 2000),
+                   done_at = now()
+             WHERE id = parent_row.id;
+        EXCEPTION WHEN OTHERS THEN
+            NULL;  -- never let the isolator itself abort the sweep
+        END;
+      END;
     END LOOP;
 
     RETURN completed_n;

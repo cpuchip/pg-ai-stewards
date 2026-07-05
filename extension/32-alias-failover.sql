@@ -65,6 +65,8 @@ BEGIN
     -- Transient: any 5xx (incl. Cloudflare 52x), 408, 429/rate limits, network
     -- blips, and the common overload / "web server is down" phrasings. Provider
     -- issue, not a model-capability issue.
+    -- NOTE: 68-model-fallback-hardening.sql RE-AUTHORS this function (it is the
+    -- live authority). The #326 upstream-400 pattern lives THERE, not here.
     IF v_lower ~ '(408|429|rate.?limit|5[0-9][0-9]|network|connection (refused|reset)|temporarily unavailable|service unavailable|overloaded|web server (is down|returned|error))' THEN
         RETURN 'transient';
     END IF;
@@ -288,6 +290,29 @@ BEGIN
                         CONTINUE;
                     END IF;
                     -- no untried member left → fall through to pick_model.
+                ELSIF v_stage IS NOT NULL AND v_stage_model IS NOT NULL THEN
+                    -- #326: pinned concrete model on a stages-jsonb stage. No alias
+                    -- to walk, and pick_model RAISES for stages pipelines (no
+                    -- stage_models row) — so without this a transient provider blip
+                    -- (e.g. a gateway-wrapped upstream 400) gives the stage NO
+                    -- retry at all. Re-dispatch the SAME pinned stage; failure_count<3
+                    -- caps it, then it parks (a persistent outage escalates normally).
+                    UPDATE stewards.work_items
+                       SET failure_count = failure_count + 1
+                     WHERE id = v_item.id;
+                    v_dispatched_work_id := stewards.work_item_dispatch_stage(
+                        v_item.id, NULL, true);
+                    INSERT INTO stewards.steward_actions
+                        (work_item_id, observation, diagnosis, action, model_used, details)
+                    VALUES
+                        (v_item.id,
+                         format('pinned %s transient retry (attempt #%s after %s); work_id %s',
+                                v_stage_model, v_attempt, v_diagnosis, v_dispatched_work_id),
+                         v_diagnosis, 'pinned_retry', v_stage_model,
+                         jsonb_build_object('model', v_stage_model,
+                                            'dispatched_work_id', v_dispatched_work_id));
+                    v_count := v_count + 1;
+                    CONTINUE;
                 END IF;
             END IF;
 
@@ -390,7 +415,7 @@ END;
 $func$;
 
 COMMENT ON FUNCTION stewards.steward_tick() IS
-'Watch→Diagnose→Act→Account orchestration (32): per-item exception isolation; an ALIAS-FAILOVER branch walks a transient/timeout alias failure to its next untried member before pick_model (which raises for stages-jsonb pipelines); otherwise lessons-aware retry guidance + pick_model escalation. Returns count of actions taken. Called by the bgworker on tick.';
+'Watch→Diagnose→Act→Account orchestration (32): per-item exception isolation; an ALIAS-FAILOVER branch walks a transient/timeout alias failure to its next untried member before pick_model (which raises for stages-jsonb pipelines); #326 adds a PINNED-RETRY sibling branch — a transient/timeout failure on a pinned concrete-model stages-jsonb stage re-dispatches the same stage (failure_count<3 caps it) instead of getting no retry at all; otherwise lessons-aware retry guidance + pick_model escalation. Returns count of actions taken. Called by the bgworker on tick.';
 
 
 -- =====================================================================
