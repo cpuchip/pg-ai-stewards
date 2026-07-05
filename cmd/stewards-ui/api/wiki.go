@@ -2,36 +2,36 @@
 // (page list + page view), a wiki-scoped live graph, and a per-page local
 // (Obsidian-style) neighborhood graph.
 //
-// ★ Contract note (2026-07-03): 92 is a PARALLEL, not-yet-landed builder in
-// this same fleet run. As of this file's writing there is no
-// `extension/92-*.sql`, no `CREATE TABLE stewards.wiki_pages` anywhere in
-// this checkout. This file is written AGAINST 92's contract as specified by
-// the fleet brief, not against a schema this agent has seen:
+// ★ Contract note (2026-07-04, schema-drift fix): 92 landed as
+// extension/92-wiki.sql and the REAL schema differs from the fleet-brief
+// sketch this file was originally coded against. The guessed shape
+// (wikis(wiki_id, name), wiki_pages(page_id, wiki_id, ...), page_sources.doc)
+// 500'd every endpoint with `column ... does not exist`. The queries below
+// now target the schema that actually shipped (verified against both
+// extension/92-wiki.sql AND the live DB's information_schema):
 //
-//	stewards.wikis(wiki_id, slug, name, ...)
-//	stewards.wiki_members(wiki_id, ...)
-//	stewards.wiki_pages(page_id, wiki_id, slug, title, content, status,
-//	                     superseded_by, created_at, updated_at)
-//	stewards.page_links(from_page, to_slug, kind)   -- from_page = wiki_pages.page_id
-//	                                                 -- (the FK the link comes FROM);
-//	                                                 -- to_slug is a bare TEXT slug, not
-//	                                                 -- an FK, because the target may not
-//	                                                 -- exist yet (a "red link").
-//	stewards.page_sources(page_id, doc, chunk, quote, object)
-//	                                                 -- mirrors world_entities.source_refs'
-//	                                                 -- shape (doc/chunk/quote/object) since
-//	                                                 -- that's this codebase's one other
-//	                                                 -- "footnote to a real doc/asset" surface.
+//	stewards.wikis(id, slug, title, kind, scope, created_at)
+//	stewards.wiki_pages(id, slug, title, content, status, superseded_by,
+//	                    superseded_at, embedding, ..., created_at, updated_at)
+//	                    -- status CHECK: 'draft' | 'live' | 'superseded'
+//	                    -- NOTE: NO wiki_id column. A page's wiki membership is
+//	                    -- MANY-TO-MANY via wiki_members, not a direct FK.
+//	stewards.wiki_members(wiki_id, page_id, added_by, added_at)
+//	                    -- the join table: wiki_id -> wikis.id, page_id -> wiki_pages.id
+//	stewards.page_links(id, from_page, to_slug, kind, created_at)
+//	                    -- from_page = wiki_pages.id (the FK the link comes FROM);
+//	                    -- to_slug is a bare TEXT slug, not an FK, because the
+//	                    -- target may not exist yet (a "red link").
+//	stewards.page_sources(id, page_id, doc_id, chunk_ref, asset_id, kind, note, created_at)
+//	                    -- page_id -> wiki_pages.id; the source doc is doc_id (text).
 //
-// wiki_id/page_id follow this codebase's own naming convention
-// (world.go: world_id, entity_id) rather than a bare `id`.
+// The JSON response contracts to the frontend (WikiBrief.name, WikiPageDetail,
+// the graph node/edge shapes in api.ts) are UNCHANGED — the real column names
+// are aliased in SQL (title AS name, etc.) so no frontend type had to move.
 //
-// Every handler below gates on wikiSchemaAvailable() FIRST and returns a
-// clean `{"available": false}` when 92 hasn't landed in the DB this binary is
-// pointed at — never a 500. Once 92 lands, if any of the column-name guesses
-// above are wrong, the fix is local to this file (the SQL text), not the
-// contract or the frontend (which only reads `available` + the typed JSON
-// shape, both stable regardless of the underlying column names).
+// Every handler still gates on wikiSchemaAvailable() FIRST and returns a
+// clean `{"available": false}` when the wiki schema hasn't landed in the DB
+// this binary is pointed at — never a 500.
 package api
 
 import (
@@ -77,8 +77,8 @@ func (d *Deps) wikiWikisHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := d.Pool.Query(ctx, `
-		SELECT w.slug, coalesce(w.name, w.slug),
-		       (SELECT count(*) FROM stewards.wiki_pages p WHERE p.wiki_id = w.wiki_id) AS page_count
+		SELECT w.slug, coalesce(w.title, w.slug) AS name,
+		       (SELECT count(*) FROM stewards.wiki_members m WHERE m.wiki_id = w.id) AS page_count
 		  FROM stewards.wikis w
 		 ORDER BY w.slug`)
 	if err != nil {
@@ -115,10 +115,15 @@ func (d *Deps) wikiPagesHandler(w http.ResponseWriter, r *http.Request) {
 	wiki := strings.TrimSpace(q.Get("wiki"))
 	status := strings.TrimSpace(q.Get("status"))
 
+	// wiki membership is many-to-many (wiki_members), so filter by EXISTS
+	// rather than an inner join — an empty wiki filter returns every page
+	// exactly once (no duplicate rows for a page that belongs to >1 wiki).
 	sql := `SELECT p.slug, p.title, p.status, p.updated_at
 	          FROM stewards.wiki_pages p
-	          JOIN stewards.wikis w ON w.wiki_id = p.wiki_id
-	         WHERE ($1 = '' OR w.slug = $1)
+	         WHERE ($1 = '' OR EXISTS (
+	                  SELECT 1 FROM stewards.wiki_members m
+	                    JOIN stewards.wikis w ON w.id = m.wiki_id
+	                   WHERE m.page_id = p.id AND w.slug = $1))
 	           AND ($2 = '' OR p.status = $2)
 	         ORDER BY p.updated_at DESC NULLS LAST`
 	rows, err := d.Pool.Query(ctx, sql, wiki, status)
@@ -179,10 +184,20 @@ func (d *Deps) wikiPageHandler(w http.ResponseWriter, r *http.Request) {
 
 	var p wikiPageDetail
 	var superseded *string
+	// A page can belong to several wikis (many-to-many); surface one stable
+	// wiki slug for the header. superseded_by is a wiki_pages.id (uuid) — the
+	// frontend routes on it as a SLUG, so resolve it to the target's slug here.
 	err := d.Pool.QueryRow(ctx, `
-		SELECT p.slug, w.slug, p.title, p.content, p.status, p.superseded_by, p.updated_at
+		SELECT p.slug,
+		       coalesce((SELECT w.slug
+		                   FROM stewards.wiki_members m
+		                   JOIN stewards.wikis w ON w.id = m.wiki_id
+		                  WHERE m.page_id = p.id
+		                  ORDER BY w.slug LIMIT 1), '') AS wiki,
+		       p.title, p.content, p.status,
+		       (SELECT sb.slug FROM stewards.wiki_pages sb WHERE sb.id = p.superseded_by) AS superseded_by_slug,
+		       p.updated_at
 		  FROM stewards.wiki_pages p
-		  JOIN stewards.wikis w ON w.wiki_id = p.wiki_id
 		 WHERE p.slug = $1`, slug,
 	).Scan(&p.Slug, &p.Wiki, &p.Title, &p.Content, &p.Status, &superseded, &p.UpdatedAt)
 	if err != nil {
@@ -197,7 +212,7 @@ func (d *Deps) wikiPageHandler(w http.ResponseWriter, r *http.Request) {
 	orows, err := d.Pool.Query(ctx, `
 		SELECT pl.to_slug, coalesce(pl.kind, ''), tp.title
 		  FROM stewards.page_links pl
-		  JOIN stewards.wiki_pages sp ON sp.page_id = pl.from_page
+		  JOIN stewards.wiki_pages sp ON sp.id = pl.from_page
 		  LEFT JOIN stewards.wiki_pages tp ON tp.slug = pl.to_slug
 		 WHERE sp.slug = $1`, slug)
 	if err == nil {
@@ -219,7 +234,7 @@ func (d *Deps) wikiPageHandler(w http.ResponseWriter, r *http.Request) {
 	brows, err := d.Pool.Query(ctx, `
 		SELECT sp.slug, sp.title, coalesce(pl.kind, '')
 		  FROM stewards.page_links pl
-		  JOIN stewards.wiki_pages sp ON sp.page_id = pl.from_page
+		  JOIN stewards.wiki_pages sp ON sp.id = pl.from_page
 		 WHERE pl.to_slug = $1`, slug)
 	if err == nil {
 		defer brows.Close()
@@ -238,7 +253,7 @@ func (d *Deps) wikiPageHandler(w http.ResponseWriter, r *http.Request) {
 	srows, err := d.Pool.Query(ctx, `
 		SELECT ps.*
 		  FROM stewards.page_sources ps
-		  JOIN stewards.wiki_pages sp ON sp.page_id = ps.page_id
+		  JOIN stewards.wiki_pages sp ON sp.id = ps.page_id
 		 WHERE sp.slug = $1`, slug)
 	if err == nil {
 		defer srows.Close()
@@ -289,8 +304,10 @@ func (d *Deps) wikiGraphHandler(w http.ResponseWriter, r *http.Request) {
 	rows, err := d.Pool.Query(ctx, `
 		SELECT p.slug, p.title, p.status
 		  FROM stewards.wiki_pages p
-		  JOIN stewards.wikis w ON w.wiki_id = p.wiki_id
-		 WHERE $1 = '' OR w.slug = $1`, wiki)
+		 WHERE $1 = '' OR EXISTS (
+		         SELECT 1 FROM stewards.wiki_members m
+		           JOIN stewards.wikis w ON w.id = m.wiki_id
+		          WHERE m.page_id = p.id AND w.slug = $1)`, wiki)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -308,9 +325,11 @@ func (d *Deps) wikiGraphHandler(w http.ResponseWriter, r *http.Request) {
 	erows, err := d.Pool.Query(ctx, `
 		SELECT sp.slug, pl.to_slug, coalesce(pl.kind, '')
 		  FROM stewards.page_links pl
-		  JOIN stewards.wiki_pages sp ON sp.page_id = pl.from_page
-		  JOIN stewards.wikis w ON w.wiki_id = sp.wiki_id
-		 WHERE $1 = '' OR w.slug = $1`, wiki)
+		  JOIN stewards.wiki_pages sp ON sp.id = pl.from_page
+		 WHERE $1 = '' OR EXISTS (
+		         SELECT 1 FROM stewards.wiki_members m
+		           JOIN stewards.wikis w ON w.id = m.wiki_id
+		          WHERE m.page_id = sp.id AND w.slug = $1)`, wiki)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
@@ -330,11 +349,14 @@ func (d *Deps) wikiGraphHandler(w http.ResponseWriter, r *http.Request) {
 
 	if includeDocs {
 		drows, err := d.Pool.Query(ctx, `
-			SELECT sp.slug, ps.doc
+			SELECT sp.slug, ps.doc_id
 			  FROM stewards.page_sources ps
-			  JOIN stewards.wiki_pages sp ON sp.page_id = ps.page_id
-			  JOIN stewards.wikis w ON w.wiki_id = sp.wiki_id
-			 WHERE ($1 = '' OR w.slug = $1) AND ps.doc IS NOT NULL AND ps.doc <> ''`, wiki)
+			  JOIN stewards.wiki_pages sp ON sp.id = ps.page_id
+			 WHERE ps.doc_id IS NOT NULL AND ps.doc_id <> ''
+			   AND ($1 = '' OR EXISTS (
+			         SELECT 1 FROM stewards.wiki_members m
+			           JOIN stewards.wikis w ON w.id = m.wiki_id
+			          WHERE m.page_id = sp.id AND w.slug = $1))`, wiki)
 		if err == nil {
 			for drows.Next() {
 				var pageSlug, doc string
@@ -389,7 +411,7 @@ func (d *Deps) wikiLocalGraphHandler(w http.ResponseWriter, r *http.Request) {
 		rows, err := d.Pool.Query(ctx, `
 			SELECT sp.slug, pl.to_slug, coalesce(pl.kind, '')
 			  FROM stewards.page_links pl
-			  JOIN stewards.wiki_pages sp ON sp.page_id = pl.from_page
+			  JOIN stewards.wiki_pages sp ON sp.id = pl.from_page
 			 WHERE sp.slug = ANY($1) OR pl.to_slug = ANY($1)`, keys)
 		if err != nil {
 			writeErr(w, http.StatusInternalServerError, err.Error())
@@ -457,10 +479,11 @@ type wikiCreateStubResp struct {
 }
 
 // POST /api/wiki/page/stub — the red-link "create page?" action: a minimal
-// status='stub' row so the link resolves and the curator (92's digester) has
-// somewhere to fill content in later. Idempotent-ish: if the slug already
-// exists this just returns it (no error), since two clicks on the same red
-// link shouldn't fight.
+// status='draft' row (92's real status for "being built, not yet citable" —
+// there is no 'stub' status in the schema) so the link resolves and the
+// curator (92's digester) has somewhere to fill content in later. Idempotent:
+// if the slug already exists this just re-attaches it to the wiki and returns
+// it (no error), since two clicks on the same red link shouldn't fight.
 func (d *Deps) wikiCreateStubHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
@@ -487,11 +510,27 @@ func (d *Deps) wikiCreateStubHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	title := strings.ReplaceAll(slug, "-", " ")
+	// Real schema: wiki_pages has NO wiki_id column, and status is CHECK-
+	// constrained to ('draft','live','superseded') — 'stub' is not valid.
+	// A red-link stub maps to status='draft' (92's own meaning: "being built,
+	// not yet a citable page"). Membership is the separate wiki_members join.
+	// One CTE so it's atomic and idempotent: upsert-by-slug (DO UPDATE no-op so
+	// RETURNING always yields the id even when the page already exists), then
+	// attach it to the named wiki.
 	if _, err := d.Pool.Exec(ctx, `
-		INSERT INTO stewards.wiki_pages (wiki_id, slug, title, content, status)
-		SELECT w.wiki_id, $2, $3, '', 'stub'
-		  FROM stewards.wikis w WHERE w.slug = $1
-		ON CONFLICT (slug) DO NOTHING`, wiki, slug, title,
+		WITH target_wiki AS (
+		    SELECT id FROM stewards.wikis WHERE slug = $1
+		),
+		upserted AS (
+		    INSERT INTO stewards.wiki_pages (slug, title, content, status)
+		    VALUES ($2, $3, '', 'draft')
+		    ON CONFLICT (slug) DO UPDATE SET title = stewards.wiki_pages.title
+		    RETURNING id
+		)
+		INSERT INTO stewards.wiki_members (wiki_id, page_id, added_by)
+		SELECT tw.id, u.id, 'wiki_ui_stub'
+		  FROM target_wiki tw CROSS JOIN upserted u
+		ON CONFLICT (wiki_id, page_id) DO NOTHING`, wiki, slug, title,
 	); err != nil {
 		writeErr(w, http.StatusInternalServerError, "create stub: "+err.Error())
 		return
