@@ -1,9 +1,22 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from 'vue'
 import { useRoute, RouterLink } from 'vue-router'
+import MarkdownIt from 'markdown-it'
 import { api, type WorkItemDetail, type CostEventsResp, type StewardActionsResp, type GateDecisionsResp } from '@/api'
+import { parseStageResults } from '@/stageArtifacts'
 
 const route = useRoute()
+
+// Stage outputs are model-authored markdown. Rendered as escaped JSON they were
+// a wall of visible \n / \" — so each stage is now a titled, markdown-rendered
+// section (raw JSON stays one toggle away for debugging). Same MarkdownIt config
+// as StudyDetail / ArtifactPanel: no raw html, autolink, no hard breaks.
+const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
+const stageList = computed(() => parseStageResults(wi.value?.stage_results))
+const showRawStages = ref(false)
+function stageTitle(name: string) {
+  return name.charAt(0).toUpperCase() + name.slice(1).replace(/[_-]+/g, ' ')
+}
 const wi = ref<WorkItemDetail | null>(null)
 const cost = ref<CostEventsResp | null>(null)
 const actions = ref<StewardActionsResp | null>(null)
@@ -1148,11 +1161,44 @@ function errorCategoryInfo(cat?: string): { label: string; hint: string; budget:
       </section>
 
       <section
-        v-if="wi.stage_results"
+        v-if="wi.stage_results && stageList.length"
         class="rounded-md border border-zinc-800 bg-zinc-900/50 p-4"
       >
-        <div class="text-xs uppercase tracking-wide text-zinc-500 mb-2">Stage results</div>
-        <pre class="text-xs font-mono text-zinc-300 whitespace-pre-wrap overflow-auto max-h-96">{{ fmtJson(wi.stage_results) }}</pre>
+        <div class="flex items-center justify-between mb-3">
+          <div class="text-xs uppercase tracking-wide text-zinc-500">Stage results</div>
+          <button
+            class="text-[11px] text-zinc-400 hover:text-zinc-200 border border-zinc-800 rounded px-1.5 py-0.5"
+            :aria-pressed="showRawStages"
+            @click="showRawStages = !showRawStages"
+          >{{ showRawStages ? 'formatted' : 'raw JSON' }}</button>
+        </div>
+
+        <!-- raw JSON (debugging) — the original escaped dump, one toggle away -->
+        <pre v-if="showRawStages" class="text-xs font-mono text-zinc-300 whitespace-pre-wrap overflow-auto max-h-96">{{ fmtJson(wi.stage_results) }}</pre>
+
+        <!-- formatted: one titled, markdown-rendered section per stage. Long
+             outputs collapse behind an expander; short ones stay open. -->
+        <div v-else class="space-y-2">
+          <details
+            v-for="s in stageList"
+            :key="s.name"
+            :open="s.output.length < 1200"
+            class="rounded border border-zinc-800/80 bg-zinc-950/40 overflow-hidden"
+          >
+            <summary class="flex items-center gap-2 px-3 py-2 cursor-pointer select-none text-sm hover:bg-zinc-800/40">
+              <span class="font-medium text-zinc-200">{{ stageTitle(s.name) }}</span>
+              <span v-if="s.model" class="text-[11px] font-mono text-zinc-500">{{ s.model }}</span>
+              <span v-if="!s.hasOutput" class="text-[11px] text-amber-500/80">no output — raw</span>
+              <span class="ml-auto flex items-center gap-2 text-[11px] text-zinc-600 tabular-nums">
+                <span v-if="s.tokens_out != null">{{ s.tokens_out }} tok</span>
+                <span v-if="s.completed_at">{{ fmtDate(s.completed_at) }}</span>
+              </span>
+            </summary>
+            <div class="px-3 pb-3 pt-1 border-t border-zinc-800/60">
+              <div class="doc-theme prose prose-invert prose-sm max-w-none" v-html="md.render(s.output)"></div>
+            </div>
+          </details>
+        </div>
       </section>
 
       <section
