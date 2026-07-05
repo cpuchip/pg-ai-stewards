@@ -15,6 +15,7 @@ func (d *Deps) registerWorkItems(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/work-items/cost", d.workItemsCostHandler)
 	mux.HandleFunc("GET /api/work-items/actions", d.workItemsActionsHandler)
 	mux.HandleFunc("GET /api/work-items/gate-decisions", d.workItemsGateDecisionsHandler)
+	mux.HandleFunc("GET /api/work-items/produced-docs", d.workItemsProducedDocsHandler)
 	mux.HandleFunc("POST /api/work-items/set-file-destination", d.workItemsSetFileDestinationHandler)
 	mux.HandleFunc("POST /api/work-items/materialize-file", d.workItemsMaterializeFileHandler)
 	// H.3-followup: agent_planning proposal actions
@@ -378,6 +379,58 @@ func (d *Deps) workItemsActionsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	resp.Count = len(resp.Items)
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// =====================================================================
+// #item5 — produced docs: the doc(s) this work item's pipeline pooled.
+// =====================================================================
+// Uses the real provenance link (docs.work_item_id, stamped at doc_finalize —
+// see 34-doc-builder.sql) instead of scraping "pooled as `slug`" out of stage
+// prose. The frontend falls back to the text-scrape only when this returns none
+// (docs pooled before the column existed / by a path that left it NULL).
+
+type producedDocRow struct {
+	Slug  string `json:"slug"`
+	Title string `json:"title,omitempty"`
+	Kind  string `json:"kind,omitempty"`
+}
+
+type producedDocsResp struct {
+	Docs  []producedDocRow `json:"docs"`
+	Count int              `json:"count"`
+}
+
+func (d *Deps) workItemsProducedDocsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	id := r.URL.Query().Get("id")
+	if id == "" {
+		writeErr(w, http.StatusBadRequest, "id query param required")
+		return
+	}
+
+	resp := producedDocsResp{Docs: []producedDocRow{}}
+	rows, err := d.Pool.Query(ctx,
+		`SELECT slug, coalesce(title, ''), coalesce(kind, '')
+		   FROM stewards.docs
+		  WHERE work_item_id = $1::uuid
+		  ORDER BY updated_at DESC`,
+		id,
+	)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var p producedDocRow
+		if err := rows.Scan(&p.Slug, &p.Title, &p.Kind); err == nil {
+			resp.Docs = append(resp.Docs, p)
+		}
+	}
+	resp.Count = len(resp.Docs)
 	writeJSON(w, http.StatusOK, resp)
 }
 

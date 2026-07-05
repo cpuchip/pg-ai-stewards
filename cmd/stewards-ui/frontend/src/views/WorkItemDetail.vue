@@ -2,8 +2,8 @@
 import { ref, onMounted, watch, computed } from 'vue'
 import { useRoute, RouterLink } from 'vue-router'
 import MarkdownIt from 'markdown-it'
-import { api, type WorkItemDetail, type CostEventsResp, type StewardActionsResp, type GateDecisionsResp } from '@/api'
-import { parseStageResults } from '@/stageArtifacts'
+import { api, type WorkItemDetail, type CostEventsResp, type StewardActionsResp, type GateDecisionsResp, type ProducedDoc } from '@/api'
+import { parseStageResults, extractPooledSlugs } from '@/stageArtifacts'
 
 const route = useRoute()
 
@@ -21,6 +21,17 @@ const wi = ref<WorkItemDetail | null>(null)
 const cost = ref<CostEventsResp | null>(null)
 const actions = ref<StewardActionsResp | null>(null)
 const gateDecisions = ref<GateDecisionsResp | null>(null)
+const producedDocs = ref<ProducedDoc[]>([])
+
+// #item5: the doc(s) this run pooled, linked. Real provenance
+// (docs.work_item_id) is primary; fall back to the stage-prose text-scrape only
+// when the column is NULL (docs pooled before it existed / by a NULL-leaving path).
+const producedList = computed<{ slug: string; title?: string }[]>(() => {
+  if (producedDocs.value.length) {
+    return producedDocs.value.map((d) => ({ slug: d.slug, title: d.title }))
+  }
+  return extractPooledSlugs(wi.value?.stage_results).map((slug) => ({ slug }))
+})
 const error = ref<string>('')
 const loading = ref(false)
 
@@ -299,18 +310,21 @@ async function load(idOrSlug: string) {
   cost.value = null
   actions.value = null
   gateDecisions.value = null
+  producedDocs.value = []
   try {
     const detail = await api.workItemGet(idOrSlug)
     wi.value = detail
-    // Fire cost + actions + gate decisions in parallel; failures don't block the view
-    const [c, a, g] = await Promise.allSettled([
+    // Fire cost + actions + gate decisions + produced docs in parallel; failures don't block the view
+    const [c, a, g, p] = await Promise.allSettled([
       api.workItemCost(detail.id),
       api.workItemActions(detail.id),
       api.workItemGateDecisions(detail.id),
+      api.workItemProducedDocs(detail.id),
     ])
     if (c.status === 'fulfilled') cost.value = c.value
     if (a.status === 'fulfilled') actions.value = a.value
     if (g.status === 'fulfilled') gateDecisions.value = g.value
+    if (p.status === 'fulfilled') producedDocs.value = p.value.docs
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -1158,6 +1172,29 @@ function errorCategoryInfo(cat?: string): { label: string; hint: string; budget:
       <section class="rounded-md border border-zinc-800 bg-zinc-900/50 p-4">
         <div class="text-xs uppercase tracking-wide text-zinc-500 mb-2">Input</div>
         <pre class="text-xs font-mono text-zinc-300 whitespace-pre-wrap overflow-auto">{{ fmtJson(wi.input) }}</pre>
+      </section>
+
+      <!-- #item5: Produced — the doc(s) this run pooled. Real docs.work_item_id
+           provenance first; text-scrape fallback. Without this the full-page view
+           gave no way to reach the output; you had to hunt the Docs list. -->
+      <section
+        v-if="producedList.length"
+        class="rounded-md border border-zinc-800 bg-zinc-900/50 p-4"
+      >
+        <div class="text-xs uppercase tracking-wide text-zinc-500 mb-3">Produced</div>
+        <ul class="space-y-1.5">
+          <li v-for="doc in producedList" :key="doc.slug">
+            <RouterLink
+              :to="`/studies/${doc.slug}`"
+              class="group flex items-center gap-2 rounded border border-zinc-800 bg-zinc-950/40 px-2.5 py-2 hover:border-sky-700/60 hover:bg-sky-950/30"
+              :title="`open ${doc.slug}`"
+            >
+              <span class="text-sky-400">📄</span>
+              <span class="min-w-0 flex-1 truncate text-sm text-zinc-200 group-hover:text-sky-200">{{ doc.title || doc.slug }}</span>
+              <span class="shrink-0 text-[11px] text-zinc-600 group-hover:text-sky-400">open →</span>
+            </RouterLink>
+          </li>
+        </ul>
       </section>
 
       <section

@@ -36,17 +36,28 @@ export type ErrorBrief = {
   done_at?: string
 }
 
-// opts.timeoutMs — abort the fetch after N ms so a hung probe can't hold a
-// browser HTTP/1.1 connection open. Without it, a stalled endpoint (e.g. the
-// llama-chip rig probe) polled every few seconds saturates the ~6-connection
-// pool and starves the other endpoints until the browser gives up (minutes).
-// Default (no opts) preserves the old no-timeout behavior for every caller.
+// getJSON reads a JSON endpoint with a bounded timeout. A hung fetch otherwise
+// holds a browser HTTP/1.1 connection open, and a polled view (Bridge, Watchman,
+// Sessions, Scheduled, the Stewdio panels…) can saturate the ~6-connection pool
+// and stall every other endpoint for minutes if one hangs.
+//
+// The 5s timeout is now the DEFAULT for every read — getJSON is reads-only (all
+// mutations go through postJSON/putJSON/deleteJSON/raw fetch), so this can never
+// abort a legitimately long write like a chat send or doc build. Status/list/
+// detail reads are all indexed and well under 5s.
+//   opts.timeoutMs undefined → DEFAULT_GET_TIMEOUT_MS (5000)
+//   opts.timeoutMs === 0      → no timeout (opt-out; used by the heavy graph/
+//                               cosmos reads that build large node sets and can
+//                               legitimately run past 5s)
+//   opts.timeoutMs > 0        → that value
+const DEFAULT_GET_TIMEOUT_MS = 5000
 async function getJSON<T>(path: string, opts?: { timeoutMs?: number }): Promise<T> {
+  const timeoutMs = opts?.timeoutMs ?? DEFAULT_GET_TIMEOUT_MS
   let ctrl: AbortController | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
-  if (opts?.timeoutMs) {
+  if (timeoutMs > 0) {
     ctrl = new AbortController()
-    timer = setTimeout(() => ctrl!.abort(), opts.timeoutMs)
+    timer = setTimeout(() => ctrl!.abort(), timeoutMs)
   }
   try {
     const r = await fetch(path, ctrl ? { signal: ctrl.signal } : undefined)
@@ -62,7 +73,7 @@ async function getJSON<T>(path: string, opts?: { timeoutMs?: number }): Promise<
     }
     return r.json() as Promise<T>
   } catch (e) {
-    if (ctrl?.signal.aborted) throw new Error(`timeout after ${opts!.timeoutMs}ms`)
+    if (ctrl?.signal.aborted) throw new Error(`timeout after ${timeoutMs}ms`)
     throw e
   } finally {
     if (timer) clearTimeout(timer)
@@ -411,6 +422,10 @@ export const api = {
     getJSON<StewardActionsResp>(`/api/work-items/actions?id=${encodeURIComponent(id)}`),
   workItemGateDecisions: (id: string) =>
     getJSON<GateDecisionsResp>(`/api/work-items/gate-decisions?id=${encodeURIComponent(id)}`),
+  // #item5: the doc(s) this work item's pipeline pooled, via the real
+  // docs.work_item_id provenance link (not the stage-prose text-scrape).
+  workItemProducedDocs: (id: string) =>
+    getJSON<ProducedDocsResp>(`/api/work-items/produced-docs?id=${encodeURIComponent(id)}`),
   pipelinesList: () => getJSON<PipelinesListResp>('/api/pipelines/list'),
   // Stewdio P2: a pipeline's ordered stages (the "plan" for plan=progress).
   pipelineGet: (family: string) =>
@@ -610,15 +625,19 @@ export const api = {
     getJSON<PassDetailResp>(`/api/watchman/pass?id=${encodeURIComponent(passId)}`),
   bridgeState: () => getJSON<BridgeStateResp>('/api/bridge/state'),
   providers: () => getJSON<ProvidersResp>('/api/providers'),
+  // Graph/cosmos reads build large node+edge sets and can legitimately run past
+  // the 5s default — opt out with timeoutMs:0 (unbounded, as before). They are
+  // user-initiated one-shot loads, not polled, so they were never the pool-
+  // starvation risk the default timeout targets.
   graphStudiesCitations: (limit?: number) => {
     const q = limit ? `?limit=${limit}` : ''
-    return getJSON<GraphResp>(`/api/graph/studies-citations${q}`)
+    return getJSON<GraphResp>(`/api/graph/studies-citations${q}`, { timeoutMs: 0 })
   },
 
   // Loreworks World panel (Stewdio 3D knowledge graph).
   worldList: () => getJSON<{ items: WorldBrief[] }>('/api/world/list'),
   worldGraph: (slug: string, includeRefs = true, maxNodes = 0) =>
-    getJSON<WorldGraphResp>(`/api/world/graph?slug=${encodeURIComponent(slug)}${includeRefs ? '&include_refs=1' : ''}${maxNodes > 0 ? `&max_nodes=${maxNodes}` : ''}`),
+    getJSON<WorldGraphResp>(`/api/world/graph?slug=${encodeURIComponent(slug)}${includeRefs ? '&include_refs=1' : ''}${maxNodes > 0 ? `&max_nodes=${maxNodes}` : ''}`, { timeoutMs: 0 }),
   worldNode: (slug: string, id: number) =>
     getJSON<WorldNodeDetail>(`/api/world/node?slug=${encodeURIComponent(slug)}&id=${id}`),
   // Cosmos (cross-service) view: worlds as nodes, cross_world_edges as links,
@@ -628,7 +647,7 @@ export const api = {
     if (project && project !== 'all') q.set('project', project)
     if (includeDocs) q.set('include_docs', '1')
     const qs = q.toString()
-    return getJSON<CosmosResp>(`/api/world/cosmos${qs ? `?${qs}` : ''}`)
+    return getJSON<CosmosResp>(`/api/world/cosmos${qs ? `?${qs}` : ''}`, { timeoutMs: 0 })
   },
 
   // Wiki reader + graph.
@@ -647,10 +666,10 @@ export const api = {
     if (wiki) q.set('wiki', wiki)
     if (includeDocs) q.set('include_docs', '1')
     const qs = q.toString()
-    return getJSON<WikiGraphResp>(`/api/wiki/graph${qs ? `?${qs}` : ''}`)
+    return getJSON<WikiGraphResp>(`/api/wiki/graph${qs ? `?${qs}` : ''}`, { timeoutMs: 0 })
   },
   wikiLocalGraph: (slug: string, hops = 2) =>
-    getJSON<WikiGraphResp>(`/api/wiki/local-graph?slug=${encodeURIComponent(slug)}&hops=${hops}`),
+    getJSON<WikiGraphResp>(`/api/wiki/local-graph?slug=${encodeURIComponent(slug)}&hops=${hops}`, { timeoutMs: 0 }),
   wikiCreateStub: async (slug: string, wiki?: string): Promise<{ slug: string }> => {
     const r = await fetch('/api/wiki/page/stub', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1473,6 +1492,17 @@ export type GateDecisionRow = {
 
 export type GateDecisionsResp = {
   items: GateDecisionRow[]
+  count: number
+}
+
+// #item5: docs a work item's pipeline pooled (real docs.work_item_id provenance).
+export type ProducedDoc = {
+  slug: string
+  title?: string
+  kind?: string
+}
+export type ProducedDocsResp = {
+  docs: ProducedDoc[]
   count: number
 }
 
