@@ -1,6 +1,6 @@
 # Proposal: the war-game pipeline (prospective failure simulation)
 
-**Status:** draft, 2026-07-05. Source: `study/yt/nuwlyQXrADg-war-gaming-plans-into-executables.md`.
+**Status:** ★ RATIFIED 2026-07-05 (Michael) — ready to build. Source: `study/yt/nuwlyQXrADg-war-gaming-plans-into-executables.md`.
 **One line:** before a big/risky/expensive work item executes, run a strong model to *war-game* it — produce a move-by-move artifact of expected observations, failure signals, countermoves, fork triggers, unresolved assumptions, and abort conditions — then execute with those guardrails materialized as real gate checks and `route_on` edges.
 
 ## Why (the gap)
@@ -48,11 +48,17 @@ The `war-game` **mechanism** (the pipeline shape, the JSON contract, the abort/f
 - Static markdown-in-a-folder — that's the artisanal ceiling; our live control flow is the point.
 - "Tailor the war-game to a specific executor model's system card" — we abstract over models via aliases; the war-game stays model-agnostic, routing owns model choice.
 
-## Open questions for Michael
+## Ratified (2026-07-05, Michael)
 
-1. **Scope of W1 seeding** — core (generic wargame agent) vs a workspace war-game with domain-tuned prompts? (Lean: core mechanism, `*` agent.)
-2. **Trigger** — war-game every work item above a cost/risk threshold automatically, or only when explicitly requested (a `war_game: true` flag on start_task / a Stewdio toggle)? (Lean: opt-in flag first, threshold-auto later.)
-3. **W2's abort-materialization** reuses the spiral-oracle / gate machinery — is that the right home, or a new `work_item_abort_conditions` surface?
+1. **Trigger → OPT-IN.** War-game only when explicitly requested — a `war_game: true` flag on `start_task` (and a Stewdio toggle). NOT every work item, NOT a cost/risk auto-threshold (that can come later as an additive default, not a v1 requirement). Deliberate and cheap.
+2. **Scope → CORE.** The base `wargame` agent seeds in the **core** chain with `model_match = '*'` — pure mechanism (the move/observation/countermove/abort structure), not domain content, so it belongs in core alongside `research`/`dev`. Domain-tuned war-game prompts would be a workspace override later; v1 is one generic core agent.
+3. **Abort-materialization → REUSE.** W2 wires abort conditions through the **existing spiral-oracle / gate surface** and forks through the **existing `route_on`** — NO new `work_item_abort_conditions` table. Fewer moving parts; the abort/fork/assumption outputs map onto surfaces already run each turn.
+
+### Build shape (ready to pick up)
+- **W1** (small, demoable): new core chain file seeding the `war-game` pipeline (`wargame` [loom] → optional `critique` [loom]) + the generic core `wargame` agent (`*`); `start_task`/dispatch honors the `war_game: true` flag; the strong stage emits prose + a fenced ```json``` block; a `war_game jsonb` column on `work_items` holds the parsed block. Oracle: a flagged run completes, the JSON parses to ≥1 move-with-countermove and ≥1 abort, the critique names a gap or declares it sound.
+- **W2** (the differentiator, follow-on): inject the war-game into executor `input_template`s; translate `aborts[]` → gate/spiral checks the bgworker evaluates each turn (→ `awaiting_review` with the abort reason), `forks[]` → `route_on` edges, unresolved `assumptions[]` → `ask_up` entries surfaced BEFORE execution. Stays a prior; the reactive failover (#243/#326) remains the backstop.
+
+The Fable-window use (war-game D2A/D3C/multi-tenancy) rides W1 the moment it exists.
 
 ## Fable-window tie-in
 
