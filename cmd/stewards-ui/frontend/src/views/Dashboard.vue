@@ -115,6 +115,14 @@ function fmtUSD(micro: number) {
   return '$' + ((micro || 0) / 1e6).toFixed(4)
 }
 
+// First-load placeholders: before any response arrives, a tile must read as a
+// neutral "loading" state — never "down"/"paused"/"offline" synthesized from
+// still-empty data. dashReady gates the /api/dashboard tiles (pg, soak);
+// rigReady gates the local-rig header. Once a response (or a real error) has
+// landed, the tiles fall back to their live values.
+const dashReady = computed(() => data.value !== null)
+const rigReady = computed(() => rig.value !== null || !!rigErr.value)
+
 const inFlightCount = computed(() => data.value?.in_flight?.length ?? 0)
 const errorCount = computed(() => data.value?.recent_errors?.length ?? 0)
 const activeWork = computed(() => activity.value?.active ?? [])
@@ -147,9 +155,11 @@ const byProvider = computed(() => activity.value?.by_provider ?? [])
         <div class="flex items-center gap-2">
           <span
             class="inline-block w-2 h-2 rounded-full"
-            :class="data?.pg.ok ? 'bg-emerald-500' : 'bg-red-500'"
+            :class="!dashReady ? 'bg-zinc-600 animate-pulse' : (data?.pg.ok ? 'bg-emerald-500' : 'bg-red-500')"
           ></span>
-          <span class="text-lg font-semibold">{{ data?.pg.ok ? 'healthy' : 'down' }}</span>
+          <span class="text-lg font-semibold">
+            {{ !dashReady ? 'loading…' : (data?.pg.ok ? 'healthy' : 'down') }}
+          </span>
         </div>
         <div v-if="data?.pg.error" class="text-xs text-red-400 mt-1">
           {{ data.pg.error }}
@@ -162,10 +172,10 @@ const byProvider = computed(() => activity.value?.by_provider ?? [])
         <div class="flex items-center gap-2">
           <span
             class="inline-block w-2 h-2 rounded-full"
-            :class="data?.soak.schedule_enabled ? 'bg-emerald-500' : 'bg-zinc-600'"
+            :class="!dashReady ? 'bg-zinc-600 animate-pulse' : (data?.soak.schedule_enabled ? 'bg-emerald-500' : 'bg-zinc-600')"
           ></span>
           <span class="text-lg font-semibold">
-            {{ data?.soak.schedule_enabled ? 'on' : 'paused' }}
+            {{ !dashReady ? 'loading…' : (data?.soak.schedule_enabled ? 'on' : 'paused') }}
           </span>
         </div>
         <div class="text-xs text-zinc-400 mt-1">
@@ -197,13 +207,14 @@ const byProvider = computed(() => activity.value?.by_provider ?? [])
       <div class="px-4 py-3 border-b border-zinc-800 flex items-center gap-2">
         <span
           class="inline-block w-2 h-2 rounded-full"
-          :class="rig?.llamachip_up ? 'bg-emerald-500' : 'bg-red-500'"
+          :class="!rigReady ? 'bg-zinc-600 animate-pulse' : (rig?.llamachip_up ? 'bg-emerald-500' : 'bg-red-500')"
         ></span>
         <h3 class="text-sm font-semibold">Local rig — llama-chip</h3>
         <span class="text-xs text-zinc-500">
-          {{ rig?.llamachip_up ? `${rigModelsLoaded} model(s) loaded` : 'offline' }}
+          {{ !rigReady ? 'connecting…' : (rig?.llamachip_up ? `${rigModelsLoaded} model(s) loaded` : 'offline') }}
         </span>
         <span
+          v-if="rigReady"
           class="ml-auto text-xs px-2 py-0.5 rounded"
           :class="rig?.autonomy_paused ? 'bg-amber-900/40 text-amber-300' : 'bg-emerald-900/40 text-emerald-300'"
         >autonomy {{ rig?.autonomy_paused ? 'paused' : 'running' }}</span>

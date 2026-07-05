@@ -36,19 +36,37 @@ export type ErrorBrief = {
   done_at?: string
 }
 
-async function getJSON<T>(path: string): Promise<T> {
-  const r = await fetch(path)
-  if (!r.ok) {
-    let msg = `HTTP ${r.status}`
-    try {
-      const body = await r.json()
-      if (body && typeof body.error === 'string') msg = body.error
-    } catch {
-      /* ignore */
-    }
-    throw new Error(msg)
+// opts.timeoutMs — abort the fetch after N ms so a hung probe can't hold a
+// browser HTTP/1.1 connection open. Without it, a stalled endpoint (e.g. the
+// llama-chip rig probe) polled every few seconds saturates the ~6-connection
+// pool and starves the other endpoints until the browser gives up (minutes).
+// Default (no opts) preserves the old no-timeout behavior for every caller.
+async function getJSON<T>(path: string, opts?: { timeoutMs?: number }): Promise<T> {
+  let ctrl: AbortController | undefined
+  let timer: ReturnType<typeof setTimeout> | undefined
+  if (opts?.timeoutMs) {
+    ctrl = new AbortController()
+    timer = setTimeout(() => ctrl!.abort(), opts.timeoutMs)
   }
-  return r.json() as Promise<T>
+  try {
+    const r = await fetch(path, ctrl ? { signal: ctrl.signal } : undefined)
+    if (!r.ok) {
+      let msg = `HTTP ${r.status}`
+      try {
+        const body = await r.json()
+        if (body && typeof body.error === 'string') msg = body.error
+      } catch {
+        /* ignore */
+      }
+      throw new Error(msg)
+    }
+    return r.json() as Promise<T>
+  } catch (e) {
+    if (ctrl?.signal.aborted) throw new Error(`timeout after ${opts!.timeoutMs}ms`)
+    throw e
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 export type StudyBrief = {
@@ -189,9 +207,11 @@ async function rigPost(path: string): Promise<{ status?: string; autonomy_paused
 }
 
 export const api = {
-  dashboard: () => getJSON<DashboardResp>('/api/dashboard'),
-  activity: () => getJSON<ActivityResp>('/api/activity'),
-  rigState: () => getJSON<RigState>('/api/rig/state'),
+  // Polled dashboard probes carry a 5s abort so one hung endpoint (the rig
+  // probe in particular) can't hold connections and stall the whole page.
+  dashboard: () => getJSON<DashboardResp>('/api/dashboard', { timeoutMs: 5000 }),
+  activity: () => getJSON<ActivityResp>('/api/activity', { timeoutMs: 5000 }),
+  rigState: () => getJSON<RigState>('/api/rig/state', { timeoutMs: 5000 }),
   rigBrainOn: () => rigPost('/api/rig/brain-on'),
   rigBrainOff: () => rigPost('/api/rig/brain-off'),
   rigAutonomy: async (paused: boolean): Promise<{ autonomy_paused: boolean }> => {
@@ -1812,7 +1832,7 @@ export const scheduledApi = {
   remove: (id: string) =>
     deleteJSON<{ deleted: string }>(`/api/scheduled/delete?id=${encodeURIComponent(id)}`),
   recentRuns: (limit = 7) =>
-    getJSON<ScheduledRunsResp>(`/api/scheduled/recent-runs?limit=${limit}`),
+    getJSON<ScheduledRunsResp>(`/api/scheduled/recent-runs?limit=${limit}`, { timeoutMs: 5000 }),
 }
 
 // The tool-effect gate (84) "Needs you" tray: dangerous tool calls the

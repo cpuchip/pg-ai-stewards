@@ -112,10 +112,12 @@ const pageErr = ref('')
 const creatingSlug = ref('')
 const creating = ref(false)
 
+// Statuses match the DB CHECK constraint (extension/92-wiki.sql):
+// status IN ('draft','live','superseded'), default 'live'. 'published'/'stub'
+// were never valid values, so they had no reachable badge — dropped.
 const STATUS_BADGE: Record<string, string> = {
-  published: 'text-emerald-300 border-emerald-700/60 bg-emerald-900/20',
+  live: 'text-emerald-300 border-emerald-700/60 bg-emerald-900/20',
   draft: 'text-sky-300 border-sky-700/60 bg-sky-900/20',
-  stub: 'text-zinc-400 border-zinc-700 bg-zinc-900/40 border-dashed',
   superseded: 'text-rose-300 border-rose-700/60 bg-rose-900/20',
 }
 const statusBadge = (s: string) => STATUS_BADGE[s] ?? 'text-zinc-400 border-zinc-700 bg-zinc-900/40'
@@ -203,9 +205,8 @@ watch(() => route.name, (n) => { if (n === 'wiki' && !pageSlug.value) loadPages(
       <select v-if="mode === 'pages' && !pageSlug" v-model="statusFilter"
               class="bg-zinc-900/80 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-400 ml-auto">
         <option value="">any status</option>
-        <option value="published">published</option>
+        <option value="live">live</option>
         <option value="draft">draft</option>
-        <option value="stub">stub</option>
         <option value="superseded">superseded</option>
       </select>
     </div>
