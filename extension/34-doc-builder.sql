@@ -49,15 +49,26 @@ COMMENT ON TABLE stewards.doc_drafts IS
 -- isolated across different work items and from persona/chat sessions (which use
 -- a different id shape → exact-match only). The handle is a random PK, so this is
 -- a scoping convenience, not the security boundary.
+--
+-- arc-c- callers (ratified 2026-07-04): the Arc C HTTP MCP surface mints
+-- `arc-c-<hex>` sessions per connection (cmd/stewards-mcp/http.go). An
+-- out-of-band reviewer reached through it — e.g. a loom-hosted critique stage
+-- finalizing the build stage's draft — can never share a wi-- prefix, so
+-- without this branch the whole narrow-write surface (doc_read/patch/finalize
+-- by handle) is unusable for drafts it didn't create. For arc-c callers the
+-- HANDLE is the capability: every call site already filters `handle = <given>`,
+-- and the surface itself sits behind the bearer token (localhost wall). In-band
+-- sessions (wi--/chat/persona) keep the strict scoping above.
 CREATE OR REPLACE FUNCTION stewards.doc_draft_session_match(p_draft_session text, p_caller_session text)
 RETURNS boolean LANGUAGE sql IMMUTABLE AS $fn$
     SELECT p_draft_session = p_caller_session
         OR ( left(p_draft_session, 4) = 'wi--'
              AND left(p_caller_session, 4) = 'wi--'
-             AND split_part(p_draft_session, '--', 2) = split_part(p_caller_session, '--', 2) );
+             AND split_part(p_draft_session, '--', 2) = split_part(p_caller_session, '--', 2) )
+        OR left(p_caller_session, 6) = 'arc-c-';
 $fn$;
 COMMENT ON FUNCTION stewards.doc_draft_session_match(text, text) IS
-'34: true if a draft session belongs to the same work item (wi--<uuid8>) as the caller, or is the exact same session. Lets a draft built in one stage be reached by a later stage of the same run.';
+'34: true if a draft session belongs to the same work item (wi--<uuid8>) as the caller, the exact same session, or the caller is the token-authed Arc C HTTP surface (arc-c-*, handle-as-capability — every call site filters by handle). Lets a draft built in one stage be reached by a later stage of the same run, or by an out-of-band reviewer that was handed the handle.';
 
 -- ── doc_create: start a draft (outline-first, for coherence) ──────────
 CREATE OR REPLACE FUNCTION stewards.doc_create_tool(p_args jsonb)
