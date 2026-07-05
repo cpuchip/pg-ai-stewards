@@ -619,6 +619,12 @@ BEGIN
     UPDATE stewards.work_items
        SET status     = 'failed',
            error      = p_error,
+           -- #326 root (2026-07-05): steward_tick/diagnose_failure read
+           -- last_failure_reason, but this path only wrote `error` — so every
+           -- chat-dispatch failure (e.g. a provider-wrapped upstream 400) was
+           -- INVISIBLE to the whole failover/retry machinery: diagnosis ran on
+           -- NULL → 'unknown' → no transient retry, ever. Record both.
+           last_failure_reason = p_error,
            updated_at = now()
      WHERE id = p_work_item_id
        AND status NOT IN ('completed', 'cancelled');
