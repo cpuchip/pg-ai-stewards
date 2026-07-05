@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import { requestSearchFocus } from '@/searchShortcut'
 
@@ -24,6 +24,9 @@ function onGlobalKeydown(e: KeyboardEvent) {
 onMounted(() => window.addEventListener('keydown', onGlobalKeydown))
 onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 
+// Close any open nav dropdown (mobile sheet or desktop "More") on navigation.
+watch(() => route.fullPath, () => { navOpen.value = false; moreOpen.value = false })
+
 // Mobile nav (mobile-usability P1, 2026-07-03). The full ~19-tab inline row
 // has no wrap and no width cap, so on a phone it forced the whole document
 // wider than the viewport — the "zoomed out / desktop mode" Michael saw isn't
@@ -35,6 +38,43 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKeydown))
 // (Stewdio, Work items, Studies, Models) since a phone user is there to
 // answer/chat, not operate the full cockpit.
 const navOpen = ref(false)
+
+// Tablet/small-desktop nav overflow (2026-07-05). The full ~21-tab inline row
+// is ~1335px wide, so from md (768) up to a wide desktop it overran the header —
+// "Trust" clipped, Councils/Projects/Models fell off, and the page grew a
+// horizontal scrollbar at 1280. The mobile hamburger only covers <768. So in
+// the md–wide band we now show a small load-bearing PRIMARY row inline and fold
+// the rest into a "More ▾" dropdown (the same toggle+absolute-panel idiom as the
+// mobile sheet and AttentionBell). Only on a genuinely wide viewport (≥1600,
+// where the full row fits with headroom) does the whole set return inline.
+const moreOpen = ref(false)
+const PRIMARY_LINKS = [
+  { to: '/', label: 'Dashboard' },
+  { to: '/stewdio', label: 'Stewdio', accent: true },
+  { to: '/search', label: 'Search' },
+  { to: '/studies', label: 'Studies' },
+  { to: '/work-items', label: 'Work items' },
+  { to: '/models', label: 'Models' },
+]
+const SECONDARY_LINKS = [
+  { to: '/sessions', label: 'Sessions' },
+  { to: '/watchman', label: 'Watchman' },
+  { to: '/scheduled', label: 'Scheduled' },
+  { to: '/bridge', label: 'Bridge' },
+  { to: '/graph', label: 'Graph' },
+  { to: '/wiki', label: 'Wiki' },
+  { to: '/new', label: 'New work' },
+  { to: '/brainstorm', label: 'Brainstorm' },
+  { to: '/intents', label: 'Intents' },
+  { to: '/covenants', label: 'Covenant' },
+  { to: '/sabbath', label: 'Sabbath' },
+  { to: '/lessons', label: 'Lessons' },
+  { to: '/trust', label: 'Trust' },
+  { to: '/councils', label: 'Councils' },
+  { to: '/projects', label: 'Projects' },
+]
+// Mobile hamburger sheet keeps its own curated order (Stewdio first — a phone
+// user is there to answer/chat, not operate the full cockpit).
 const NAV_LINKS = [
   { to: '/stewdio', label: 'Stewdio' },
   { to: '/search', label: 'Search' },
@@ -67,30 +107,39 @@ const NAV_LINKS = [
     <header class="border-b border-zinc-800 px-4 md:px-6 py-3 flex items-center gap-4 md:gap-6 shrink-0">
       <h1 class="text-lg font-semibold tracking-tight shrink-0">stewards-ui</h1>
 
-      <!-- desktop/tablet: the full inline nav, unchanged -->
-      <nav class="hidden md:flex gap-4 text-sm text-zinc-400">
-        <RouterLink to="/" class="hover:text-zinc-100">Dashboard</RouterLink>
-        <RouterLink to="/stewdio" class="hover:text-zinc-100 text-sky-400">Stewdio</RouterLink>
-        <RouterLink to="/search" class="hover:text-zinc-100">Search</RouterLink>
-        <RouterLink to="/studies" class="hover:text-zinc-100">Studies</RouterLink>
-        <RouterLink to="/work-items" class="hover:text-zinc-100">Work items</RouterLink>
-        <RouterLink to="/sessions" class="hover:text-zinc-100">Sessions</RouterLink>
-        <RouterLink to="/watchman" class="hover:text-zinc-100">Watchman</RouterLink>
-        <RouterLink to="/scheduled" class="hover:text-zinc-100">Scheduled</RouterLink>
-        <RouterLink to="/bridge" class="hover:text-zinc-100">Bridge</RouterLink>
-        <RouterLink to="/graph" class="hover:text-zinc-100">Graph</RouterLink>
-        <RouterLink to="/wiki" class="hover:text-zinc-100">Wiki</RouterLink>
-        <RouterLink to="/new" class="hover:text-zinc-100">New work</RouterLink>
-        <RouterLink to="/brainstorm" class="hover:text-zinc-100">Brainstorm</RouterLink>
-        <span class="text-zinc-700">|</span>
-        <RouterLink to="/intents" class="hover:text-zinc-100">Intents</RouterLink>
-        <RouterLink to="/covenants" class="hover:text-zinc-100">Covenant</RouterLink>
-        <RouterLink to="/sabbath" class="hover:text-zinc-100">Sabbath</RouterLink>
-        <RouterLink to="/lessons" class="hover:text-zinc-100">Lessons</RouterLink>
-        <RouterLink to="/trust" class="hover:text-zinc-100">Trust</RouterLink>
-        <RouterLink to="/councils" class="hover:text-zinc-100">Councils</RouterLink>
-        <RouterLink to="/projects" class="hover:text-zinc-100">Projects</RouterLink>
-        <RouterLink to="/models" class="hover:text-zinc-100">Models</RouterLink>
+      <!-- desktop/tablet: load-bearing primary row + a "More ▾" overflow. The
+           secondary links show inline only when the viewport is wide enough for
+           the whole set (≥1600); below that they live in the dropdown so the
+           header never overflows. -->
+      <nav class="hidden md:flex items-center gap-4 text-sm text-zinc-400">
+        <RouterLink
+          v-for="l in PRIMARY_LINKS" :key="l.to" :to="l.to"
+          class="hover:text-zinc-100 whitespace-nowrap" :class="l.accent ? 'text-sky-400' : ''"
+        >{{ l.label }}</RouterLink>
+
+        <!-- secondary: inline on a genuinely wide viewport… -->
+        <RouterLink
+          v-for="l in SECONDARY_LINKS" :key="`inline-${l.to}`" :to="l.to"
+          class="hidden min-[1600px]:inline hover:text-zinc-100 whitespace-nowrap"
+        >{{ l.label }}</RouterLink>
+
+        <!-- …otherwise folded behind More -->
+        <div class="relative min-[1600px]:hidden">
+          <button
+            class="hover:text-zinc-100 whitespace-nowrap"
+            :aria-expanded="moreOpen" aria-label="more navigation"
+            @click="moreOpen = !moreOpen"
+          >More ▾</button>
+          <nav
+            v-if="moreOpen"
+            class="absolute right-0 top-full mt-2 w-48 max-h-[70vh] overflow-y-auto rounded border border-zinc-800 bg-zinc-900 shadow-xl z-50 py-1"
+          >
+            <RouterLink
+              v-for="l in SECONDARY_LINKS" :key="`more-${l.to}`" :to="l.to" @click="moreOpen = false"
+              class="block px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+            >{{ l.label }}</RouterLink>
+          </nav>
+        </div>
       </nav>
 
       <!-- mobile: hamburger -> dropdown sheet -->
