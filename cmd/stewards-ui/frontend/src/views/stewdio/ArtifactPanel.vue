@@ -8,6 +8,7 @@ import MarkdownIt from 'markdown-it'
 import { api, type StudyDetail, type WorkItemDetail, type AttachmentMeta, type ObjectPage } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
 import { makeLinkClick } from './useDocLinks'
+import { extractPooledSlugs } from '@/stageArtifacts'
 import SourcesPulledPanel from '../wiki/SourcesPulledPanel.vue'
 
 defineOptions({ inheritAttrs: false })
@@ -88,6 +89,14 @@ function stageState(name: string): 'done' | 'active' | 'pending' {
   if (wi.value?.current_stage === name && !terminal(wi.value?.status)) return 'active'
   return 'pending'
 }
+
+// A completed run that pooled a doc announces it in a stage's JOURNAL prose
+// ("…pooled as `slug`"). Surface those as openable artifact cards so the
+// produced doc isn't stranded in the Docs list — the plan checklist alone left
+// this panel an empty void once a run finished. Text-derived: there is no
+// docs→work_item link in the schema (see stageArtifacts.ts for why).
+const producedSlugs = computed(() => extractPooledSlugs(wi.value?.stage_results))
+function openProduced(slug: string) { store.select(slug, 'doc', slug) }
 
 async function refreshWorkItem(id: string) {
   try {
@@ -225,6 +234,26 @@ onUnmounted(stopPoll)
         </li>
         <li v-if="!stages.length" class="text-zinc-600 text-xs">no stage plan<span v-if="store.dev"> for {{ wi.pipeline }}</span></li>
       </ol>
+
+      <!-- Produced artifact(s): the doc(s) this run pooled. Without this the
+           panel showed the plan checklist and nothing else once a run finished,
+           and the output had to be hunted in the Docs list. Click → open it here. -->
+      <template v-if="producedSlugs.length">
+        <div class="text-zinc-500 text-[11px] uppercase tracking-wide mb-2">Produced</div>
+        <ul class="space-y-1.5 mb-4">
+          <li v-for="slug in producedSlugs" :key="slug">
+            <button
+              class="group flex w-full items-center gap-2 rounded border border-zinc-800 bg-zinc-900/40 px-2.5 py-2 text-left hover:border-sky-700/60 hover:bg-sky-950/30"
+              :title="`open ${slug}`"
+              @click="openProduced(slug)"
+            >
+              <span class="text-sky-400">📄</span>
+              <span class="min-w-0 flex-1 truncate text-sm text-zinc-200 group-hover:text-sky-200">{{ slug }}</span>
+              <span class="shrink-0 text-[11px] text-zinc-600 group-hover:text-sky-400">open →</span>
+            </button>
+          </li>
+        </ul>
+      </template>
 
       <details v-if="store.dev && wi.input" class="text-xs">
         <summary class="text-zinc-500 cursor-pointer">input</summary>
