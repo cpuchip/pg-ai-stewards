@@ -247,6 +247,41 @@ CREATE TRIGGER trg_war_game_capture
     EXECUTE FUNCTION stewards.war_game_capture();
 
 -- ---------------------------------------------------------------------
+-- §4b — the unstamped alarm (found live 2026-07-05, first Fable runs):
+-- when the DRAFT CREATOR itself is a loom stage, doc_create arrives via
+-- the Arc C MCP under the shared arc-c-* session — no wi--<uuid8> for the
+-- finalize provenance stamp to key on → docs.work_item_id stays NULL →
+-- capture never fires. (rs pipelines never hit this: only their CRITIC is
+-- on loom.) The durable fix is per-dispatch session propagation through
+-- the loom shim into the Arc C surface (Go, rides the owed image-rebuild
+-- batch — also kills the shared-session concurrent-draft race). Until
+-- then: a completed war-game without its stamp must be LOUD, and the
+-- recovery is deterministic and proven — re-point the pooled doc:
+--   UPDATE stewards.docs SET work_item_id = '<item>' WHERE slug = '<doc>';
+-- (the capture trigger fires on UPDATE OF work_item_id and stamps).
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION stewards.war_game_unstamped_alarm() RETURNS trigger
+LANGUAGE plpgsql AS $fn$
+BEGIN
+    INSERT INTO stewards.steward_actions (work_item_id, observation, action, details)
+    VALUES (NEW.id,
+            'war-game completed but work_items.war_game is NULL — the artifact pooled without provenance '
+            || '(arc-c draft-creator gap). Recover: UPDATE stewards.docs SET work_item_id = '''
+            || NEW.id || ''' WHERE slug = ''<the pooled war-game doc>''; capture re-fires on the stamp.',
+            'war_game_unstamped',
+            jsonb_build_object('slug', NEW.slug));
+    RETURN NEW;
+END;
+$fn$;
+
+DROP TRIGGER IF EXISTS trg_war_game_unstamped ON stewards.work_items;
+CREATE TRIGGER trg_war_game_unstamped
+    AFTER UPDATE OF status ON stewards.work_items
+    FOR EACH ROW
+    WHEN (NEW.pipeline_family = 'war-game' AND NEW.status = 'completed' AND NEW.war_game IS NULL)
+    EXECUTE FUNCTION stewards.war_game_unstamped_alarm();
+
+-- ---------------------------------------------------------------------
 -- §5 — the opt-in flag: start_task(war_game:true)
 --       RE-AUTHORS chat_start_task_tool (46). Port from HERE.
 -- ---------------------------------------------------------------------

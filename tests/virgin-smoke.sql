@@ -5294,6 +5294,16 @@ BEGIN
                     WHERE work_item_id = v_mission AND action IN ('war_game_release', 'war_game_release_failed')),
         '102: release must be logged (dispatched, or failed loudly)';
 
+    -- unstamped alarm: a completed war-game without its stamp must be LOUD
+    UPDATE stewards.work_items SET status = 'completed' WHERE id = v_wi_bad;  -- war_game IS NULL here
+    ASSERT EXISTS (SELECT 1 FROM stewards.steward_actions
+                    WHERE work_item_id = v_wi_bad AND action = 'war_game_unstamped'),
+        '102: completed war-game without war_game must log war_game_unstamped';
+    UPDATE stewards.work_items SET status = 'completed' WHERE id = v_wi;      -- stamped one: silent
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.steward_actions
+                    WHERE work_item_id = v_wi AND action = 'war_game_unstamped'),
+        '102: a stamped completed war-game must NOT alarm (inverse)';
+
     -- clean up (work_queue has no work_item_id column — linkage is in payload)
     DELETE FROM stewards.docs WHERE slug LIKE 'vs102-%';
     DELETE FROM stewards.steward_actions WHERE work_item_id IN (v_wi, v_wi_bad, v_mission, v_wg_item);
