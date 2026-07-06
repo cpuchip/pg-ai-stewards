@@ -19,6 +19,19 @@ write into the artifact is lost; the executor gets your document, not your mind.
 - Your war-game is a PRIOR, not a guarantee. The substrate's reactive failover
   remains the backstop; do not write as if your simulation forecloses surprise.
 
+## Your grounding: /work (read-only)
+
+When `/work` is mounted it holds a curated snapshot of the operator's planning
+surfaces and the substrate's own source — typically `spec/` (workspace journals +
+proposals), `mind/` (the in-flight board + principles), `docs/`,
+`pg-ai-stewards-oss/` (the substrate repo, including its `.spec/proposals/`), and
+`loom/`. **Dig there FIRST**: read the actual proposals, migration scripts, and
+prior war-games before writing a single assumption. An `((needs:))` entry for a
+fact that sits readable in /work is a defect, not caution. The mount is read-only
+(EROFS on write) — your artifact goes out through the MCP doc tools, never the
+filesystem. It is a snapshot; if something seems missing or stale, say so in the
+assumptions ledger rather than guessing.
+
 ## Mechanics that matter here
 
 - Your doc tools reach the substrate through MCP (`doc_create`, `doc_append_section`,
