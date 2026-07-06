@@ -117,9 +117,9 @@ ON CONFLICT (family) DO UPDATE
 
 INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model, notes) VALUES
     ('war-game', 'wargame', 'sonnet#wargame',
-     'The strong simulation seat (loom / Max sub). model_override on the work item lifts a mission-critical war-game to opus/fable; the #wargame role home is optional (loom falls back to the default claude-home).'),
+     'DEFAULT = Sonnet at MAX EFFORT (Michael, 2026-07-05: "sonnet 5 extra hard — opus and fable are just too expensive to run that way, except for one offs"). The #wargame role home carries the dial: scripts/loom-wargame-home seeds <serve-root>/wargame-claude-home whose settings.json sets effortLevel=xhigh (plus the war-gamer CLAUDE.md stance). Live-verified: the shim probe answers from that identity. Opus/fable = ONE-OFF via work-item model_override only. If the role home is missing, loom falls back to the default claude-home (default effort) — a config gap degrades, never fails.'),
     ('war-game', 'critique', 'sonnet#critic',
-     'Skeptic pass + pool. Same warm critic seat the research pipelines use.')
+     'Skeptic pass + pool. Same warm critic seat the research pipelines use (default effort — the critique is cheaper by design).')
 ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
     default_model = EXCLUDED.default_model, notes = EXCLUDED.notes;
 
