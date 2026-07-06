@@ -34,12 +34,20 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+// wiSessionRe is the ONLY caller-declared session shape X-Stewards-Session may
+// set (#333): the substrate's own per-stage dispatch sessions,
+// wi--<uuid8>--<stage>. Everything else falls back to the anonymous arc-c-*
+// namespace, so a caller can scope itself to a work item but never impersonate
+// a chat/persona/stewdio session (those use different prefixes by design).
+var wiSessionRe = regexp.MustCompile(`^wi--[0-9a-fA-F]{8}--[A-Za-z0-9._-]{1,64}$`)
 
 func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 	token := strings.TrimSpace(os.Getenv("STEWARDS_MCP_HTTP_TOKEN"))
@@ -60,15 +68,28 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 	// gives doc_create/append/patch/finalize (doc_write.go) a natural,
 	// per-dispatch draft namespace with zero cross-dispatch bleed, no new
 	// plumbing required.
-	getServer := func(_ *http.Request) *mcp.Server {
+	getServer := func(r *http.Request) *mcp.Server {
 		s := mcp.NewServer(&mcp.Implementation{
 			Name:    "pg-ai-stewards (remote, read-mostly)",
 			Version: version,
 		}, nil)
+		// #333 session propagation: a loom-dispatched stage's claude session
+		// may DECLARE its substrate dispatch session via X-Stewards-Session
+		// (bgworker → OpenAI `user` field → loom injects the header into the
+		// per-session MCP config). Trusting it sits BEHIND the bearer token,
+		// and only the wi--<uuid8>--<stage> shape is honored — so a token-
+		// holding caller can scope its drafts to the work item it serves,
+		// which is what restores doc→work-item provenance at finalize when
+		// the draft CREATOR is a loom stage. Anything else keeps the anonymous
+		// per-connection arc-c-* namespace (the handle-as-capability default).
+		session := "arc-c-" + newHTTPSessionID()
+		if h := strings.TrimSpace(r.Header.Get("X-Stewards-Session")); wiSessionRe.MatchString(h) {
+			session = h
+		}
 		registerDocTools(s, pool)        // doc_search / doc_get / doc_similar / doc_citations
 		registerInspectionTools(s, pool) // read-only work-item / corpus inspection
 		registerModelTools(s, pool)      // list_models / list_connectors — read-only catalog views (90: list_models is in the harness hinge's ratified read set)
-		registerDocWriteTools(s, pool, "arc-c-"+newHTTPSessionID())
+		registerDocWriteTools(s, pool, session)
 		registerA2ANoteTools(s, pool) // a2a_note / a2a_note_clear ONLY — never a2a_submit/claim/receipt/etc.
 		return s
 	}

@@ -2006,6 +2006,17 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
                 m.remove("tools");
                 m.remove("tool_choice");
             }
+            // #333: carry the dispatch session in OpenAI's standard `user`
+            // field (providers ignore it) so a downstream shim (loom) can
+            // propagate it into its MCP hinge — restoring doc→work-item
+            // provenance when the DRAFT CREATOR itself is a loom stage
+            // (the shared arc-c-* session otherwise has no wi-- to key on).
+            if let Some(sid) = payload.get("session_id").and_then(|v| v.as_str()) {
+                m.insert(
+                    "user".to_string(),
+                    serde_json::Value::String(sid.to_string()),
+                );
+            }
             m.insert("stream".to_string(), serde_json::Value::Bool(true));
             m.insert(
                 "stream_options".to_string(),

@@ -98,6 +98,13 @@ COPY 100-schedule-chat.sql ./
 # 101-lab-dispatch.sql (LAB RUNNER, 2026-07-04)
 COPY 101-lab-dispatch.sql ./
 
+# 102-war-game.sql (WAR-GAME W1, 2026-07-05). Forgetting this line is a
+# COMPILE error (extension_sql_file! reads the file at build time) — but a
+# piped `| tail` on the build command masks the non-zero exit, so the tag
+# silently stays stale and only virgin-smoke catches it (2026-07-06). Check
+# `docker compose build` exit codes UNPIPED.
+COPY 102-war-game.sql ./
+
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
 # and generated .sql under the standard pg_config paths.

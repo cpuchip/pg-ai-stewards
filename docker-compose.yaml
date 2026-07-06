@@ -24,6 +24,13 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-stewards}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stewards}
       POSTGRES_DB: ${POSTGRES_DB:-stewards}
+      # #334: a loom-shim stage is ONE completion POST (the claude session does
+      # all its MCP tool work inside it); grounded/xhigh war-games exceed the
+      # old 600s default and send_with_retry restarts a FRESH session per
+      # timeout — a bounded (3x) but invisible-unless-you-read-pg-logs spend
+      # loop. 1800s here must stay UNDER the loom shim's --openai-timeout
+      # (the shim session dies with the client connection).
+      STEWARDS_CHAT_TIMEOUT_SECONDS: ${STEWARDS_CHAT_TIMEOUT_SECONDS:-1800}
     ports:
       # Host port offset from the workspace dev stacks (55432/55433) so an
       # OSS stack can run side by side. Internal port stays 5432.
