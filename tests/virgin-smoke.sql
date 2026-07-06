@@ -5200,4 +5200,109 @@ BEGIN
 END
 $vs101$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→101) is sound =='
+-- ---------------------------------------------------------------------
+-- 102 — war-game (W1): pipeline + agent + opt-in flag + capture trigger
+-- ---------------------------------------------------------------------
+DO $vs102$
+DECLARE
+    v_wi      uuid;
+    v_wi_bad  uuid;
+    v_mission uuid;
+    v_wg_item uuid;
+    v_res     jsonb;
+    v_block   text := '{"moves":[{"id":"m1","action":"probe the endpoint","expect_ok":"200 with body","expect_fail":"connection refused","failure":"service down","signal":"ECONNREFUSED","countermove":"restart via compose, retry once"}],"forks":[{"observe":"401 instead of 200","route":"re-mint the token first"}],"aborts":[{"condition":"same failure three times","kind":"repeat_failure","params":{"n":3}}],"assumptions":[{"var":"service_port","why_unresolved":"not in the brief"}]}';
+BEGIN
+    -- schema + seeds
+    ASSERT (SELECT count(*) FROM information_schema.columns
+             WHERE table_schema = 'stewards' AND table_name = 'work_items' AND column_name = 'war_game') = 1,
+        '102: work_items.war_game column must exist';
+    ASSERT (SELECT active FROM stewards.agents WHERE family = 'wargame' AND model_match = '*'),
+        '102: the generic wargame agent must be seeded active';
+    ASSERT (SELECT jsonb_array_length(stages) FROM stewards.pipelines WHERE family = 'war-game') = 2,
+        '102: war-game pipeline must have 2 stages (wargame -> critique)';
+    ASSERT (SELECT stages->0->>'provider' FROM stewards.pipelines WHERE family = 'war-game') = 'loom',
+        '102: the wargame stage must ride the loom provider (the strong seat)';
+    ASSERT (SELECT count(*) FROM pg_trigger
+             WHERE tgname = 'trg_war_game_capture' AND tgrelid = 'stewards.docs'::regclass AND NOT tgisinternal) = 1,
+        '102: the capture trigger must exist on stewards.docs';
+    ASSERT (SELECT args_schema->'properties' ? 'war_game' FROM stewards.tool_defs WHERE name = 'start_task'),
+        '102: start_task args_schema must carry the war_game flag';
+
+    -- direct capture: pooled doc with a valid block -> war_game stamped
+    v_wi := stewards.work_item_create('war-game',
+        '{"binding_question":"vs102 direct"}'::jsonb, 'vs102-wargame-direct', 'virgin-smoke', NULL::int, NULL::uuid);
+    INSERT INTO stewards.docs (slug, title, body, work_item_id)
+    VALUES ('vs102-wargame-doc', 'vs102 war-game artifact',
+            E'## Moves\nprose here\n\n## Structured block\n\n```json\n' || v_block || E'\n```\n', v_wi);
+    ASSERT (SELECT war_game IS NOT NULL FROM stewards.work_items WHERE id = v_wi),
+        '102: a valid pooled block must stamp work_items.war_game';
+    ASSERT (SELECT jsonb_array_length(war_game->'moves') FROM stewards.work_items WHERE id = v_wi) = 1,
+        '102: the stamped block must round-trip (1 move)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.steward_actions
+                    WHERE work_item_id = v_wi AND action = 'war_game_captured'),
+        '102: capture must log war_game_captured';
+
+    -- late-stamp path: 34's finalize INSERTs with work_item_id NULL, then
+    -- UPDATEs only work_item_id -- the trigger must fire on that beat too.
+    v_wi_bad := stewards.work_item_create('war-game',
+        '{"binding_question":"vs102 late stamp"}'::jsonb, 'vs102-wargame-late', 'virgin-smoke', NULL::int, NULL::uuid);
+    INSERT INTO stewards.docs (slug, title, body)
+    VALUES ('vs102-wargame-doc-late', 'vs102 late-stamped artifact',
+            E'```json\n' || v_block || E'\n```\n');
+    UPDATE stewards.docs SET work_item_id = v_wi_bad WHERE slug = 'vs102-wargame-doc-late';
+    ASSERT (SELECT war_game IS NOT NULL FROM stewards.work_items WHERE id = v_wi_bad),
+        '102: capture must fire on the finalize late-stamp (UPDATE OF work_item_id) path';
+    -- reuse the handle for the invalid-floor inverse below
+    DELETE FROM stewards.steward_actions WHERE work_item_id = v_wi_bad;
+    UPDATE stewards.work_items SET war_game = NULL WHERE id = v_wi_bad;
+
+    -- inverse: a block that fails the floor (no aborts) must NOT stamp
+    UPDATE stewards.docs
+       SET body = E'```json\n{"moves":[{"id":"m1","action":"x","countermove":"y"}]}\n```\n'
+     WHERE slug = 'vs102-wargame-doc-late';
+    ASSERT (SELECT war_game IS NULL FROM stewards.work_items WHERE id = v_wi_bad),
+        '102: a block without aborts must fail the floor and not stamp';
+    ASSERT EXISTS (SELECT 1 FROM stewards.steward_actions
+                    WHERE work_item_id = v_wi_bad AND action = 'war_game_invalid'),
+        '102: the failed floor must log war_game_invalid (loud, not silent)';
+
+    -- the opt-in flag: mission waits, companion war-game runs, capture releases
+    v_res := stewards.chat_start_task_tool(
+        '{"pipeline":"research-summary","binding_question":"vs102 flagged mission","slug":"vs102-mission","war_game":true}'::jsonb)::jsonb;
+    ASSERT (v_res->>'ok')::boolean, format('102: flagged start_task must succeed, got %s', v_res);
+    v_mission := (v_res->>'work_item_id')::uuid;
+    v_wg_item := (v_res->>'war_game_item_id')::uuid;
+    ASSERT v_wg_item IS NOT NULL, '102: flagged start_task must create the companion war-game item';
+    ASSERT (SELECT input->>'awaiting_war_game' FROM stewards.work_items WHERE id = v_mission) = 'true',
+        '102: the mission must be marked awaiting_war_game';
+    ASSERT (SELECT status FROM stewards.work_items WHERE id = v_mission) = 'pending',
+        '102: the mission must NOT dispatch while awaiting its war-game (created=pending; dispatch flips to in_progress)';
+    ASSERT (SELECT parent_work_item_id FROM stewards.work_items WHERE id = v_wg_item) = v_mission,
+        '102: the war-game item must nest under the mission';
+    ASSERT (SELECT input->>'war_game_for' FROM stewards.work_items WHERE id = v_wg_item) = v_mission::text,
+        '102: the war-game item must carry war_game_for = mission';
+
+    -- simulate the war-game pooling its artifact -> mission stamped + released
+    INSERT INTO stewards.docs (slug, title, body, work_item_id)
+    VALUES ('vs102-mission-wargame-doc', 'vs102 mission war-game',
+            E'```json\n' || v_block || E'\n```\n', v_wg_item);
+    ASSERT (SELECT war_game IS NOT NULL FROM stewards.work_items WHERE id = v_mission),
+        '102: capture must copy war_game onto the waiting mission';
+    ASSERT (SELECT input ? 'awaiting_war_game' FROM stewards.work_items WHERE id = v_mission) = false,
+        '102: release must clear awaiting_war_game';
+    ASSERT EXISTS (SELECT 1 FROM stewards.steward_actions
+                    WHERE work_item_id = v_mission AND action IN ('war_game_release', 'war_game_release_failed')),
+        '102: release must be logged (dispatched, or failed loudly)';
+
+    -- clean up (work_queue has no work_item_id column — linkage is in payload)
+    DELETE FROM stewards.docs WHERE slug LIKE 'vs102-%';
+    DELETE FROM stewards.steward_actions WHERE work_item_id IN (v_wi, v_wi_bad, v_mission, v_wg_item);
+    DELETE FROM stewards.work_queue
+     WHERE payload::text LIKE '%' || v_wg_item::text || '%'
+        OR payload::text LIKE '%' || v_mission::text || '%';
+    DELETE FROM stewards.work_items WHERE id IN (v_wg_item, v_wi, v_wi_bad, v_mission);
+    RAISE NOTICE 'OK 102: war-game -- pipeline+agent seeded, capture trigger (insert + late-stamp + invalid-floor inverse), opt-in flag (mission waits, companion nests, capture stamps + releases)';
+END
+$vs102$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→102) is sound =='

@@ -1110,6 +1110,23 @@ extension_sql_file!(
     name = "create_lab_dispatch",
     requires = ["create_schedule_chat"],
 );
+// 102 — WAR-GAME (W1, ratified 2026-07-05, .spec/proposals/war-game-pipeline.md):
+// prospective failure simulation. A strong model (loom seat) fights a mission
+// on paper — moves w/ expected observations both ways, failure+signal+counter-
+// move, fork triggers, ((needs:)) assumptions ledger, abort conditions, 2nd/
+// 3rd-order consequences — pooling a doc whose fenced json block lands on
+// work_items.war_game via a capture trigger at finalize (fires on UPDATE OF
+// work_item_id — 34 stamps provenance in a separate UPDATE after import_doc).
+// start_task grows the opt-in war_game:true flag (re-authors 46's
+// chat_start_task_tool): mission waits undispatched, companion war-game runs
+// first, capture stamps + releases the mission. Opt-in only, never a default
+// route. W2 (#331) materializes aborts→work_item_abort_conditions (new table),
+// forks→route_on, assumptions→ask_up.
+extension_sql_file!(
+    "../102-war-game.sql",
+    name = "create_war_game",
+    requires = ["create_lab_dispatch"],
+);
 // 99 — ROUTER (raw-to-wiki, .spec/proposals/ingestion-crawler-and-raw-to-wiki.md
 // Part 2): route_intake(kind, ref, instruction) -> a route-intake work_item
 // (classify -> match, LLM) -> route_intake_disposition (deterministic: a
