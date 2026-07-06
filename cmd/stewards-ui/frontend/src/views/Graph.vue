@@ -4,8 +4,43 @@ import { useRouter } from 'vue-router'
 import cytoscape from 'cytoscape'
 import type { Core } from 'cytoscape'
 import { api, type GraphResp } from '@/api'
+import { useStewdioStore } from '@/stores/stewdio'
 
 const router = useRouter()
+const store = useStewdioStore()
+
+// Worlds banner — this page is the flat DOC-CITATIONS graph; the 3D world
+// galaxies (Loreworks) + the Loremaster chat live in Stewdio's World panel.
+// Found live 2026-07-06: Michael landed here looking for "chat with the
+// Work-corpus world" and hit a dead end — so the worlds get a first-class door.
+const worlds = ref<{ slug: string; name: string }[]>([])
+const worldSel = ref('')
+const chatting = ref(false)
+async function loadWorlds() {
+  try {
+    const r = await api.worldList()
+    worlds.value = (r.items || []).map((w: { slug: string; name?: string }) => ({ slug: w.slug, name: w.name || w.slug }))
+    if (!worldSel.value && worlds.value[0]) worldSel.value = worlds.value[0].slug
+  } catch { /* worlds are optional on this page */ }
+}
+function openWorldPanel() {
+  if (worldSel.value) store.worldSlug = worldSel.value
+  router.push('/stewdio')
+}
+async function chatLoremaster() {
+  if (!worldSel.value || chatting.value) return
+  chatting.value = true
+  try {
+    const r = await api.chatWithWorld(worldSel.value)
+    store.worldSlug = worldSel.value
+    store.openChat('', 'all', '', r.session_id) // honored on Stewdio mount (immediate watchers)
+    router.push('/stewdio')
+  } catch (e) {
+    error.value = String(e)
+  } finally {
+    chatting.value = false
+  }
+}
 const containerRef = useTemplateRef<HTMLDivElement>('container')
 const error = ref('')
 const loading = ref(false)
@@ -78,7 +113,7 @@ async function load() {
   }
 }
 
-onMounted(load)
+onMounted(() => { load(); loadWorlds() })
 onUnmounted(() => {
   if (cy) cy.destroy()
 })
@@ -104,6 +139,23 @@ onUnmounted(() => {
     </div>
 
     <p v-if="error" class="text-sm text-red-400">{{ error }}</p>
+
+    <!-- Worlds door: the 3D galaxies + Loremaster chat live in Stewdio's World
+         panel; this banner is the first-class way there from the Graph page. -->
+    <div v-if="worlds.length"
+         class="flex items-center gap-3 rounded-md border border-sky-900/60 bg-sky-950/30 px-3 py-2 text-sm">
+      <span class="text-sky-300">🌍 Worlds — the 3D galaxy view &amp; Loremaster live in Stewdio:</span>
+      <select v-model="worldSel"
+              class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-200 text-xs">
+        <option v-for="w in worlds" :key="w.slug" :value="w.slug">{{ w.name }}</option>
+      </select>
+      <button @click="openWorldPanel"
+              class="text-xs px-2 py-1 rounded border border-sky-700/60 text-sky-300 bg-sky-900/30 hover:bg-sky-900/50">
+        🌌 Open galaxy</button>
+      <button @click="chatLoremaster" :disabled="chatting || !worldSel"
+              class="text-xs px-2 py-1 rounded border border-sky-700/60 text-sky-300 bg-sky-900/30 hover:bg-sky-900/50 disabled:opacity-50">
+        {{ chatting ? '…' : '💬 Chat with Loremaster' }}</button>
+    </div>
 
     <div
       ref="container"

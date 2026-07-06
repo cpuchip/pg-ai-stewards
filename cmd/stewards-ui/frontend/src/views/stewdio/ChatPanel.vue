@@ -337,7 +337,10 @@ watch(() => store.requestedLens, (v) => {
   if (v === null) return
   lens.value = v // '' | '__all__' | a project name
   store.requestedLens = null
-})
+  // immediate for the same cross-page reason as requestedSession below: the
+  // lens half of a staged openChat must apply on mount or chatRef stays
+  // ungrounded and the session open falls through.
+}, { immediate: true })
 // b1: navigating to a doc/work item on the left re-grounds the chat to it (clears
 // any pinned project lens) so the default is always "chat about what I'm looking
 // at". honoringRequest stands down so the Sessions-panel open flow isn't clobbered.
@@ -358,7 +361,11 @@ watch(() => store.requestedSession, async (sid) => {
     openStream(sid)
   }
   honoringRequest = false
-})
+  // immediate: a request staged BEFORE this panel mounts (e.g. /graph's
+  // "Chat with Loremaster" sets the store then router.pushes to /stewdio)
+  // must be honored on mount — without it the watcher only sees post-mount
+  // changes and a cross-page openChat silently does nothing.
+}, { immediate: true })
 
 watch(chatRef, async (ref_) => {
   if (honoringRequest) return // the requestedSession watcher owns this open
