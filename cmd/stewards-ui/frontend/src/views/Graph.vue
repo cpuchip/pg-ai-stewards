@@ -1,171 +1,65 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, useTemplateRef } from 'vue'
+// /graph — the GRAPHS HUB. Detangled 2026-07-06 (Michael: "/graph … seems like
+// a separate thing from stewdio's worlds/cosmos and wiki's graphs").
+//
+// History, so nobody re-tangles it: this page was originally a flat cytoscape
+// view over stewards.study_citations() — a function that NO LONGER EXISTS in
+// the chain (the page rendered an honest-looking empty graph). Meanwhile two
+// real graph systems shipped elsewhere: the Loreworks 3D worlds/cosmos
+// (Stewdio's World panel — entities/edges per world, cross-world galaxies)
+// and the wiki page-link graph (WikiReader's graph mode). This page now
+// EMBEDS those two — same components, same stores, zero duplicated graph
+// code — instead of being a third, dead thing.
+import { ref } from 'vue'
 import { useRouter } from 'vue-router'
-import cytoscape from 'cytoscape'
-import type { Core } from 'cytoscape'
-import { api, type GraphResp } from '@/api'
-import { useStewdioStore } from '@/stores/stewdio'
+import { onMounted } from 'vue'
+import { api, type WikiBrief } from '@/api'
+import WorldGraphPanel from './stewdio/WorldGraphPanel.vue'
+import WikiGraphPanel from './wiki/WikiGraphPanel.vue'
 
 const router = useRouter()
-const store = useStewdioStore()
+const tab = ref<'worlds' | 'wiki'>('worlds')
 
-// Worlds banner — this page is the flat DOC-CITATIONS graph; the 3D world
-// galaxies (Loreworks) + the Loremaster chat live in Stewdio's World panel.
-// Found live 2026-07-06: Michael landed here looking for "chat with the
-// Work-corpus world" and hit a dead end — so the worlds get a first-class door.
-const worlds = ref<{ slug: string; name: string }[]>([])
-const worldSel = ref('')
-const chatting = ref(false)
-async function loadWorlds() {
+// wiki tab: same selector contract WikiReader uses
+const wikis = ref<WikiBrief[]>([])
+const wikiSel = ref('')
+onMounted(async () => {
   try {
-    const r = await api.worldList()
-    worlds.value = (r.items || []).map((w: { slug: string; name?: string }) => ({ slug: w.slug, name: w.name || w.slug }))
-    if (!worldSel.value && worlds.value[0]) worldSel.value = worlds.value[0].slug
-  } catch { /* worlds are optional on this page */ }
-}
-function openWorldPanel() {
-  if (worldSel.value) store.worldSlug = worldSel.value
-  router.push('/stewdio')
-}
-async function chatLoremaster() {
-  if (!worldSel.value || chatting.value) return
-  chatting.value = true
-  try {
-    const r = await api.chatWithWorld(worldSel.value)
-    store.worldSlug = worldSel.value
-    store.openChat('', 'all', '', r.session_id) // honored on Stewdio mount (immediate watchers)
-    router.push('/stewdio')
-  } catch (e) {
-    error.value = String(e)
-  } finally {
-    chatting.value = false
-  }
-}
-const containerRef = useTemplateRef<HTMLDivElement>('container')
-const error = ref('')
-const loading = ref(false)
-const stats = ref<{ nodes: number; edges: number } | null>(null)
-let cy: Core | null = null
-
-async function load() {
-  loading.value = true
-  error.value = ''
-  try {
-    const data: GraphResp = await api.graphStudiesCitations(200)
-    stats.value = { nodes: data.nodes.length, edges: data.edges.length }
-    if (cy) cy.destroy()
-    cy = cytoscape({
-      container: containerRef.value!,
-      elements: [
-        ...data.nodes.map((n) => ({ data: { id: n.id, label: n.label, kind: n.kind } })),
-        ...data.edges.map((e) => ({
-          data: { id: `${e.source}->${e.target}`, source: e.source, target: e.target, weight: e.weight ?? 1 },
-        })),
-      ],
-      style: [
-        {
-          selector: 'node',
-          style: {
-            'background-color': '#52525b',
-            'border-color': '#71717a',
-            'border-width': 1,
-            label: 'data(label)',
-            color: '#e4e4e7',
-            'font-size': '10px',
-            'text-valign': 'center',
-            'text-halign': 'right',
-            'text-margin-x': 6,
-            width: 12,
-            height: 12,
-          },
-        },
-        {
-          selector: 'node:selected',
-          style: { 'background-color': '#10b981', 'border-color': '#34d399', width: 16, height: 16 },
-        },
-        {
-          selector: 'edge',
-          style: {
-            width: 'mapData(weight, 1, 20, 0.5, 3)' as never,
-            'line-color': '#3f3f46',
-            'curve-style': 'bezier',
-            'target-arrow-color': '#52525b',
-            'target-arrow-shape': 'triangle',
-            'arrow-scale': 0.6,
-          },
-        },
-      ],
-      layout: {
-        name: 'cose',
-        animate: false,
-        nodeRepulsion: 8000,
-        idealEdgeLength: 80,
-      } as never,
-    })
-    cy.on('tap', 'node', (evt) => {
-      const id = String(evt.target.id())
-      router.push(`/studies/${encodeURIComponent(id)}`)
-    })
-  } catch (e) {
-    error.value = String(e)
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(() => { load(); loadWorlds() })
-onUnmounted(() => {
-  if (cy) cy.destroy()
+    const r = await api.wikiWikis()
+    wikis.value = r.items || []
+    if (!wikiSel.value && wikis.value[0]) wikiSel.value = wikis.value[0].slug
+  } catch { /* wiki fleet optional */ }
 })
+function openPage(slug: string) {
+  router.push(`/wiki/page/${encodeURIComponent(slug)}`)
+}
 </script>
 
 <template>
   <div class="space-y-3 h-[calc(100dvh-9rem)] flex flex-col">
-    <div class="flex items-baseline justify-between">
-      <h2 class="text-2xl font-semibold tracking-tight">Graph</h2>
-      <div class="text-xs text-zinc-500 flex items-center gap-3">
-        <span v-if="loading">loading…</span>
-        <span v-else-if="stats">
-          {{ stats.nodes }} nodes · {{ stats.edges }} edges
-          <span v-if="stats.edges === 0" class="text-amber-400">
-            (no in-graph edges — substrate citations may not be populated yet)
-          </span>
-        </span>
-        <button
-          class="text-xs px-2 py-1 rounded border border-zinc-700 hover:bg-zinc-800"
-          @click="load"
-        >reload</button>
+    <div class="flex items-center justify-between">
+      <h2 class="text-2xl font-semibold tracking-tight">Graphs</h2>
+      <div class="flex items-center gap-2 text-sm">
+        <button @click="tab = 'worlds'"
+                :class="tab === 'worlds' ? 'border-sky-600 text-sky-300 bg-sky-900/30' : 'border-zinc-700 text-zinc-400 hover:bg-zinc-800'"
+                class="px-3 py-1 rounded border">🌌 Worlds &amp; Cosmos</button>
+        <button @click="tab = 'wiki'"
+                :class="tab === 'wiki' ? 'border-sky-600 text-sky-300 bg-sky-900/30' : 'border-zinc-700 text-zinc-400 hover:bg-zinc-800'"
+                class="px-3 py-1 rounded border">📖 Wiki</button>
+        <select v-if="tab === 'wiki' && wikis.length" v-model="wikiSel"
+                class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-200 text-xs">
+          <option v-for="w in wikis" :key="w.slug" :value="w.slug">{{ w.name || w.slug }}</option>
+        </select>
       </div>
     </div>
 
-    <p v-if="error" class="text-sm text-red-400">{{ error }}</p>
+    <!-- Worlds & Cosmos: the SAME panel Stewdio hosts (world picker, cosmos
+         toggle, build, 💬 Loremaster chat, search/fly-to all live inside it). -->
+    <WorldGraphPanel v-if="tab === 'worlds'" class="flex-1 min-h-0" />
 
-    <!-- Worlds door: the 3D galaxies + Loremaster chat live in Stewdio's World
-         panel; this banner is the first-class way there from the Graph page. -->
-    <div v-if="worlds.length"
-         class="flex items-center gap-3 rounded-md border border-sky-900/60 bg-sky-950/30 px-3 py-2 text-sm">
-      <span class="text-sky-300">🌍 Worlds — the 3D galaxy view &amp; Loremaster live in Stewdio:</span>
-      <select v-model="worldSel"
-              class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-zinc-200 text-xs">
-        <option v-for="w in worlds" :key="w.slug" :value="w.slug">{{ w.name }}</option>
-      </select>
-      <button @click="openWorldPanel"
-              class="text-xs px-2 py-1 rounded border border-sky-700/60 text-sky-300 bg-sky-900/30 hover:bg-sky-900/50">
-        🌌 Open galaxy</button>
-      <button @click="chatLoremaster" :disabled="chatting || !worldSel"
-              class="text-xs px-2 py-1 rounded border border-sky-700/60 text-sky-300 bg-sky-900/30 hover:bg-sky-900/50 disabled:opacity-50">
-        {{ chatting ? '…' : '💬 Chat with Loremaster' }}</button>
-    </div>
-
-    <div
-      ref="container"
-      class="flex-1 rounded-md border border-zinc-800 bg-zinc-950"
-    ></div>
-
-    <p class="text-xs text-zinc-500">
-      Click a node to open its study. Layout uses Cytoscape's `cose` force-directed.
-      Edges from <code class="font-mono">stewards.study_citations()</code> where target slug
-      matches an in-graph node.
-    </p>
+    <!-- Wiki: page-link graph, 2D by design (read, not toured — see the
+         panel's own header for the rationale). Node click opens the page. -->
+    <WikiGraphPanel v-else-if="wikiSel" :wiki="wikiSel" class="flex-1 min-h-0" @open-page="openPage" />
+    <p v-else class="text-sm text-zinc-500">No wikis yet — build one from a corpus and its page-link graph appears here.</p>
   </div>
 </template>

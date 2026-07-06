@@ -9,11 +9,18 @@
 // chips re-select the corpus doc in the cockpit (graph → source, one ring out).
 // Spec: .spec/proposals/loreworks-presentation-plan.md (§3D knowledge graph).
 import { ref, onMounted, onUnmounted, watch, computed, nextTick } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import ForceGraph3D from '3d-force-graph'
 import SpriteText from 'three-spritetext'
 import { api, type WorldGraphResp, type WorldNode, type WorldNodeDetail, type WorldBrief } from '@/api'
 import { useStewdioStore } from '../../stores/stewdio'
 import CosmosPanel from './CosmosPanel.vue'
+
+// This panel is embedded OUTSIDE Stewdio too (the /graph Graphs hub). The chat
+// it opens lives in Stewdio's cockpit, so when we're elsewhere, hop there —
+// the staged openChat is honored on mount (ChatPanel's immediate watchers).
+const route = useRoute()
+const router = useRouter()
 
 defineOptions({ inheritAttrs: false })
 const store = useStewdioStore()
@@ -401,6 +408,7 @@ async function chatThisWorld() {
   try {
     const r = await api.chatWithWorld(slug)
     store.openChat('', 'all', '', r.session_id)
+    if (route.path !== '/stewdio') router.push('/stewdio')
   } catch (e) {
     err.value = String(e)
   } finally {

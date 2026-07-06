@@ -41,7 +41,7 @@ const routes: RouteRecordRaw[] = [
   { path: '/sessions/:sid', name: 'session-detail', component: Sessions, meta: { title: 'Session' }, props: true },
   { path: '/watchman',   name: 'watchman',   component: Watchman, meta: { title: 'Watchman' } },
   { path: '/bridge',     name: 'bridge',     component: BridgeState, meta: { title: 'Bridge state' } },
-  { path: '/graph',      name: 'graph',      component: Graph, meta: { title: 'Graph' } },
+  { path: '/graph',      name: 'graph',      component: Graph, meta: { title: 'Graphs' } },
   { path: '/new',        name: 'new-work',   component: NewWork, meta: { title: 'New work' } },
   { path: '/intents',    name: 'intents',    component: Intents, meta: { title: 'Intents' } },
   { path: '/covenants',  name: 'covenants',  component: Covenants, meta: { title: 'Covenant' } },
