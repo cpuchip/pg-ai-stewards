@@ -172,6 +172,8 @@ func main() {
 	registerImageTools(srv, pool)   // generate_image (Gemini Nano Banana → chat attachment); NOT on the read-only HTTP profile
 	registerA2ATools(srv, pool)     // A2A / Open Engine — hand work to / claim work from other agents
 	registerHarnessTools(srv, pool) // harness_run (90) — loom Phase-1 dispatch; NOT on the read-only HTTP profile
+	// citation_check — text-vs-text citation sanity oracle (case-file wave)
+	registerCitationCheckTool(srv, pool)
 
 	log.Printf("server starting on stdio (mcp protocol)")
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {
