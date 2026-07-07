@@ -74,6 +74,40 @@ fn now_secs() -> u64 {
 /// a fresh one from the service-account at `credentials_file` when none is cached
 /// or the cached one is within the refresh skew of expiry.
 pub(crate) fn token_for(provider_name: &str, credentials_file: &str) -> Result<String, String> {
+    token_cached(provider_name, |now| mint(credentials_file, now))
+}
+
+/// As `token_for`, but the service-account key is JSON *content* (decrypted from
+/// the credential store, never a file) — the wizard "drop the SA json" path.
+/// Minted + cached per provider identically; the JSON is auth material and is
+/// never logged.
+pub(crate) fn token_for_json(
+    provider_name: &str,
+    credentials_json: &str,
+) -> Result<String, String> {
+    token_cached(provider_name, |now| mint_from_json(credentials_json, now))
+}
+
+/// True if `raw` is a Google service-account key JSON — the shape the
+/// `GoogleSaJson` auth mode mints tokens from. Requires the three fields the
+/// mint actually uses (client_email, private_key, token_uri) present and
+/// non-empty, so a plain API-key string (or any other JSON) is never mistaken
+/// for a service account. Never logs the content.
+pub(crate) fn is_service_account_json(raw: &str) -> bool {
+    match serde_json::from_str::<ServiceAccount>(raw) {
+        Ok(sa) => {
+            !sa.client_email.is_empty() && !sa.private_key.is_empty() && !sa.token_uri.is_empty()
+        }
+        Err(_) => false,
+    }
+}
+
+/// Shared cache-or-mint core for the two `token_for*` entry points. `mint_fn`
+/// does the network + crypto (called only on a cache miss, outside the lock).
+fn token_cached<F>(provider_name: &str, mint_fn: F) -> Result<String, String>
+where
+    F: FnOnce(u64) -> Result<(String, u64), String>,
+{
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let now = now_secs();
 
@@ -90,7 +124,7 @@ pub(crate) fn token_for(provider_name: &str, credentials_file: &str) -> Result<S
     }
 
     // Mint a fresh token (network + crypto) outside the lock.
-    let (token, expires_at) = mint(credentials_file, now)?;
+    let (token, expires_at) = mint_fn(now)?;
 
     let mut map = cache
         .lock()
@@ -105,8 +139,8 @@ pub(crate) fn token_for(provider_name: &str, credentials_file: &str) -> Result<S
     Ok(token)
 }
 
-/// Read the SA file, sign a JWT, exchange it for an access token. Returns
-/// (token, unix_expiry). No key material is included in any error.
+/// Read the SA file and mint from its contents. Returns (token, unix_expiry).
+/// No key material is included in any error.
 fn mint(credentials_file: &str, now: u64) -> Result<(String, u64), String> {
     let raw = std::fs::read_to_string(credentials_file).map_err(|e| {
         format!(
@@ -114,11 +148,18 @@ fn mint(credentials_file: &str, now: u64) -> Result<(String, u64), String> {
             credentials_file, e
         )
     })?;
+    // The raw text (holding the PEM) is confined to mint_from_json's scope.
+    mint_from_json(&raw, now)
+}
+
+/// Sign a JWT from the SA JSON and exchange it for an access token. Returns
+/// (token, unix_expiry). No key material is included in any error. This is the
+/// shared crypto+exchange core for both the file path (`mint`) and the stored-
+/// JSON path (`token_for_json`).
+fn mint_from_json(raw: &str, now: u64) -> Result<(String, u64), String> {
     // serde_json errors report position/field, not values — safe to surface.
     let sa: ServiceAccount =
-        serde_json::from_str(&raw).map_err(|e| format!("gcp_sa: malformed SA json: {}", e))?;
-    // Drop the raw text as soon as it's parsed (it holds the PEM).
-    drop(raw);
+        serde_json::from_str(raw).map_err(|e| format!("gcp_sa: malformed SA json: {}", e))?;
 
     let exp = now + JWT_TTL_SECS;
     let claims = Claims {

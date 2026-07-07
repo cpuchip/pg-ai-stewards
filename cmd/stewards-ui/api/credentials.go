@@ -185,6 +185,74 @@ func probeProviderModels(ctx context.Context, baseURL, kind, apiKey string) ([]s
 	return ids, nil
 }
 
+// fetchModelList GETs a provider-declared model-list URL (OpenAI /models shape
+// or a bare array) and returns the ids, each given modelPrefix when it lacks it.
+// A provider whose own endpoint can't enumerate (Vertex's OpenAI-compat surface
+// isn't a catalog) can declare provider.<name>.model_list_url so the wizard
+// still lists live — generic, nothing provider-specific here. Unauthenticated:
+// the declared endpoint is expected to handle its own auth (e.g. a local proxy
+// that already holds the service-account).
+func fetchModelList(ctx context.Context, listURL, modelPrefix string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := probeClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		snippet := strings.TrimSpace(string(body))
+		if len(snippet) > 300 {
+			snippet = snippet[:300] + "…"
+		}
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet)
+	}
+	var wrapped struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	var ids []string
+	if err := json.Unmarshal(body, &wrapped); err == nil && len(wrapped.Data) > 0 {
+		for _, m := range wrapped.Data {
+			if m.ID != "" {
+				ids = append(ids, m.ID)
+			}
+		}
+	} else {
+		var bare []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(body, &bare); err == nil {
+			for _, m := range bare {
+				if m.ID != "" {
+					ids = append(ids, m.ID)
+				}
+			}
+		}
+	}
+	if modelPrefix != "" {
+		for i, id := range ids {
+			if !strings.HasPrefix(id, modelPrefix) {
+				ids[i] = modelPrefix + id
+			}
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// providerConfigStr reads one provider.<name>.<field> config value (empty if unset).
+func (d *Deps) providerConfigStr(ctx context.Context, provider, field string) string {
+	var v string
+	_ = d.Pool.QueryRow(ctx, `SELECT value #>> '{}' FROM stewards.config WHERE key = $1`,
+		"provider."+provider+"."+field).Scan(&v)
+	return v
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/credentials — wizard state: DB providers + is_set booleans +
 // budgets + the honest pg-side decrypt check. Never the key.
@@ -283,6 +351,29 @@ type credentialSaveResp struct {
 	Models       []string `json:"models,omitempty"`
 	PgDecrypt    string   `json:"pg_decrypt,omitempty"`    // 'ok' = the pg dispatcher can use this key
 	ProviderLive bool     `json:"provider_live"`           // present in providers_loaded()
+	SAKey        bool     `json:"sa_key,omitempty"`        // stored secret is a Google service-account JSON (verified by probing, not a bearer test)
+}
+
+// looksLikeServiceAccountJSON reports whether secret is a Google service-account
+// key JSON — the shape the Rust dispatcher (gcp_sa) exchanges for an OAuth token.
+// Mirrors extension gcp_sa::is_service_account_json: requires the three fields
+// the mint uses. Such a key CANNOT be verified by a static-bearer GET /models
+// (only the dispatcher mints the token), so test-on-save skips the bearer probe
+// for it and points the operator at the model probe / test-chat instead.
+func looksLikeServiceAccountJSON(secret string) bool {
+	s := strings.TrimSpace(secret)
+	if s == "" || s[0] != '{' {
+		return false
+	}
+	var sa struct {
+		ClientEmail string `json:"client_email"`
+		PrivateKey  string `json:"private_key"`
+		TokenURI    string `json:"token_uri"`
+	}
+	if json.Unmarshal([]byte(s), &sa) != nil {
+		return false
+	}
+	return sa.ClientEmail != "" && sa.PrivateKey != "" && sa.TokenURI != ""
 }
 
 func (d *Deps) credentialSaveHandler(w http.ResponseWriter, r *http.Request) {
@@ -396,15 +487,25 @@ func (d *Deps) credentialSaveHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := credentialSaveResp{Stored: stored}
 
-	// TEST-ON-SAVE — the live read-only probe.
-	models, probeErr := probeProviderModels(ctx, baseURL, kind, probeKey)
-	if probeErr != nil {
-		resp.VerifyError = probeErr.Error()
+	// TEST-ON-SAVE — the live read-only probe. A Google service-account key is
+	// the exception: it's not a static bearer, it must be exchanged for an OAuth
+	// token, which only the Rust dispatcher does (gcp_sa). Sending the JSON as a
+	// bearer would spuriously "fail" a perfectly good key — so for an SA JSON we
+	// skip the bearer probe and let the operator confirm via the model probe /
+	// test-chat, both of which run through the dispatcher that DOES mint.
+	if looksLikeServiceAccountJSON(probeKey) {
+		resp.SAKey = true
+		resp.VerifyError = "service-account key stored & encrypted — verify by probing a model or using test-chat (the dispatcher mints the OAuth token; a static-key test doesn't apply)"
 	} else {
-		resp.Verified = true
-		resp.Models = models
-		if stored {
-			_, _ = d.Pool.Exec(ctx, `SELECT stewards.credential_mark_verified($1)`, credName)
+		models, probeErr := probeProviderModels(ctx, baseURL, kind, probeKey)
+		if probeErr != nil {
+			resp.VerifyError = probeErr.Error()
+		} else {
+			resp.Verified = true
+			resp.Models = models
+			if stored {
+				_, _ = d.Pool.Exec(ctx, `SELECT stewards.credential_mark_verified($1)`, credName)
+			}
 		}
 	}
 
@@ -451,6 +552,19 @@ func (d *Deps) credentialModelsHandler(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "bad credential name")
 		return
 	}
+	// A provider may declare where to enumerate its models (for endpoints that
+	// aren't a /models catalog — e.g. Vertex, via a proxy that live-lists). If
+	// set, that wins: list from there with an optional id prefix. Generic — no
+	// provider-specific code.
+	if listURL := d.providerConfigStr(ctx, name, "model_list_url"); listURL != "" {
+		models, err := fetchModelList(ctx, listURL, d.providerConfigStr(ctx, name, "model_prefix"))
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "model_list_url ("+listURL+"): "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": models, "source": "model_list_url"})
+		return
+	}
 	var baseURL, kind string
 	if err := d.Pool.QueryRow(ctx,
 		`SELECT base_url, kind FROM stewards.providers_loaded() WHERE name = $1`,
@@ -475,6 +589,22 @@ func (d *Deps) credentialModelsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		apiKey = plain
 	}
+	// A Google service-account key can't list models via a bearer GET (the JSON
+	// isn't a bearer — the dispatcher mints a token), and Vertex's OpenAI-compat
+	// endpoint isn't a model catalog anyway. So fall back to the models the
+	// SUBSTRATE already knows for this provider (seeds, prior probes/registers:
+	// model_pricing ∪ model_capability) — a real, generic listing that needs no
+	// auth and no Vertex-specific code. Empty only on a truly fresh provider,
+	// where "+ add model" is the path.
+	if looksLikeServiceAccountJSON(apiKey) {
+		known := d.catalogModels(ctx, name)
+		note := "service-account provider — showing models known to the substrate; probe to (re)confirm, or “+ add model” to name others (e.g. google/gemini-3.5-flash)"
+		if len(known) == 0 {
+			note = "service-account provider — no models known yet; use “+ add model” to name one (e.g. google/gemini-3.5-flash), then probe"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": known, "sa_key": true, "note": note})
+		return
+	}
 	models, err := probeProviderModels(ctx, baseURL, kind, apiKey)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())
@@ -484,6 +614,30 @@ func (d *Deps) credentialModelsHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = d.Pool.Exec(ctx, `SELECT stewards.credential_mark_verified($1)`, name)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
+}
+
+// catalogModels returns the model ids the substrate already knows for a provider
+// — the union of model_pricing and model_capability. Used as the "models" listing
+// for providers that can't be live-listed (service-account/Vertex), so seeded or
+// previously-probed models are still pickable for role assignment.
+func (d *Deps) catalogModels(ctx context.Context, provider string) []string {
+	out := []string{}
+	rows, err := d.Pool.Query(ctx, `
+		SELECT model FROM stewards.model_pricing WHERE provider = $1
+		UNION
+		SELECT model FROM stewards.model_capability WHERE provider = $1
+		ORDER BY 1`, provider)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m string
+		if rows.Scan(&m) == nil {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------

@@ -20,10 +20,15 @@ const loading = ref(true)
 const listError = ref('')
 
 // Presets keep the form to two real decisions: which provider, which key.
-const presets: Record<string, { base_url: string; kind: string; budget?: number; hint?: string }> = {
+// `secret_kind` tells the form how to collect the credential: 'key' = paste a string
+// (the default), 'json' = drop a service-account file (Vertex — the whole JSON becomes
+// the encrypted secret; the dispatcher mints an OAuth token from it, see gcp_sa).
+const presets: Record<string, { base_url: string; kind: string; budget?: number; hint?: string; secret_kind?: 'key' | 'json' }> = {
   opencode_zen:  { base_url: 'https://opencode.ai/zen/v1',        kind: 'openai', budget: 5, hint: 'free models + the Claude family (sonnet!) — budget defaults to $5/day' },
   opencode_go:   { base_url: 'https://opencode.ai/zen/go/v1',     kind: 'openai', hint: 'subscription tier: kimi / qwen / glm / minimax' },
   google_gemini: { base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai', hint: 'AI Studio key (trains on data — public work only)' },
+  google_vertex: { base_url: 'https://aiplatform.googleapis.com/v1/projects/PROJECT/locations/global/endpoints/openapi', kind: 'openai', secret_kind: 'json', hint: 'Google Cloud Vertex AI — drop your service-account JSON key; replace PROJECT in the URL with your GCP project id' },
+  loom:          { base_url: 'http://host.docker.internal:7777/v1', kind: 'openai', hint: 'loom agentic harness (serve) — drives Claude Code / Codex as workers; paste the loom token; models: sonnet / opus / codex' },
   nvidia:        { base_url: 'https://integrate.api.nvidia.com/v1', kind: 'openai', hint: 'free preview endpoints (trains on data — public work only)' },
   lm_studio:     { base_url: 'http://host.docker.internal:1234/v1', kind: 'openai', hint: 'fully local, no key needed' },
   anthropic:     { base_url: 'https://api.anthropic.com/v1',      kind: 'anthropic', hint: 'direct Anthropic API' },
@@ -47,7 +52,21 @@ const saveOk = ref('')
 const pickProvider = ref('')
 const pickModels = ref<string[]>([])
 const pickError = ref('')
+const pickNote = ref('')
 const pickBusy = ref(false)
+
+// --- inline probe verdict per model (keyed by model id) ---
+type ProbePhase = { phase: 'probing' | 'ok' | 'fail'; detail?: string }
+const probeState = ref<Record<string, ProbePhase>>({})
+
+// Manually name a model to probe — for providers whose /models can't be listed
+// with a static bearer (Vertex service-account) or that don't enumerate.
+const manualModel = ref('')
+function addManualModel() {
+  const m = manualModel.value.trim()
+  if (m && !pickModels.value.includes(m)) pickModels.value = [...pickModels.value, m]
+  manualModel.value = ''
+}
 const priceIn = ref<Record<string, string>>({})   // model -> $/Mtok input
 const priceOut = ref<Record<string, string>>({})
 const assignBusy = ref('')
@@ -59,6 +78,42 @@ function applyPreset() {
   baseUrl.value = p.base_url
   kind.value = p.kind
   budget.value = p.budget ?? null
+  secretKind.value = p.secret_kind ?? 'key'
+  secret.value = ''
+  jsonFileName.value = ''
+}
+
+// How the current preset collects its credential: 'key' (paste) or 'json' (file drop).
+const secretKind = ref<'key' | 'json'>('key')
+const jsonFileName = ref('')
+
+// Vertex service-account file → the credential secret. Read the file client-side and
+// put its JSON text into `secret`; it's saved through the same AES-256-GCM path as a
+// pasted key (never echoed back). Validated as parseable JSON with the SA-shape fields.
+async function onJsonFile(e: Event) {
+  saveError.value = ''
+  const f = (e.target as HTMLInputElement).files?.[0]
+  if (!f) return
+  const text = await f.text()
+  let j: any
+  try {
+    j = JSON.parse(text)
+  } catch {
+    saveError.value = 'could not parse that file as JSON — drop the service-account key file'
+    return
+  }
+  if (!j.client_email || !j.private_key) {
+    saveError.value = 'that JSON is missing client_email / private_key — is it a service-account key?'
+    return
+  }
+  // Auto-fill the GCP project into the endpoint from the SA's project_id so the
+  // operator never has to hand-replace PROJECT (leaving it in is the #1 Vertex
+  // setup trap — a placeholder base_url that silently shadows a working one).
+  if (j.project_id && baseUrl.value.includes('PROJECT')) {
+    baseUrl.value = baseUrl.value.replace(/PROJECT/g, j.project_id)
+  }
+  secret.value = text
+  jsonFileName.value = f.name
 }
 
 const rolesFor = computed(() => {
@@ -115,6 +170,12 @@ async function save() {
     saveError.value = 'provider id must be lowercase letters/digits/underscores (it becomes the substrate provider id)'
     return
   }
+  // Guard the Vertex placeholder: a base_url still containing PROJECT would be
+  // stored as-is and shadow any working URL. (Dropping the SA key auto-fills it.)
+  if (baseUrl.value.includes('PROJECT')) {
+    saveError.value = 'the endpoint still contains “PROJECT” — replace it with your GCP project id (dropping the service-account key fills it in automatically)'
+    return
+  }
   saving.value = true
   try {
     const resp = await api.credentialSave({
@@ -131,6 +192,17 @@ async function save() {
       pickProvider.value = prov
       pickModels.value = resp.models ?? []
       prefillKnownPrices(prov, pickModels.value)
+      secret.value = ''
+    } else if (resp.sa_key) {
+      // A Google service-account key: stored & encrypted, but a bearer GET
+      // /models can't verify it (only the dispatcher mints the token). Show it
+      // as stored + dispatcher-usable, and point at probe / test-chat.
+      saveOk.value = 'service-account stored & encrypted' +
+        (resp.pg_decrypt === 'ok' ? ' · dispatcher can decrypt ✓' : (resp.pg_decrypt ? ` · ⚠ pg: ${resp.pg_decrypt}` : '')) +
+        (resp.provider_live ? ' · provider live' : '') +
+        ' — enter a model below and hit “probe”, or use Test chat, to confirm it answers'
+      pickProvider.value = prov
+      pickModels.value = resp.models ?? []
       secret.value = ''
     } else {
       saveError.value = resp.verify_error || 'verification failed'
@@ -167,10 +239,12 @@ async function openModels(prov: string) {
   pickProvider.value = prov
   pickModels.value = []
   pickError.value = ''
+  pickNote.value = ''
   pickBusy.value = true
   try {
     const r = await api.credentialModels(prov)
     pickModels.value = r.models
+    pickNote.value = r.note ?? ''
     prefillKnownPrices(prov, r.models)
   } catch (e) {
     pickError.value = String(e)
@@ -214,11 +288,30 @@ function kindOf(prov: string): string {
 
 async function probe(prov: string, model: string) {
   pickError.value = ''
+  probeState.value = { ...probeState.value, [model]: { phase: 'probing' } }
   try {
     const r = await api.modelProbe({ provider: prov, model })
-    saveOk.value = `real-path probe enqueued (work_queue #${r.work_queue_id}) — the verdict lands in the catalog below`
+    // Poll the verdict inline (the terminal-transition trigger writes it into
+    // model_capability the moment the probe row lands done/error) so the ✓/✗
+    // shows right here, not down in the catalog.
+    const deadline = Date.now() + 90_000
+    while (Date.now() < deadline) {
+      await new Promise(res => setTimeout(res, 1200))
+      const s = await api.probeStatus(prov, model, r.work_queue_id)
+      if (s.done) {
+        const ok = s.usable === true
+        probeState.value = {
+          ...probeState.value,
+          [model]: { phase: ok ? 'ok' : 'fail', detail: s.probe_detail || s.queue_error || '' },
+        }
+        await load() // keep the catalog row below in sync too
+        return
+      }
+    }
+    probeState.value = { ...probeState.value, [model]: { phase: 'fail', detail: 'probe timed out (90s)' } }
   } catch (e) {
     pickError.value = String(e)
+    probeState.value = { ...probeState.value, [model]: { phase: 'fail', detail: String(e) } }
   }
 }
 
@@ -331,16 +424,22 @@ onMounted(load)
         </label>
       </div>
       <div class="row">
-        <label class="grow">
+        <!-- key providers: paste a string. Vertex (secret_kind=json): drop the SA file. -->
+        <label v-if="secretKind === 'key'" class="grow">
           <span>API key <em class="dim">(blank = keyless / keep + re-verify existing)</em></span>
           <input v-model="secret" type="password" autocomplete="off" placeholder="sk-…" />
+        </label>
+        <label v-else class="grow">
+          <span>Service-account JSON <em class="dim">(drop your GCP SA key file)</em></span>
+          <input type="file" accept=".json,application/json" @change="onJsonFile" />
+          <span v-if="jsonFileName" class="ok">● {{ jsonFileName }} loaded (encrypted on save)</span>
         </label>
         <label>
           <span>Budget $/day <em class="dim">(blank = none)</em></span>
           <input v-model.number="budget" type="number" min="0" step="0.5" style="width: 7rem" />
         </label>
         <button class="btn primary" type="submit" :disabled="saving">
-          {{ saving ? 'testing key…' : 'Save & test' }}
+          {{ saving ? 'testing…' : 'Save & test' }}
         </button>
       </div>
       <p v-if="presetHint" class="hint dim">{{ presetHint }}</p>
@@ -353,6 +452,13 @@ onMounted(load)
       <h3>Models on <code>{{ pickProvider }}</code>
         <span v-if="pickBusy" class="dim"> — loading…</span>
       </h3>
+      <!-- name a model to probe when /models can't be listed (Vertex SA keys) -->
+      <div class="add-model">
+        <input v-model="manualModel" placeholder="model id (e.g. google/gemini-3.1-pro-preview)"
+               @keydown.enter.prevent="addManualModel" />
+        <button class="btn" type="button" :disabled="!manualModel.trim()" @click="addManualModel">+ add model</button>
+      </div>
+      <p v-if="pickNote" class="hint dim">{{ pickNote }}</p>
       <div v-if="pickError" class="wiz-error">{{ pickError }}</div>
       <table v-if="pickModels.length" class="pick-table">
         <thead>
@@ -377,8 +483,17 @@ onMounted(load)
               <input v-model="priceIn[m]" placeholder="in" title="input $/Mtok (applied when a role is assigned)" />
               <input v-model="priceOut[m]" placeholder="out" title="output $/Mtok (applied when a role is assigned)" />
             </td>
-            <td>
-              <button class="btn" title="real-path streaming probe through the actual dispatcher" @click="probe(pickProvider, m)">probe</button>
+            <td class="probe-cell">
+              <button class="btn"
+                      title="real-path streaming probe through the actual dispatcher"
+                      :disabled="probeState[m]?.phase === 'probing'"
+                      @click="probe(pickProvider, m)">
+                {{ probeState[m]?.phase === 'probing' ? 'probing…' : 'probe' }}
+              </button>
+              <span v-if="probeState[m]?.phase === 'ok'" class="probe-chip ok"
+                    :title="probeState[m]?.detail || 'model answered the real-path probe'">✓ usable</span>
+              <span v-else-if="probeState[m]?.phase === 'fail'" class="probe-chip fail"
+                    :title="probeState[m]?.detail || 'probe failed'">✗ {{ probeState[m]?.detail ? 'failed' : 'unusable' }}</span>
             </td>
           </tr>
         </tbody>
@@ -495,4 +610,29 @@ onMounted(load)
   color: inherit;
   font-size: 0.85rem;
 }
+.add-model {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0.8rem;
+}
+.add-model input {
+  flex: 1;
+  max-width: 420px;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  background: var(--surface, #1a1a1a);
+  color: inherit;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+}
+.probe-cell { white-space: nowrap; }
+.probe-chip {
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: help;
+}
+.probe-chip.ok { color: #2ecc71; }
+.probe-chip.fail { color: #ff6b5b; }
 </style>
