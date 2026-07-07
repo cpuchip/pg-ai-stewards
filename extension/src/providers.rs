@@ -58,17 +58,40 @@ pub(crate) struct ProviderSummary {
 }
 
 /// How a provider authenticates each request.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub(crate) enum AuthMode {
     /// Static bearer (OpenAI) / x-api-key (Anthropic) from the env API_KEY, or
     /// none when API_KEY is unset.
     ApiKey,
     /// Google service-account: mint + refresh a Vertex OAuth access token from
-    /// the SA key file at this path (gcp_sa.rs). No static key lives in env.
+    /// the SA key FILE at this path (gcp_sa.rs). Env-configured; no static key.
     GoogleSa { credentials_file: String },
+    /// Google service-account whose key JSON is stored (encrypted) in the
+    /// credential store — the wizard "drop the SA json" path. The decrypted SA
+    /// JSON content is minted into a Vertex OAuth token at dispatch. The content
+    /// holds a private key and is NEVER logged (see the manual Debug below).
+    GoogleSaJson { credentials_json: String },
 }
 
-#[derive(Clone, Debug)]
+// Manual Debug: GoogleSaJson carries a service-account private key — a derived
+// Debug would print it, breaking the gcp_sa KEY SAFETY rule the moment anything
+// {:?}-formats a Provider. The file path (GoogleSa) is not secret, so it stays.
+impl std::fmt::Debug for AuthMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AuthMode::ApiKey => write!(f, "ApiKey"),
+            AuthMode::GoogleSa { credentials_file } => f
+                .debug_struct("GoogleSa")
+                .field("credentials_file", credentials_file)
+                .finish(),
+            AuthMode::GoogleSaJson { .. } => {
+                write!(f, "GoogleSaJson {{ credentials_json: <redacted> }}")
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
 pub(crate) struct Provider {
     pub(crate) name: String,
     pub(crate) base_url: String,
@@ -76,6 +99,21 @@ pub(crate) struct Provider {
     pub(crate) kind: String,
     pub(crate) api_key: Option<String>,
     pub(crate) auth: AuthMode,
+}
+
+// Manual Debug: api_key is a bearer secret — report only whether it is present,
+// never the value. (Same KEY SAFETY discipline as AuthMode above.)
+impl std::fmt::Debug for Provider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Provider")
+            .field("name", &self.name)
+            .field("base_url", &self.base_url)
+            .field("default_model", &self.default_model)
+            .field("kind", &self.kind)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("auth", &self.auth)
+            .finish()
+    }
 }
 
 impl Provider {
@@ -87,6 +125,9 @@ impl Provider {
             AuthMode::GoogleSa { credentials_file } => {
                 crate::gcp_sa::token_for(&self.name, credentials_file).map(Some)
             }
+            AuthMode::GoogleSaJson { credentials_json } => {
+                crate::gcp_sa::token_for_json(&self.name, credentials_json).map(Some)
+            }
             AuthMode::ApiKey => Ok(self.api_key.clone()),
         }
     }
@@ -95,6 +136,7 @@ impl Provider {
     pub(crate) fn auth_label(&self) -> &'static str {
         match &self.auth {
             AuthMode::GoogleSa { .. } => "google_sa",
+            AuthMode::GoogleSaJson { .. } => "google_sa_json",
             AuthMode::ApiKey => "api_key",
         }
     }
@@ -383,16 +425,28 @@ fn merge_row(row: DbProviderRow, env: Option<Provider>) -> Result<Option<Provide
             row.provider.to_uppercase()
         ));
     };
-    let api_key = match &row.secret_encrypted {
-        Some(ct) if master_key().is_some() => Some(decrypt_secret(ct)?),
+    // Decrypt the stored secret, then classify it: a Google service-account
+    // JSON authenticates by minting an OAuth token (GoogleSaJson), everything
+    // else is a static bearer key (ApiKey). Detecting by SHAPE means the wizard
+    // "drop the SA json" path dispatches natively with no schema/config signal —
+    // the same JSON the UI validated on save is what mints the token here.
+    let (api_key, auth) = match &row.secret_encrypted {
+        Some(ct) if master_key().is_some() => {
+            let plain = decrypt_secret(ct)?;
+            if crate::gcp_sa::is_service_account_json(&plain) {
+                (None, AuthMode::GoogleSaJson { credentials_json: plain })
+            } else {
+                (Some(plain), AuthMode::ApiKey)
+            }
+        }
         Some(_) => {
             pgrx::log!(
                 "stewards: provider '{}' has a stored credential but STEWARDS_MASTER_KEY is not set in the Postgres environment — falling back to the env key (if any)",
                 row.provider
             );
-            env.as_ref().and_then(|e| e.api_key.clone())
+            (env.as_ref().and_then(|e| e.api_key.clone()), AuthMode::ApiKey)
         }
-        None => env.as_ref().and_then(|e| e.api_key.clone()),
+        None => (env.as_ref().and_then(|e| e.api_key.clone()), AuthMode::ApiKey),
     };
     Ok(Some(Provider {
         name: row.provider,
@@ -400,9 +454,7 @@ fn merge_row(row: DbProviderRow, env: Option<Provider>) -> Result<Option<Provide
         default_model,
         kind,
         api_key,
-        // DB providers always auth by static key (or keyless). google_sa
-        // stays env-only — its secret is a key FILE, not a string.
-        auth: AuthMode::ApiKey,
+        auth,
     }))
 }
 
