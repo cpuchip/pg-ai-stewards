@@ -1,6 +1,7 @@
 # Files as Interface, DB as Engine — the lightening verdict
 
 **Status:** ★ RATIFIED 2026-07-07 (Michael), with amendments:
+0. **Decision ask #3 ANSWERED 2026-07-07 morning** (missed in the sleepy bedtime round): **BOTH files-interface increments — ingest-by-drop AND the projection tree** ("both! let's do 1 and 2"). Michael also placed the lineage: the projection tree "may have even predated pg-ai-stewards" — confirmed, it's in the FOUNDING 2026-05-02 research verdict (".mind/ markdown files… become *projections* of canonical rows, not the canonical store") and the autonomous-materializer proposal (2026-05-22) ratified the bridge-goroutine mechanics it reuses. Build branch: `feat/files-interface` (v28 + bridge drop-watcher + projector).
 1. Four-layer ruling — **ratified as-is**.
 2. Core/pack list — **ratified with the loreworks inversion confirmed: "loreworks is the point, everything else supports it."** Worlds/seams are core; brainstorm-zoo, crawler, yt/frames, code-graph, TTRPG extras, lab → packs.
 3. **NEW FOUNDING PRINCIPLE — the substrate ships MODEL-AGNOSTIC:** *"default is no models, it's just a db that's lifeless. you give it models to bring it to life."* Core seeds NO providers and NO model defaults; the wizard is the front door for whatever a deployer has (a Claude Code license via loom, Vertex, Azure, AWS, raw keys, local). Any model preference is deployment config, never core schema. (Locally: lean sonnet-5/haiku-4.5/opus-4.8 via loom + opencode-go/local — that's an OVERLAY choice.)
