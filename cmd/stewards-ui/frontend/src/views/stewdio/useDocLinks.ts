@@ -1,10 +1,14 @@
 // Arc A — make links in rendered markdown work, in both the chat bubbles and the
 // doc viewer. External URLs open in a new tab; internal references navigate
 // within the cockpit (select that doc / work item, which drives the artifact +
-// chat panels). One handler, shared by ChatPanel and ArtifactPanel.
-import type { useStewdioStore } from '../../stores/stewdio'
-
-type Store = ReturnType<typeof useStewdioStore>
+// chat panels). One handler, shared by ChatPanel and ArtifactPanel — and (war-
+// game 2026-07-07, finding #5) by the standalone /studies/:slug page, which had
+// no link handler at all and let a bare `<a href="other-doc.md">` fall through
+// to the browser's own relative-URL navigation (→ /studies/other-doc.md → a 404
+// against a slug that literally ends in ".md"). Takes a plain select callback
+// instead of the whole Stewdio store so non-cockpit hosts (StudyDetail) can wire
+// it to router.push instead of store.select.
+export type LinkSelect = (ref: string, kind: 'doc' | 'work_item', title?: string) => void
 
 // Links "just work" (O2). Resolution order:
 //   #anchor                       → scroll within the rendered doc (intra-doc ref)
@@ -15,7 +19,7 @@ type Store = ReturnType<typeof useStewdioStore>
 //   bare token (no slash/dot)     → open it as a doc slug
 // A trailing #anchor on a cross-doc link is dropped (we open the doc; same-doc
 // anchors are handled by the first arm).
-export function makeLinkClick(store: Store) {
+export function makeLinkClick(select: LinkSelect) {
   return (e: MouseEvent) => {
     const a = (e.target as HTMLElement)?.closest?.('a')
     if (!a) return
@@ -26,7 +30,7 @@ export function makeLinkClick(store: Store) {
     if (href.startsWith('#')) {
       const id = decodeURIComponent(href.slice(1))
       // #123 (digits) is a work-item shorthand, not an anchor.
-      if (/^\d+$/.test(id)) { e.preventDefault(); store.select(id, 'work_item', id); return }
+      if (/^\d+$/.test(id)) { e.preventDefault(); select(id, 'work_item', id); return }
       e.preventDefault()
       const root = (a.closest('.prose') as Element | null) ?? document
       const target = root.querySelector?.(`#${cssEscape(id)}`) ?? document.getElementById(id)
@@ -57,7 +61,7 @@ export function makeLinkClick(store: Store) {
     ref = ref.trim()
     if (!ref) return
     e.preventDefault()
-    store.select(ref, kind, ref)
+    select(ref, kind, ref)
   }
 }
 

@@ -50,6 +50,7 @@ func Register(mux *http.ServeMux, deps *Deps) {
 	deps.registerModels(mux)
 	deps.registerModelTestChat(mux) // Models page: raw send/receive test-chat (no tools/skills)
 	deps.registerRig(mux)
+	deps.registerAutonomy(mux) // ratified 2026-07-07: GET /api/autonomy — the paused-banner read
 	deps.registerActivity(mux)
 	deps.registerObjects(mux)
 	deps.registerChat(mux)

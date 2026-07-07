@@ -217,10 +217,16 @@ async function rigPost(path: string): Promise<{ status?: string; autonomy_paused
   return r.json()
 }
 
+export type AutonomyResp = { paused: boolean }
+
 export const api = {
   // Polled dashboard probes carry a 5s abort so one hung endpoint (the rig
   // probe in particular) can't hold connections and stall the whole page.
   dashboard: () => getJSON<DashboardResp>('/api/dashboard', { timeoutMs: 5000 }),
+  // Ratified 2026-07-07: the global autonomy kill switch, as a cheap DB-only
+  // read any page can poll independently of /api/rig/state's llama-chip
+  // round-trip. Backs AutonomyBanner (Dashboard, /scheduled, Stewdio).
+  autonomy: () => getJSON<AutonomyResp>('/api/autonomy', { timeoutMs: 5000 }),
   activity: () => getJSON<ActivityResp>('/api/activity', { timeoutMs: 5000 }),
   rigState: () => getJSON<RigState>('/api/rig/state', { timeoutMs: 5000 }),
   rigBrainOn: () => rigPost('/api/rig/brain-on'),
@@ -400,13 +406,14 @@ export const api = {
     }
     return r.json()
   },
-  workItemsList: (params?: { pipeline?: string; status?: string; origin?: string; project_association?: string; limit?: number }) => {
+  workItemsList: (params?: { pipeline?: string; status?: string; origin?: string; project_association?: string; limit?: number; offset?: number }) => {
     const q = new URLSearchParams()
     if (params?.pipeline) q.set('pipeline', params.pipeline)
     if (params?.status) q.set('status', params.status)
     if (params?.origin) q.set('origin', params.origin)
     if (params?.project_association) q.set('project_association', params.project_association)
     if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.offset) q.set('offset', String(params.offset))
     const qs = q.toString()
     return getJSON<WorkItemsListResp>(`/api/work-items/list${qs ? '?' + qs : ''}`)
   },
@@ -519,8 +526,10 @@ export const api = {
     }
     return r.json()
   },
+  // null = no active covenant for this scope (a sane empty state — see
+  // covenants.go — rather than a 404/raw-pgx-error page).
   covenantActive: (scope?: string) =>
-    getJSON<CovenantRow>(`/api/covenants/active${scope ? '?scope=' + encodeURIComponent(scope) : ''}`),
+    getJSON<CovenantRow | null>(`/api/covenants/active${scope ? '?scope=' + encodeURIComponent(scope) : ''}`),
   covenantsList: () => getJSON<CovenantsListResp>('/api/covenants/list'),
   lessonsList: (params?: { kind?: string; ratified?: 'true' | 'false'; limit?: number }) => {
     const q = new URLSearchParams()
@@ -613,8 +622,11 @@ export const api = {
     }
     return r.json()
   },
+  // War-game 2026-07-07 finding #9: a session_id reused ~15x on one work item
+  // can carry many large payloads — raise this one-shot navigation's timeout
+  // past the 5s read default (the same carve-out the graph/cosmos reads use).
   sessionGet: (sid: string) =>
-    getJSON<SessionDetail>(`/api/sessions/get?id=${encodeURIComponent(sid)}`),
+    getJSON<SessionDetail>(`/api/sessions/get?id=${encodeURIComponent(sid)}`, { timeoutMs: 20000 }),
   sessionsList: () =>
     getJSON<SessionsListResp>('/api/sessions/list'),
   watchmanPasses: (limit?: number) => {
@@ -1707,6 +1719,9 @@ export type SessionDetail = {
   dispatches: ChatDispatch[]
   tokens_in: number
   tokens_out: number
+  // set when part of the load failed/timed out — the rest of the payload is
+  // still whatever was gathered, not a hard error (see sessions.go).
+  note?: string
 }
 
 export type ProjectRow = {

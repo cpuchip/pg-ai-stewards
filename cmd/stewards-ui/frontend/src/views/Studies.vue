@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { api, type StudiesListResp, type SearchResp } from '@/api'
+import { api, type StudiesListResp, type SearchResp, type StudyBrief } from '@/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -14,9 +14,48 @@ const loading = ref(false)
 const query = ref<string>(String(route.query.q ?? ''))
 const kind = ref<string>(String(route.query.kind ?? ''))
 
+// War-game 2026-07-07 finding #4: the list silently capped at 100 rows while
+// the header claimed the full total (391), with no way to reach the rest.
+// The API already supports offset (studies.go) — this was purely a missing
+// frontend affordance. loadingMore tracks the "load more" click separately
+// from the initial/filter-change load so the button can show its own spinner
+// without blanking the list that's already on screen.
+const PAGE_SIZE = 100
+const offset = ref(0)
+const loadingMore = ref(false)
+
+// War-game 2026-07-07 finding: the kind dropdown was a hardcoded taxonomy
+// (study/proposal/phase-doc/journal) whose entries mostly match 0 rows in the
+// real data, while actual kinds (e.g. crawl-page) weren't options at all. The
+// options are now harvested from the rows the API actually returns —
+// accumulated across loads so picking a kind doesn't erase the other options —
+// with the old static list kept only as a pre-data fallback. No new backend:
+// when the first load is already filtered (deep link ?kind=… or ?q=…), one
+// unfiltered sample page is fetched just to harvest the real kinds.
+const FALLBACK_KINDS = ['study', 'doc', 'proposal', 'phase-doc', 'journal']
+const kindSet = new Set<string>()
+const kinds = ref<string[]>([])
+function harvestKinds(items: StudyBrief[]) {
+  let changed = false
+  for (const it of items) {
+    if (it.kind && !kindSet.has(it.kind)) {
+      kindSet.add(it.kind)
+      changed = true
+    }
+  }
+  if (changed) kinds.value = [...kindSet].sort()
+}
+const kindOptions = computed(() => {
+  const opts = kinds.value.length ? [...kinds.value] : [...FALLBACK_KINDS]
+  // keep a deep-linked ?kind=… selectable even if it matched 0 rows
+  if (kind.value && !opts.includes(kind.value)) opts.unshift(kind.value)
+  return opts
+})
+
 async function load() {
   loading.value = true
   error.value = ''
+  offset.value = 0
   try {
     if (query.value.trim()) {
       search.value = await api.studiesSearch(query.value.trim(), { limit: 50 })
@@ -24,14 +63,36 @@ async function load() {
     } else {
       list.value = await api.studiesList({
         kind: kind.value || undefined,
-        limit: 100,
+        limit: PAGE_SIZE,
+        offset: 0,
       })
       search.value = null
+      harvestKinds(list.value.items)
     }
   } catch (e) {
     error.value = String(e)
   } finally {
     loading.value = false
+  }
+}
+
+async function loadMore() {
+  if (!list.value || loadingMore.value) return
+  loadingMore.value = true
+  try {
+    const next = offset.value + PAGE_SIZE
+    const r = await api.studiesList({
+      kind: kind.value || undefined,
+      limit: PAGE_SIZE,
+      offset: next,
+    })
+    list.value = { items: [...list.value.items, ...r.items], total: r.total }
+    harvestKinds(r.items)
+    offset.value = next
+  } catch (e) {
+    error.value = String(e)
+  } finally {
+    loadingMore.value = false
   }
 }
 
@@ -47,7 +108,14 @@ function submit() {
   load()
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  // If the first load is filtered/searched it won't sample the corpus's real
+  // kinds — fetch one unfiltered page in the background just for the dropdown.
+  if (kind.value || query.value.trim()) {
+    api.studiesList({ limit: PAGE_SIZE }).then((r) => harvestKinds(r.items)).catch(() => {})
+  }
+})
 watch(
   () => route.query,
   (q) => {
@@ -90,11 +158,7 @@ function fmtDate(s?: string) {
         class="px-3 py-2 rounded border border-zinc-700 bg-zinc-900 text-sm"
       >
         <option value="">all kinds</option>
-        <option value="study">study</option>
-        <option value="doc">doc</option>
-        <option value="proposal">proposal</option>
-        <option value="phase-doc">phase-doc</option>
-        <option value="journal">journal</option>
+        <option v-for="k in kindOptions" :key="k" :value="k">{{ k }}</option>
       </select>
       <button
         type="submit"
@@ -176,6 +240,18 @@ function fmtDate(s?: string) {
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- war-game finding #4: real pagination instead of a silent 100-row cap -->
+    <div v-if="list && list.items.length < list.total" class="flex items-center justify-between text-xs text-zinc-500 px-1">
+      <span>showing {{ list.items.length.toLocaleString() }} of {{ list.total.toLocaleString() }}</span>
+      <button
+        class="px-3 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800 text-zinc-200 disabled:opacity-50"
+        :disabled="loadingMore"
+        @click="loadMore"
+      >
+        {{ loadingMore ? 'loading…' : 'load more' }}
+      </button>
     </div>
   </div>
 </template>

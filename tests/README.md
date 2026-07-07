@@ -3,7 +3,11 @@
 ## `virgin-smoke.sql` — the authoritative virgin-boot test
 
 Installs the extension on a fresh Postgres and asserts the clean-room
-invariants of the authored chain (`extension/00-config.sql` → `86-sticky-agent-family.sql`).
+invariants of the authored chain (now the consolidated volumes
+`extension/v00-foundations.sql` → `v27-lifeless-core.sql`; the 109-file
+`00-config.sql` → `107-lifeless-core.sql` chain was concatenated into 28
+byte-preserving themed volumes on feat/lightening — see
+`extension/consolidation-map.txt` and `extension/verify-consolidation.py`).
 It uses plpgsql `ASSERT`, so any regression makes `psql` exit non-zero — the
 test fails loudly rather than printing a wrong value.
 
@@ -27,6 +31,18 @@ block per accreted subsystem, currently through `OK 88`):
    usable catalog default and logs the swap with a reason.
 
 ## Run it locally
+
+Before building the image, check that `extension/Dockerfile`'s generated SQL
+COPY block still matches `extension/src/lib.rs` — run this **UNPIPED** so its
+exit code isn't swallowed (the forgotten-COPY failure class this closes):
+
+```sh
+extension/gen-copy-manifest.sh --check
+```
+
+Exit 0 means the block is current. Non-zero means a chain file was
+added/removed in `lib.rs` without regenerating — run
+`extension/gen-copy-manifest.sh` (no flags) to fix it, then re-check.
 
 ```sh
 docker build -t stewards-oss-pg:test extension/

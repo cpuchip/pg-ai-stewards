@@ -273,7 +273,7 @@ const hasResult = computed(() => result.value !== null)
           </li>
           <li v-if="result!.graph.length === 0" class="p-6 text-sm text-zinc-500 text-center">
             no similarity edges yet
-            <div class="text-[11px] mt-1">(run stewards.refresh_doc_similarity for the top hit)</div>
+            <div class="text-[11px] mt-1">(the similarity graph for the top hit hasn't been built yet)</div>
           </li>
         </ul>
       </section>

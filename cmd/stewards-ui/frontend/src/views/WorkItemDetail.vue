@@ -1,17 +1,25 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from 'vue'
-import { useRoute, RouterLink } from 'vue-router'
+import { useRoute, useRouter, RouterLink } from 'vue-router'
 import MarkdownIt from 'markdown-it'
 import { api, type WorkItemDetail, type CostEventsResp, type StewardActionsResp, type GateDecisionsResp, type ProducedDoc } from '@/api'
 import { parseStageResults, extractPooledSlugs } from '@/stageArtifacts'
+import { makeLinkClick } from './stewdio/useDocLinks'
 
 const route = useRoute()
+const router = useRouter()
 
 // Stage outputs are model-authored markdown. Rendered as escaped JSON they were
 // a wall of visible \n / \" — so each stage is now a titled, markdown-rendered
 // section (raw JSON stays one toggle away for debugging). Same MarkdownIt config
 // as StudyDetail / ArtifactPanel: no raw html, autolink, no hard breaks.
 const md = new MarkdownIt({ html: false, linkify: true, breaks: false })
+// Same shape as the StudyDetail fix (war-game 2026-07-07 finding #5): this
+// section also renders model-authored markdown via v-html with no link
+// handler, so a stage's own cross-doc `.md` links would 404 the same way.
+const onLink = makeLinkClick((ref, kind) => {
+  router.push(kind === 'work_item' ? `/work-items/${encodeURIComponent(ref)}` : `/studies/${encodeURIComponent(ref)}`)
+})
 const stageList = computed(() => parseStageResults(wi.value?.stage_results))
 const showRawStages = ref(false)
 function stageTitle(name: string) {
@@ -544,9 +552,13 @@ function errorCategoryInfo(cat?: string): { label: string; hint: string; budget:
         </div>
       </header>
 
-      <!-- J.12 — classified failure banner (budget/cap stands out) -->
+      <!-- J.12 — classified failure banner (budget/cap stands out). Gated off
+           status==='completed' (war-game 2026-07-07, finding #10): wi.error /
+           error_category are the LAST recorded failure and the substrate never
+           clears them once a later retry succeeds, so without this guard a
+           healthy, completed item kept showing a scary red error at the top. -->
       <section
-        v-if="errorCategoryInfo(wi.error_category)"
+        v-if="errorCategoryInfo(wi.error_category) && wi.status !== 'completed'"
         :class="[
           'rounded-md border p-4 text-sm mb-3',
           errorCategoryInfo(wi.error_category)!.budget
@@ -563,8 +575,10 @@ function errorCategoryInfo(cat?: string): { label: string; hint: string; budget:
         <div class="text-zinc-300">{{ errorCategoryInfo(wi.error_category)!.hint }}</div>
       </section>
 
+      <!-- same guard as above: a stale wi.error from a resolved earlier attempt
+           must not keep flagging a now-completed item as broken. -->
       <section
-        v-if="wi.error"
+        v-if="wi.error && wi.status !== 'completed'"
         class="rounded-md border border-red-900/40 bg-red-950/20 p-4 text-sm"
       >
         <div class="text-xs uppercase tracking-wide text-red-400 mb-1">
@@ -1232,7 +1246,7 @@ function errorCategoryInfo(cat?: string): { label: string; hint: string; budget:
               </span>
             </summary>
             <div class="px-3 pb-3 pt-1 border-t border-zinc-800/60">
-              <div class="doc-theme prose prose-invert prose-sm max-w-none" v-html="md.render(s.output)"></div>
+              <div class="doc-theme prose prose-invert prose-sm max-w-none" v-html="md.render(s.output)" @click="onLink"></div>
             </div>
           </details>
         </div>

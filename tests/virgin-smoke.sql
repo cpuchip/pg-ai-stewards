@@ -2,7 +2,8 @@
 -- tests/virgin-smoke.sql — the authoritative virgin-boot test
 -- =====================================================================
 -- Run against a FRESH Postgres (pgvector image) with the pg_ai_stewards
--- extension installed. Proves the authored chain (00→91) installs cleanly
+-- extension installed. Proves the authored chain (now the v00→v27 consolidated
+-- volumes; was 00→107, feat/lightening) installs cleanly
 -- and the clean-room invariants hold. Uses plpgsql ASSERT so a regression
 -- makes psql exit non-zero (CI goes red), not just print.
 --
@@ -157,24 +158,65 @@ END $$;
 
 -- ---------------------------------------------------------------------
 -- 5. Functional spine, end to end: intent → work_item → dispatch → work_queue.
---    Proves the core actually runs, with the dispatch FINAL's capability path.
+--    Split in two per the lifeless-core principle (feat/lightening,
+--    ratified 2026-07-07, "default is no models, it's just a db that's
+--    lifeless"): (a) a virgin install names NO model/provider anywhere in
+--    the resolution ladder, so a dispatch must land in awaiting_review
+--    with a clear message — never RAISE cryptically, never enqueue a
+--    work_queue row certain to fail; (b) once a default IS configured
+--    (the smoke brings its own life here, then tears it down), the
+--    capability-substitution machinery runs exactly as before the strip.
 -- ---------------------------------------------------------------------
 DO $$
 DECLARE
     v_intent uuid;
     v_wid    uuid;
+    v_wid2   uuid;
     v_model  text;
-    v_capped text;
+    v_status text;
+    v_error  text;
 BEGIN
     -- Seed the default intent (a runtime op; core ships none).
     INSERT INTO stewards.intents (slug, purpose) VALUES ('default','virgin smoke')
     ON CONFLICT (slug) DO NOTHING;
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug='default';
 
-    -- A minimal agent + one-shot pipeline whose stage resolves to an UNUSABLE
-    -- model, so dispatch must substitute the (usable-by-default) catalog default.
     INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature)
     VALUES ('smoke','*','virgin smoke agent','primary','You are a smoke agent.',0.2)
     ON CONFLICT (family, model_match) DO UPDATE SET prompt=EXCLUDED.prompt;
+
+    -- ── 5a. LIFELESS: no model/provider anywhere in the ladder ────────
+    ASSERT stewards.catalog_default_provider() IS NULL,
+        'catalog_default_provider must be NULL absent config on a virgin install (was a hardcoded opencode_go)';
+    ASSERT stewards.catalog_default_model('opencode_go') IS NULL,
+        'catalog_default_model must be NULL absent config on a virgin install (was a hardcoded kimi-k2.6)';
+
+    INSERT INTO stewards.pipelines (family, description, stages, sabbath_enabled, atonement_enabled,
+        file_destination_template, file_content_jsonpath, maturity_ladder, auto_materialize_on_verified, metadata)
+    VALUES ('smoke-pipe-lifeless','virgin smoke pipeline — names no model/provider anywhere',
+      '[{"name":"work","next":null,"agent_family":"smoke","auto_advance":false,"input_template":"{{input.binding_question}}"}]'::jsonb,
+      false,false,NULL,NULL,'["raw","verified"]'::jsonb,false,'{}'::jsonb)
+    ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages;
+
+    v_wid2 := stewards.work_item_create('smoke-pipe-lifeless','{"binding_question":"hello"}'::jsonb,'smoke-wi-lifeless','tester',NULL,v_intent);
+    PERFORM stewards.work_item_dispatch_stage_safe(v_wid2);
+
+    SELECT status, error INTO v_status, v_error FROM stewards.work_items WHERE id = v_wid2;
+    ASSERT v_status = 'awaiting_review',
+        format('a dispatch with no model configured anywhere must land in awaiting_review, got status=%s', v_status);
+    ASSERT v_error LIKE '%no model configured%',
+        format('the awaiting_review error must name the actual gap (wizard pointer), got: %s', v_error);
+    ASSERT EXISTS (SELECT 1 FROM stewards.needs_attention WHERE source_kind='review' AND work_item_id = v_wid2),
+        'the lifeless-dispatch work_item must surface in needs_attention''s review bucket';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.work_queue WHERE payload->>'_work_item_id' = v_wid2::text),
+        'a lifeless dispatch must never enqueue a work_queue row certain to fail';
+
+    -- ── 5b. LIFE APPLIED (the smoke brings its own life here): a default
+    -- provider/model configured, then the SAME capability-substitution
+    -- machinery runs exactly as before the lightening pass. Torn down at
+    -- the end so every later block still sees a lifeless install.
+    PERFORM stewards.config_set('default_provider', to_jsonb('opencode_go'::text), NULL);
+    PERFORM stewards.config_set('default_model', to_jsonb('kimi-k2.6'::text), NULL);
 
     INSERT INTO stewards.model_capability (provider, model, usable)
     VALUES ('opencode_go','smoke-bad',false)
@@ -187,7 +229,6 @@ BEGIN
       false,false,NULL,NULL,'["raw","verified"]'::jsonb,false,'{}'::jsonb)
     ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages;
 
-    SELECT id INTO v_intent FROM stewards.intents WHERE slug='default';
     v_wid := stewards.work_item_create('smoke-pipe','{"binding_question":"hello"}'::jsonb,'smoke-wi','tester',NULL,v_intent);
     PERFORM stewards.work_item_dispatch_stage(v_wid);
 
@@ -196,13 +237,19 @@ BEGIN
      WHERE kind='chat' AND payload->>'_work_item_id' = v_wid::text;
 
     ASSERT v_model = 'kimi-k2.6',
-        format('dispatch should substitute the unusable model with the catalog default kimi-k2.6, got %s', v_model);
+        format('once a default provider/model is configured, dispatch should substitute the unusable model with it, got %s', v_model);
     ASSERT EXISTS (SELECT 1 FROM stewards.model_substitutions
                     WHERE pipeline_family='smoke-pipe' AND reason LIKE 'capability:%'),
         'the capability substitution must be logged with a reason';
     ASSERT stewards.provider_cap_exceeded('opencode_go') = false,
         'an uncapped provider must never be gated';
-    RAISE NOTICE 'OK 5: spine runs e2e (intent→work_item→dispatch); capability substitution + logging work';
+
+    -- Teardown: restore lifelessness for every block after this one.
+    DELETE FROM stewards.config WHERE key IN ('default_provider','default_model');
+    ASSERT stewards.catalog_default_provider() IS NULL,
+        'teardown must restore the lifeless default — no config row leaking into later assertions';
+
+    RAISE NOTICE 'OK 5: (a) a lifeless dispatch lands in awaiting_review (needs_attention), never RAISEs cryptically, never enqueues a doomed work_queue row; (b) once a default provider/model is configured, capability substitution + logging run exactly as before the lightening pass';
 END $$;
 
 -- ── 6. compact_context (M5) ships in core, as a tools-off judge ──────────
@@ -1068,8 +1115,16 @@ BEGIN
     -- ships OFF with public defaults (a bare install is unchanged)
     ASSERT stewards.config_get_text('judge_dispatch_local','x') = 'false',
         'judge_dispatch_local must default false (public install unchanged)';
-    ASSERT stewards.config_get_text('judge_dispatch_provider','x') = 'opencode_go',
-        'judge_dispatch_provider must default opencode_go';
+    -- lifeless core (feat/lightening, 2026-07-07): judge_dispatch_provider/
+    -- model no longer seed a literal default (was opencode_go/deepseek-
+    -- v4-flash) — 107-lifeless-core.sql re-authors extract_engrams/
+    -- dispatch_judge_brief/etc. to read this pair, falling through to
+    -- catalog_default_provider/model (itself NULL absent config) — one
+    -- central lifeless default instead of two.
+    ASSERT stewards.config_get_text('judge_dispatch_provider','x') = 'x',
+        'judge_dispatch_provider must have NO seeded default on a virgin install';
+    ASSERT stewards.config_get_text('judge_dispatch_model','x') = 'x',
+        'judge_dispatch_model must have NO seeded default on a virgin install';
     ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname='reroute_judge_to_local'),
         'the reroute function must ship';
     ASSERT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='work_queue_reroute_judge_to_local'),
@@ -1110,10 +1165,11 @@ BEGIN
     ASSERT v_prov='opencode_go' AND v_bodym='kimi-k2.6',
         format('a non-judge dispatch must be untouched, got %s/%s', v_prov, v_bodym);
 
-    -- restore virgin state
+    -- restore virgin state — lifeless core: judge_dispatch_provider/model
+    -- have no default to restore TO, so DELETE the rows entirely rather
+    -- than re-seeding a literal (matches what a fresh install actually has).
     PERFORM stewards.config_set('judge_dispatch_local','false'::jsonb,NULL);
-    PERFORM stewards.config_set('judge_dispatch_provider', to_jsonb('opencode_go'::text), NULL);
-    PERFORM stewards.config_set('judge_dispatch_model', to_jsonb('deepseek-v4-flash'::text), NULL);
+    DELETE FROM stewards.config WHERE key IN ('judge_dispatch_provider','judge_dispatch_model');
     DELETE FROM stewards.work_queue WHERE payload->>'session_id'='smoke-judge';
     DELETE FROM stewards.sessions WHERE id='smoke-judge';
     RAISE NOTICE 'OK 21: judge local-routing — default off leaves judges unchanged; on reroutes the 3 judge families (provider + requested_model + body.model); non-judge dispatches untouched';
@@ -1214,29 +1270,61 @@ BEGIN
     RAISE NOTICE 'OK 23: tool-groups — table+3 seeds; resolve unions patterns (empty/null->unscoped); compose_tools_scoped narrows (NULL=full set); session_tool_scope derives a stage''s tool_groups (non-wi->NULL)';
 END $$;
 
--- ── 24: embed-model invariant (15a es2) — an embed job with no model MUST be
---    filled to a real embedding model; one that names a model is left untouched.
---    (Bug: engram embeds omitted the model -> fell to the lm_studio CHAT default
---    -> /v1/embeddings 400 -> vectors never written. The es2 trigger now enforces
---    BOTH provider AND model in one place.)
+-- ── 24: embed-model invariant (107, re-authors 15a es2) — lifeless core:
+--    an UNCONFIGURED embed_provider must land the doc/brain_entry
+--    unembedded WITHOUT error (never force a hardcoded provider that may
+--    not be installed — was unconditionally lm_studio) + ring a deduped
+--    hinge bell. Once embed_provider IS configured (the smoke brings its
+--    own life here), the fill-model+dimensions-when-absent invariant from
+--    es2 still holds, using the CONFIGURED provider.
 DO $$
-DECLARE v_no_model bigint; v_has_model bigint;
+DECLARE v_no_model bigint; v_has_model bigint; v_hinge_count int;
 BEGIN
-    -- a) no model + wrong provider -> trigger fills model+dimensions AND forces lm_studio
+    -- ── 24a. LIFELESS: no embed_provider configured ───────────────────
+    ASSERT stewards.config_get_text('embed_provider', NULL) IS NULL,
+        'embed_provider must have no seeded default on a virgin install (was unconditionally lm_studio)';
+    -- NOTE: earlier blocks in this suite may have already inserted docs/
+    -- messages whose engram-embedding trigger hit this same unconfigured
+    -- path and rang the (deduped) hinge bell — so this does NOT assert
+    -- zero pre-existing rows, only that OUR OWN attempt below lands one.
     INSERT INTO stewards.work_queue (kind, provider, payload, status)
     VALUES ('embed','opencode_go',
             jsonb_build_object('target_table','engram_embeddings','target_id','SMOKE-embed-nomodel','text','x'),
             'pending')
     RETURNING id INTO v_no_model;
+    ASSERT v_no_model IS NULL,
+        'an embed enqueue with no embed_provider configured must be CANCELLED (BEFORE INSERT trigger returns NULL) — no broken work_queue row, no forced hardcoded provider';
+    ASSERT EXISTS (SELECT 1 FROM stewards.hinge_reviews WHERE kind='embed-unconfigured' AND status='pending'),
+        'the cancelled embed must ring a deduped hinge bell so an operator notices search/recall is degraded';
+
+    -- a second cancelled attempt must NOT create a second hinge row (deduped)
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('embed','opencode_go',
+            jsonb_build_object('target_table','engram_embeddings','target_id','SMOKE-embed-nomodel-2','text','x'),
+            'pending')
+    RETURNING id INTO v_no_model;
+    SELECT count(*) INTO v_hinge_count FROM stewards.hinge_reviews WHERE kind='embed-unconfigured';
+    ASSERT v_hinge_count = 1, format('the embed-unconfigured hinge nudge must be deduped, found %s rows', v_hinge_count);
+
+    -- ── 24b. LIFE APPLIED (the smoke brings its own life here) ────────
+    PERFORM stewards.config_set('embed_provider', to_jsonb('lm_studio'::text), NULL);
+
+    -- no model + a different declared provider -> the trigger fills
+    -- model+dimensions AND forces the CONFIGURED provider (not a hardcode).
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('embed','opencode_go',
+            jsonb_build_object('target_table','engram_embeddings','target_id','SMOKE-embed-nomodel-3','text','x'),
+            'pending')
+    RETURNING id INTO v_no_model;
     ASSERT (SELECT provider FROM stewards.work_queue WHERE id=v_no_model) = 'lm_studio',
-        'es2 must force provider=lm_studio';
+        'once embed_provider is configured, the trigger must force it';
     ASSERT (SELECT payload->>'model' FROM stewards.work_queue WHERE id=v_no_model) = 'nomic-embed-text-v1.5',
-        'es2 must fill the embed model when absent (the engram-misroute fix)';
+        'the trigger must fill the embed model when absent (the engram-misroute fix, unchanged)';
     ASSERT (SELECT jsonb_typeof(payload->'dimensions') FROM stewards.work_queue WHERE id=v_no_model) = 'number'
        AND (SELECT payload->>'dimensions' FROM stewards.work_queue WHERE id=v_no_model) = '768',
-        'es2 must fill dimensions as a JSON number (matches docs/brain)';
+        'the trigger must fill dimensions as a JSON number (matches docs/brain)';
 
-    -- b) an explicit model is left untouched (COALESCE leaves docs/brain enqueues be)
+    -- an explicit model is left untouched (COALESCE leaves docs/brain enqueues be)
     INSERT INTO stewards.work_queue (kind, provider, payload, status)
     VALUES ('embed','lm_studio',
             jsonb_build_object('target_table','docs','target_id','SMOKE-embed-hasmodel',
@@ -1244,10 +1332,13 @@ BEGIN
             'pending')
     RETURNING id INTO v_has_model;
     ASSERT (SELECT payload->>'model' FROM stewards.work_queue WHERE id=v_has_model) = 'some-other-embed',
-        'es2 must NOT overwrite a model the enqueue site already set';
+        'the trigger must NOT overwrite a model the enqueue site already set';
 
+    -- restore virgin state
     DELETE FROM stewards.work_queue WHERE id IN (v_no_model, v_has_model);
-    RAISE NOTICE 'OK 24: embed-model invariant — es2 fills model(nomic)+dimensions(768 number) when absent and forces lm_studio; an explicit model is preserved (the engram-misroute fix)';
+    DELETE FROM stewards.hinge_reviews WHERE kind='embed-unconfigured';
+    DELETE FROM stewards.config WHERE key='embed_provider';
+    RAISE NOTICE 'OK 24: embed-model invariant (lifeless core) — unconfigured embed_provider CANCELS the insert + rings a deduped hinge bell (docs land unembedded, no hardcoded lm_studio force, no broken work_queue row); once configured, fills model(nomic)+dimensions(768 number) when absent and forces the configured provider; an explicit model is preserved';
 END $$;
 
 -- ── 25: single-finalize tool groups (37) — a PUBLISHING stage must see exactly ONE
@@ -2456,10 +2547,16 @@ BEGIN
         '68: a genuine tool error must NOT be miscaught as transient';
     ASSERT stewards.diagnose_failure('HTTP 529 overloaded') = 'transient',
         '68: existing 5xx/overload transient classification preserved';
-    ASSERT EXISTS (SELECT 1 FROM stewards.model_aliases WHERE alias='ingest' AND provider_model='qwen3.6-35b-a3b')
-       AND EXISTS (SELECT 1 FROM stewards.model_aliases WHERE alias='reason' AND provider_model='gemma-4-26b-a4b'),
-        '68: the local MoE pair are mutual fallback members (gemma pulled→qwen, qwen pulled→gemma)';
-    RAISE NOTICE 'OK 57: model-fallback hardening — a pulled local model classifies transient (failover walks to a live member) + the local MoE pair are mutual fallbacks';
+    -- lifeless core (feat/lightening, model-agnostic audit §E): 68's own
+    -- DELETE/UPDATE/INSERT into stewards.model_aliases (Michael's specific
+    -- local-rig topology) was REMOVED from the numbered core chain — core
+    -- ships model_aliases EMPTY like every other operator-policy table.
+    -- The mutual-fallback SHAPE this used to seed lives on in
+    -- .spec/lightening/local-overlay-example.sql §3.
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.model_aliases WHERE alias='ingest' AND provider_model='qwen3.6-35b-a3b')
+       AND NOT EXISTS (SELECT 1 FROM stewards.model_aliases WHERE alias='reason' AND provider_model='gemma-4-26b-a4b'),
+        '68: model_aliases must be empty in core (the local MoE mutual-fallback seed moved to the overlay, §E)';
+    RAISE NOTICE 'OK 57: model-fallback hardening — a pulled local model classifies transient (failover walks to a live member); the local-MoE mutual-fallback seed is core-empty (moved to the overlay, lifeless core §E)';
 END $$;
 
 -- ---------------------------------------------------------------------
@@ -3971,6 +4068,18 @@ DECLARE
     v_after      int;
     v_resp       jsonb;
 BEGIN
+    -- LIFE APPLIED (the smoke brings its own life here, lifeless core,
+    -- feat/lightening): ask_up's consult branch dispatches a real chat via
+    -- chat_post_internal, whose provider resolution falls through to
+    -- catalog_default_provider() for a model_alias (attn89-strong) that
+    -- isn't a registered alias; the 'review' resume path below ALSO falls
+    -- all the way to catalog_default_model/provider for the generic
+    -- a2a-handoff pipeline (which names no model itself). Both are NULL on
+    -- a virgin install (was a hardcoded opencode_go/kimi-k2.6). Torn down
+    -- at the end so later blocks stay lifeless.
+    PERFORM stewards.config_set('default_provider', to_jsonb('opencode_go'::text), NULL);
+    PERFORM stewards.config_set('default_model', to_jsonb('kimi-k2.6'::text), NULL);
+
     -- ── seed the ladder (empty in core; the smoke seeds its own rungs) ──
     INSERT INTO stewards.escalation_ladder (rung, model_alias, role_hint) VALUES
         (501, 'attn89-mid',    'local-doer'),
@@ -4121,6 +4230,7 @@ BEGIN
     DELETE FROM stewards.a2a_agents WHERE agent_id LIKE 'attn89-%';
     DELETE FROM stewards.hinge_reviews WHERE id IN (v_gate_id, v_hinge_id3, v_ask_hinge_id);
     DELETE FROM stewards.escalation_ladder WHERE rung IN (501, 900);
+    DELETE FROM stewards.config WHERE key IN ('default_provider','default_model');
 
     RAISE NOTICE '89: OK — needs_attention unions gate/ask/hinge/a2a_question/review; attention_count matches; needs_attention_list mirrors the view; attention_answer routes each kind to its REAL resolver (tool_confirm_verdict/hinge_record_verdict/a2a_answer/work_item_dispatch_stage/ask_record_answer) and each resolved item drops out; ask_up proves both ladder branches (higher-rung -> a real consult job, top-rung -> a human ask)';
 END $$;
@@ -5160,9 +5270,18 @@ BEGIN
              WHERE pipeline_family = 'decompose-fanout' AND stage_name = 'decompose') = 'verified',
         '101: decompose-fanout/decompose must produce maturity verified (else spawn_children never fires and fan-out is dead)';
 
+    -- LIFE APPLIED (the smoke brings its own life here, lifeless core):
+    -- experiment_run dispatches real work_items on echo-test, which (like
+    -- every other pipeline) names no model until an operator/overlay
+    -- configures one — the runner's own dispatch call is not one of
+    -- 107's safe-wrapped sites (this is the lab's own concern, not the
+    -- lightening pass's), so a default is needed for it to dispatch here.
+    PERFORM stewards.config_set('default_provider', to_jsonb('opencode_go'::text), NULL);
+    PERFORM stewards.config_set('default_model', to_jsonb('kimi-k2.6'::text), NULL);
+
     -- live-fire the runner on a throwaway 2-variant echo experiment
     INSERT INTO stewards.experiments (name, hypothesis, variants, n_per_variant, metrics, dispatch)
-    VALUES ('vs101-throwaway', 'runner smoke', 
+    VALUES ('vs101-throwaway', 'runner smoke',
             '[{"variant":"a","input":{"note":"{SUBJECT}-a"}},{"variant":"b","input":{"note":"{SUBJECT}-b"}}]'::jsonb,
             2, '["duration_s"]'::jsonb, '{"pipeline_family":"echo-test"}'::jsonb);
 
@@ -5196,6 +5315,7 @@ BEGIN
     -- clean up (experiment_runs cascade; work_items go explicitly)
     DELETE FROM stewards.work_items WHERE input->>'_experiment' = 'vs101-throwaway';
     DELETE FROM stewards.experiments WHERE name = 'vs101-throwaway';
+    DELETE FROM stewards.config WHERE key IN ('default_provider','default_model');
     RAISE NOTICE 'OK 101: lab dispatch -- runner (4 tagged trials, {SUBJECT} templating), deterministic harvest, per-variant report; the two #322 experiments are armed with real executors';
 END
 $vs101$;
@@ -5220,8 +5340,26 @@ BEGIN
         '102: the generic wargame agent must be seeded active';
     ASSERT (SELECT jsonb_array_length(stages) FROM stewards.pipelines WHERE family = 'war-game') = 2,
         '102: war-game pipeline must have 2 stages (wargame -> critique)';
+    -- lifeless core (feat/lightening, model-agnostic audit §D): war-game's
+    -- literal model="sonnet#wargame"/provider="loom" was Michael's specific
+    -- local economics, stripped from core (107's §9(a) generic sweep) —
+    -- core names no provider on this stage at all until an operator (or
+    -- the overlay, §9's war-game UPDATE) supplies one.
+    ASSERT (SELECT stages->0 ? 'provider' FROM stewards.pipelines WHERE family = 'war-game') = false,
+        '102: core must name NO provider on the wargame stage (was hardcoded loom — Michael''s local economics, now overlay-only)';
+    PERFORM stewards.provider_dials_set('loom', 'http://host.docker.internal:7777/v1', 'openai', 'sonnet');
+    UPDATE stewards.pipelines
+       SET stages = (
+           SELECT jsonb_agg(
+                      CASE stage->>'name'
+                          WHEN 'wargame'  THEN stage || jsonb_build_object('model','sonnet#wargame','provider','loom')
+                          WHEN 'critique' THEN stage || jsonb_build_object('model','sonnet#critic', 'provider','loom')
+                          ELSE stage
+                      END ORDER BY ord)
+             FROM jsonb_array_elements(stages) WITH ORDINALITY t(stage, ord))
+     WHERE family = 'war-game';
     ASSERT (SELECT stages->0->>'provider' FROM stewards.pipelines WHERE family = 'war-game') = 'loom',
-        '102: the wargame stage must ride the loom provider (the strong seat)';
+        '102: applying the overlay''s war-game re-attach (life brought) must restore the loom provider on the wargame stage';
     ASSERT (SELECT count(*) FROM pg_trigger
              WHERE tgname = 'trg_war_game_capture' AND tgrelid = 'stewards.docs'::regclass AND NOT tgisinternal) = 1,
         '102: the capture trigger must exist on stewards.docs';
@@ -5311,8 +5449,18 @@ BEGIN
      WHERE payload::text LIKE '%' || v_wg_item::text || '%'
         OR payload::text LIKE '%' || v_mission::text || '%';
     DELETE FROM stewards.work_items WHERE id IN (v_wg_item, v_wi, v_wi_bad, v_mission);
-    RAISE NOTICE 'OK 102: war-game -- pipeline+agent seeded, capture trigger (insert + late-stamp + invalid-floor inverse), opt-in flag (mission waits, companion nests, capture stamps + releases)';
+
+    -- Teardown: restore lifelessness — strip the model/provider this block
+    -- brought back onto war-game's stages so later runs (and a re-run of
+    -- this suite) still see the true core (no provider) state.
+    UPDATE stewards.pipelines
+       SET stages = (SELECT jsonb_agg(stage - 'model' - 'provider' ORDER BY ord)
+                       FROM jsonb_array_elements(stages) WITH ORDINALITY t(stage, ord))
+     WHERE family = 'war-game';
+    DELETE FROM stewards.config WHERE key LIKE 'provider.loom.%';
+
+    RAISE NOTICE 'OK 102: war-game -- core names NO provider on the wargame stage (lifeless core); applying life (a provider_dials_set + stage re-attach, mirroring the overlay) restores loom; pipeline+agent seeded, capture trigger (insert + late-stamp + invalid-floor inverse), opt-in flag (mission waits, companion nests, capture stamps + releases)';
 END
 $vs102$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→102) is sound =='
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v27 volumes, was 00→107) is sound =='

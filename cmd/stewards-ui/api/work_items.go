@@ -68,6 +68,7 @@ func (d *Deps) workItemsListHandler(w http.ResponseWriter, r *http.Request) {
 	origin := q.Get("origin")
 	project := q.Get("project_association")
 	limit := atoiDefault(q.Get("limit"), 100, 1, 500)
+	offset := atoiDefault(q.Get("offset"), 0, 0, 1_000_000)
 
 	whereClauses := []string{}
 	args := []any{}
@@ -110,6 +111,9 @@ func (d *Deps) workItemsListHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	args = append(args, limit)
+	limitPlaceholder := itoa(len(args))
+	args = append(args, offset)
+	offsetPlaceholder := itoa(len(args))
 	rows, err := d.Pool.Query(ctx,
 		`SELECT id::text, slug, pipeline_family, current_stage, status,
 		        coalesce(actor, ''),
@@ -121,7 +125,7 @@ func (d *Deps) workItemsListHandler(w http.ResponseWriter, r *http.Request) {
 		        coalesce(parent_work_item_id::text, ''),
 		        stewards.classify_error(error)
 		   FROM stewards.work_items`+where+
-			` ORDER BY updated_at DESC NULLS LAST LIMIT $`+itoa(len(args)),
+			` ORDER BY updated_at DESC NULLS LAST LIMIT $`+limitPlaceholder+` OFFSET $`+offsetPlaceholder,
 		args...,
 	)
 	if err != nil {

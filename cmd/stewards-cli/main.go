@@ -69,6 +69,8 @@ func main() {
 		runValidateSQL(ctx, os.Args[2:])
 	case "migrate":
 		runMigrate(ctx, os.Args[2:])
+	case "update":
+		runUpdate(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -211,6 +213,18 @@ Commands:
       effects. Exit 0 on parse OK; exit 1 with diagnostic on failure.
       Defaults to stdin if --file omitted. materialize-writes auto-
       runs this for .sql files targeting extension/.
+
+  update [--skip-build] [--skip-smoke] [--dry-run]
+      The one verb: bring this box up to the repo's current code and DB
+      shape. Runs, UNPIPED at every step (real exit code checked directly,
+      no piped-exit-masking): git pull --ff-only -> extension/gen-copy-
+      manifest.sh --check (auto-regenerate + warn if drifted) -> docker
+      compose build -> docker compose up -d -> wait for pg healthy (120s
+      cap) -> scripts/migrate.sh apply (via a generated psql shim when the
+      host has no native psql) -> tests/virgin-smoke.sql against a
+      THROWAWAY scratch container booted from the fresh image (never the
+      live pg) -> a step/exit summary table. Any non-zero step stops the
+      run immediately. --dry-run prints the plan and makes no changes.
 
 Environment:
   STEWARDS_DSN    Postgres DSN (default: postgres://stewards:stewards@localhost:5432/stewards?sslmode=disable)

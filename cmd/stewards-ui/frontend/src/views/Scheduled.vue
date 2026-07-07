@@ -1,10 +1,21 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { scheduledApi, type ScheduledRow, type ScheduledCreateReq, type ScheduledUpdateReq } from '@/api'
+import { api, scheduledApi, type ScheduledRow, type ScheduledCreateReq, type ScheduledUpdateReq } from '@/api'
+import AutonomyBanner from '@/components/AutonomyBanner.vue'
 
 const rows = ref<ScheduledRow[]>([])
 const loading = ref(true)
 const error = ref('')
+
+// War-game 2026-07-07 finding #1: every row read "(due now)" whether it was 5
+// minutes or 14 days overdue, because the switch that actually explains a
+// stalled schedule (autonomy_paused) was invisible here. Once paused, "due
+// now" is misleading — nothing is going to dispatch it — so it becomes
+// "paused" instead (the AutonomyBanner above explains why).
+const autonomyPaused = ref(false)
+async function loadAutonomy() {
+  try { autonomyPaused.value = (await api.autonomy()).paused } catch { /* tolerate */ }
+}
 
 // Edit modal state
 const editing = ref<ScheduledRow | null>(null)
@@ -164,7 +175,7 @@ function timeUntil(t?: string): string {
   if (!t) return '—'
   const target = new Date(t).getTime()
   const diff = target - now.value.getTime()
-  if (diff <= 0) return 'due now'
+  if (diff <= 0) return autonomyPaused.value ? 'paused' : 'due now'
   const m = Math.floor(diff / 60000)
   if (m < 60) return `in ${m}m`
   const h = Math.floor(m / 60)
@@ -180,11 +191,13 @@ const sortedRows = computed(() =>
   })
 )
 
-onMounted(load)
+onMounted(() => { load(); loadAutonomy() })
 </script>
 
 <template>
   <div class="space-y-6 max-w-5xl">
+    <AutonomyBanner />
+
     <header class="border-b border-zinc-800 pb-3 flex items-center justify-between">
       <div>
         <h2 class="text-2xl font-semibold tracking-tight">Scheduled pipelines</h2>

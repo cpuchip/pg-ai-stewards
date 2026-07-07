@@ -25,7 +25,7 @@ md.renderer.rules.heading_open = (tokens, idx, options, _env, self) => {
   return self.renderToken(tokens, idx, options)
 }
 // Arc A: clicking a link in the doc body navigates (internal) or opens (external).
-const onLink = makeLinkClick(store)
+const onLink = makeLinkClick(store.select)
 
 // Object viewer — "paint the source back" (O1). A digested YouTube video gets its
 // player painted above the notes (the cpuchip.net move). The id is read from the
