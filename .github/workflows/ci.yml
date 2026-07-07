@@ -17,6 +17,13 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      # Drift gate: the Dockerfile's SQL COPY block is GENERATED from the
+      # extension_sql_file! calls in src/lib.rs. A chain file added to lib.rs
+      # without regenerating the block would be a builder compile error —
+      # catch it here with a named failure instead of a cryptic build log.
+      - name: Check generated SQL COPY manifest
+        run: bash extension/gen-copy-manifest.sh --check
+
       - name: Build the extension image
         run: docker build -t stewards-oss-pg:ci extension/
 

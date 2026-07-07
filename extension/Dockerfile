@@ -41,91 +41,130 @@ RUN cargo pgrx init --pg18 /usr/lib/postgresql/18/bin/pg_config
 WORKDIR /build/pg_ai_stewards
 COPY Cargo.toml pg_ai_stewards.control ./
 COPY src ./src
-# The 2-6*/2-7*/3a*.sql files are read at compile time by
-# extension_sql_file! macros in src/lib.rs (folded back from live-DB
-# migrations as of v0.2.0). They must be present in the build context.
-# When adding a new file, also add the corresponding extension_sql_file!
-# call in src/lib.rs and update this list.
-COPY 00-config.sql 01-graph.sql 02-workstreams.sql \
-     03-watchman.sql 04-work-items.sql 05-mcp-bridge.sql \
-     06-cost.sql 07-steward.sql \
-     08-gates.sql 09-intents-covenants.sql 10-sabbath-atonement.sql \
-     11-trust.sql 12-council.sql 13-research-pipelines.sql \
-     14-fanout-brainstorm.sql 15a-context-engrams.sql \
-     15b-context-surface.sql 16-subagents.sql \
-     17-personas.sql 18-scheduler.sql \
-     19-models.sql 20-coder.sql 21-compact-context.sql \
-     22-reflect-steward.sql 23-reflect-watchman.sql 24-skills.sql \
-     25-corpus.sql 26-productivity.sql 27-context-search.sql \
-     28-guard-autoresume.sql 29-intent-private-routing.sql \
-     30-tool-primers.sql 31-model-aliases.sql \
-     32-alias-failover.sql 33-page-in.sql \
-     34-doc-builder.sql 35-research-doc-construction.sql \
-     36-judge-local-routing.sql 37-tool-groups.sql \
-     38-edge-vocabulary.sql 39-hinge.sql 40-rte.sql \
-     41-memory-tend.sql 42-route-on.sql 43-request-research.sql \
-     44-graph-organize.sql 45-work-item-chat.sql \
-     46-chat-tasks.sql 47-multimodal.sql \
-     48-chat-attachments.sql 49-doc-extract.sql \
-     50-doc-build.sql 51-rich-chat-hardening.sql \
-     52-session-scoped-tools.sql 53-explore-repos.sql \
-     54-loreworks.sql 55-loreworks-build.sql \
-     56-trajectory-critic.sql 57-loreworks-chat.sql \
-     58-world-edge-audit.sql 59-self-improvement.sql \
-     60-chat-model-pin.sql 61-world-build-worklist.sql \
-     62-orientation.sql 63-orient-survey.sql \
-     64-auto-critique.sql 65-rigor-mode.sql 66-rigor-verify.sql \
-     67-rigor-force-final.sql 68-model-fallback-hardening.sql \
-     69-a2a-engine.sql 70-hinge-decouple.sql \
-     71-hybrid-rrf.sql 72-hybrid-rrf-everywhere.sql \
-     73-brain-hybrid.sql 74-north-star.sql \
-     75-wire-brain-hybrid.sql 76-wire-engram-search.sql \
-     77-tool-shelf.sql 78-yt-slide-frames.sql \
-     79-bineval.sql 80-rest.sql 81-spiral-oracle.sql \
-     82-world-graph.sql 83-code-graph.sql \
-     84-tool-effect-gate.sql 85-world-chat.sql 86-sticky-agent-family.sql \
-     87-lab.sql 88-credentials.sql 89-attention.sql \
-     90-harness-executor.sql 91-core-compat.sql \
-     92-wiki.sql 93-recall.sql \
-     94-wiki-curator.sql 95-model-role-toggles.sql 96-wiki-assets.sql \
-     97-world-wiki-bridge.sql 98-crawler.sql 99-route-intake.sql ./
-
-# 100-schedule-chat.sql (SCHED, 2026-07-03) — own continuation-free COPY line
-# so parallel siblings landing 97/98/99 in the block above don't collide with
-# this addition on the same diff hunk. Merge/renumber at fleet integration.
+# The chain files below are read at compile time by extension_sql_file!
+# macros in src/lib.rs (folded back from live-DB migrations as of v0.2.0).
+# They must be present in the build context.
+#
+# This block is GENERATED — do not hand-edit it. Run
+# `extension/gen-copy-manifest.sh` after adding/removing an
+# extension_sql_file! entry in src/lib.rs (it parses lib.rs, verifies every
+# referenced file exists, and rewrites everything between the two markers
+# below). Run `extension/gen-copy-manifest.sh --check` (UNPIPED exit code)
+# before `docker compose build` to catch drift instead of hitting the
+# forgotten-COPY-line failure class this replaced: forgetting a line here
+# used to be a builder COMPILE error whose non-zero exit a piped
+# `| tail` silently swallowed, leaving a stale image running for a week
+# (102-war-game.sql, 2026-07-06 — see git history on this region).
+# ===== GENERATED SQL COPY BLOCK (gen-copy-manifest.sh) =====
+COPY 00-config.sql ./
+COPY 01-graph.sql ./
+COPY 02-workstreams.sql ./
+COPY 03-watchman.sql ./
+COPY 04-work-items.sql ./
+COPY 05-mcp-bridge.sql ./
+COPY 06-cost.sql ./
+COPY 07-steward.sql ./
+COPY 08-gates.sql ./
+COPY 09-intents-covenants.sql ./
+COPY 10-sabbath-atonement.sql ./
+COPY 11-trust.sql ./
+COPY 12-council.sql ./
+COPY 13-research-pipelines.sql ./
+COPY 14-fanout-brainstorm.sql ./
+COPY 15a-context-engrams.sql ./
+COPY 15b-context-surface.sql ./
+COPY 16-subagents.sql ./
+COPY 17-personas.sql ./
+COPY 18-scheduler.sql ./
+COPY 19-models.sql ./
+COPY 20-coder.sql ./
+COPY 21-compact-context.sql ./
+COPY 22-reflect-steward.sql ./
+COPY 23-reflect-watchman.sql ./
+COPY 24-skills.sql ./
+COPY 25-corpus.sql ./
+COPY 26-productivity.sql ./
+COPY 27-context-search.sql ./
+COPY 28-guard-autoresume.sql ./
+COPY 29-intent-private-routing.sql ./
+COPY 30-tool-primers.sql ./
+COPY 31-model-aliases.sql ./
+COPY 32-alias-failover.sql ./
+COPY 33-page-in.sql ./
+COPY 34-doc-builder.sql ./
+COPY 35-research-doc-construction.sql ./
+COPY 36-judge-local-routing.sql ./
+COPY 37-tool-groups.sql ./
+COPY 38-edge-vocabulary.sql ./
+COPY 39-hinge.sql ./
+COPY 40-rte.sql ./
+COPY 41-memory-tend.sql ./
+COPY 42-route-on.sql ./
+COPY 43-request-research.sql ./
+COPY 44-graph-organize.sql ./
+COPY 45-work-item-chat.sql ./
+COPY 46-chat-tasks.sql ./
+COPY 47-multimodal.sql ./
+COPY 48-chat-attachments.sql ./
+COPY 49-doc-extract.sql ./
+COPY 50-doc-build.sql ./
+COPY 51-rich-chat-hardening.sql ./
+COPY 52-session-scoped-tools.sql ./
+COPY 53-explore-repos.sql ./
+COPY 54-loreworks.sql ./
+COPY 55-loreworks-build.sql ./
+COPY 56-trajectory-critic.sql ./
+COPY 57-loreworks-chat.sql ./
+COPY 58-world-edge-audit.sql ./
+COPY 59-self-improvement.sql ./
+COPY 60-chat-model-pin.sql ./
+COPY 61-world-build-worklist.sql ./
+COPY 62-orientation.sql ./
+COPY 63-orient-survey.sql ./
+COPY 64-auto-critique.sql ./
+COPY 65-rigor-mode.sql ./
+COPY 66-rigor-verify.sql ./
+COPY 67-rigor-force-final.sql ./
+COPY 68-model-fallback-hardening.sql ./
+COPY 69-a2a-engine.sql ./
+COPY 70-hinge-decouple.sql ./
+COPY 71-hybrid-rrf.sql ./
+COPY 72-hybrid-rrf-everywhere.sql ./
+COPY 73-brain-hybrid.sql ./
+COPY 74-north-star.sql ./
+COPY 75-wire-brain-hybrid.sql ./
+COPY 76-wire-engram-search.sql ./
+COPY 77-tool-shelf.sql ./
+COPY 78-yt-slide-frames.sql ./
+COPY 79-bineval.sql ./
+COPY 80-rest.sql ./
+COPY 81-spiral-oracle.sql ./
+COPY 82-world-graph.sql ./
+COPY 83-code-graph.sql ./
+COPY 84-tool-effect-gate.sql ./
+COPY 85-world-chat.sql ./
+COPY 86-sticky-agent-family.sql ./
+COPY 87-lab.sql ./
+COPY 88-credentials.sql ./
+COPY 89-attention.sql ./
+COPY 90-harness-executor.sql ./
+COPY 91-core-compat.sql ./
+COPY 92-wiki.sql ./
+COPY 93-recall.sql ./
+COPY 94-wiki-curator.sql ./
+COPY 95-model-role-toggles.sql ./
+COPY 96-wiki-assets.sql ./
+COPY 97-world-wiki-bridge.sql ./
+COPY 98-crawler.sql ./
+COPY 99-route-intake.sql ./
 COPY 100-schedule-chat.sql ./
-
-# 101-lab-dispatch.sql (LAB RUNNER, 2026-07-04)
 COPY 101-lab-dispatch.sql ./
-
-# 102-war-game.sql (WAR-GAME W1, 2026-07-05). Forgetting this line is a
-# COMPILE error (extension_sql_file! reads the file at build time) — but a
-# piped `| tail` on the build command masks the non-zero exit, so the tag
-# silently stays stale and only virgin-smoke catches it (2026-07-06). Check
-# `docker compose build` exit codes UNPIPED.
 COPY 102-war-game.sql ./
-
-# 103-abort-conditions.sql (WAR-GAME W2, 2026-07-05, decision #3): aborts[]
-# materialized into stewards.work_item_abort_conditions + the evaluator,
-# wired into steward_tick (32). Own continuation-free COPY line — 103-105
-# land in parallel on this branch (feat/lightening), each adding their own.
 COPY 103-abort-conditions.sql ./
-
-# 104-observations.sql (KNOWLEDGE ENGINE, feat/lightening): the observations
-# store — one small, sourced, confidence-labelled claim per row, counter-
-# evidence first-class via a self-FK. Own continuation-free COPY line, same
-# parallel-landing discipline as 100/101/102/103 above.
 COPY 104-observations.sql ./
-
-# 105-seams.sql (KNOWLEDGE ENGINE, feat/lightening): stewards.seams_report —
-# where two worlds (lenses) on the same territory diverge. Requires 104.
 COPY 105-seams.sql ./
-
-# 106-schedule-visibility.sql (feat/lightening: paused-tick log + staleness
-# alarm; 103-105 land in parallel on this branch and add their own lines).
-# This whole enumerated-COPY section is slated for a GENERATED manifest in
-# the consolidation pass — the forgetting-a-line failure class dies there.
 COPY 106-schedule-visibility.sql ./
+# ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,

@@ -28,6 +28,18 @@ block per accreted subsystem, currently through `OK 88`):
 
 ## Run it locally
 
+Before building the image, check that `extension/Dockerfile`'s generated SQL
+COPY block still matches `extension/src/lib.rs` — run this **UNPIPED** so its
+exit code isn't swallowed (the forgotten-COPY failure class this closes):
+
+```sh
+extension/gen-copy-manifest.sh --check
+```
+
+Exit 0 means the block is current. Non-zero means a chain file was
+added/removed in `lib.rs` without regenerating — run
+`extension/gen-copy-manifest.sh` (no flags) to fix it, then re-check.
+
 ```sh
 docker build -t stewards-oss-pg:test extension/
 docker run -d --name stewards-test \
