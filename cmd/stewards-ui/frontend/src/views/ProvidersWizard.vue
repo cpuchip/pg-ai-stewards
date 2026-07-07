@@ -20,10 +20,15 @@ const loading = ref(true)
 const listError = ref('')
 
 // Presets keep the form to two real decisions: which provider, which key.
-const presets: Record<string, { base_url: string; kind: string; budget?: number; hint?: string }> = {
+// `secret_kind` tells the form how to collect the credential: 'key' = paste a string
+// (the default), 'json' = drop a service-account file (Vertex — the whole JSON becomes
+// the encrypted secret; the dispatcher mints an OAuth token from it, see gcp_sa).
+const presets: Record<string, { base_url: string; kind: string; budget?: number; hint?: string; secret_kind?: 'key' | 'json' }> = {
   opencode_zen:  { base_url: 'https://opencode.ai/zen/v1',        kind: 'openai', budget: 5, hint: 'free models + the Claude family (sonnet!) — budget defaults to $5/day' },
   opencode_go:   { base_url: 'https://opencode.ai/zen/go/v1',     kind: 'openai', hint: 'subscription tier: kimi / qwen / glm / minimax' },
   google_gemini: { base_url: 'https://generativelanguage.googleapis.com/v1beta/openai', kind: 'openai', hint: 'AI Studio key (trains on data — public work only)' },
+  google_vertex: { base_url: 'https://aiplatform.googleapis.com/v1/projects/PROJECT/locations/global/endpoints/openapi', kind: 'openai', secret_kind: 'json', hint: 'Google Cloud Vertex AI — drop your service-account JSON key; replace PROJECT in the URL with your GCP project id' },
+  loom:          { base_url: 'http://host.docker.internal:7777/v1', kind: 'openai', hint: 'loom agentic harness (serve) — drives Claude Code / Codex as workers; paste the loom token; models: sonnet / opus / codex' },
   nvidia:        { base_url: 'https://integrate.api.nvidia.com/v1', kind: 'openai', hint: 'free preview endpoints (trains on data — public work only)' },
   lm_studio:     { base_url: 'http://host.docker.internal:1234/v1', kind: 'openai', hint: 'fully local, no key needed' },
   anthropic:     { base_url: 'https://api.anthropic.com/v1',      kind: 'anthropic', hint: 'direct Anthropic API' },
@@ -59,6 +64,35 @@ function applyPreset() {
   baseUrl.value = p.base_url
   kind.value = p.kind
   budget.value = p.budget ?? null
+  secretKind.value = p.secret_kind ?? 'key'
+  secret.value = ''
+  jsonFileName.value = ''
+}
+
+// How the current preset collects its credential: 'key' (paste) or 'json' (file drop).
+const secretKind = ref<'key' | 'json'>('key')
+const jsonFileName = ref('')
+
+// Vertex service-account file → the credential secret. Read the file client-side and
+// put its JSON text into `secret`; it's saved through the same AES-256-GCM path as a
+// pasted key (never echoed back). Validated as parseable JSON with the SA-shape fields.
+async function onJsonFile(e: Event) {
+  saveError.value = ''
+  const f = (e.target as HTMLInputElement).files?.[0]
+  if (!f) return
+  const text = await f.text()
+  try {
+    const j = JSON.parse(text)
+    if (!j.client_email || !j.private_key) {
+      saveError.value = 'that JSON is missing client_email / private_key — is it a service-account key?'
+      return
+    }
+  } catch {
+    saveError.value = 'could not parse that file as JSON — drop the service-account key file'
+    return
+  }
+  secret.value = text
+  jsonFileName.value = f.name
 }
 
 const rolesFor = computed(() => {
@@ -331,16 +365,22 @@ onMounted(load)
         </label>
       </div>
       <div class="row">
-        <label class="grow">
+        <!-- key providers: paste a string. Vertex (secret_kind=json): drop the SA file. -->
+        <label v-if="secretKind === 'key'" class="grow">
           <span>API key <em class="dim">(blank = keyless / keep + re-verify existing)</em></span>
           <input v-model="secret" type="password" autocomplete="off" placeholder="sk-…" />
+        </label>
+        <label v-else class="grow">
+          <span>Service-account JSON <em class="dim">(drop your GCP SA key file)</em></span>
+          <input type="file" accept=".json,application/json" @change="onJsonFile" />
+          <span v-if="jsonFileName" class="ok">● {{ jsonFileName }} loaded (encrypted on save)</span>
         </label>
         <label>
           <span>Budget $/day <em class="dim">(blank = none)</em></span>
           <input v-model.number="budget" type="number" min="0" step="0.5" style="width: 7rem" />
         </label>
         <button class="btn primary" type="submit" :disabled="saving">
-          {{ saving ? 'testing key…' : 'Save & test' }}
+          {{ saving ? 'testing…' : 'Save & test' }}
         </button>
       </div>
       <p v-if="presetHint" class="hint dim">{{ presetHint }}</p>
