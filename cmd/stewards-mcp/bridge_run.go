@@ -132,6 +132,16 @@ func runBridgeRun(args []string) error {
 	go runDropWatcher(rootCtx, pool)
 	go runProjector(rootCtx, pool)
 
+	// v30 db-projected-workspace (feat/full-treatment): the read-back half
+	// of the writable projection. Scans REGISTERED workspace dirs
+	// (stewards.knowledge_workspaces — the wall) under the knowledge mount
+	// every 30s and calls stewards.workspace_writeback; the sha-triple
+	// decision (apply/noop/create/conflict) is transactional in SQL.
+	// Projection INTO workspace dirs rides the projector's pass above.
+	// Disables itself cleanly when the dir is absent or the DB pre-dates
+	// v30. See workspacewatcher.go + extension/v30-workspaces.sql.
+	go runWorkspaceWatcher(rootCtx, pool)
+
 	// LISTEN on a dedicated pgx connection. Acquire from the pool's
 	// underlying conn pool but pin it (Hijack) for the duration so
 	// pgx's pool doesn't recycle it under us.

@@ -5848,4 +5848,230 @@ BEGIN
 END
 $vs109$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v29 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize) is sound =='
+-- 110 — db-projected workspace (v30): opt-in writable projection scope.
+-- Registry + catalog + the sha-triple write-back, proven pure-SQL by
+-- simulating the bridge's two loops (the projector's record step and the
+-- watcher's writeback call). The NEVER-SILENT-CLOBBER contract is
+-- INVERSE-PROVEN: after a both-changed conflict the row body is asserted
+-- to be the ROW's version (nothing clobbered), then the conflict is
+-- resolved file-wins and the write-back path is asserted to work after.
+-- LIFELESS-CORE: no provider/model configured here; every write-back is
+-- deterministic SQL (embedding rides the existing triggers and degrades).
+-- ---------------------------------------------------------------------
+DO $vs110$
+DECLARE
+    v_res     jsonb;
+    v_doc_id  text;
+    v_out_id  text;
+    v_new_id  text;
+    v_page_id uuid;
+    v_p       record;
+    v_file    text;
+    v_cid     bigint;
+BEGIN
+    -- schema + surface
+    ASSERT to_regclass('stewards.knowledge_workspaces') IS NOT NULL, '110: knowledge_workspaces must exist';
+    ASSERT to_regclass('stewards.workspace_conflicts') IS NOT NULL, '110: workspace_conflicts must exist';
+    ASSERT to_regprocedure('stewards.workspace_create(text,text,text,text)') IS NOT NULL, '110: workspace_create must exist';
+    ASSERT to_regprocedure('stewards.workspace_projection_pending(text)') IS NOT NULL, '110: workspace_projection_pending must exist';
+    ASSERT to_regprocedure('stewards.workspace_writeback(text,text,text,text,text)') IS NOT NULL, '110: workspace_writeback must exist';
+    ASSERT to_regprocedure('stewards.workspace_conflict_resolve(bigint,text,text)') IS NOT NULL, '110: workspace_conflict_resolve must exist';
+    ASSERT to_regprocedure('stewards.workspace_list()') IS NOT NULL, '110: workspace_list must exist';
+
+    -- fixture: one doc in a fixture project
+    INSERT INTO stewards.docs (slug, title, body, kind, project_association)
+    VALUES ('vs110-alpha', 'VS110 Alpha', E'# VS110 Alpha\n\nOriginal body.\n', 'doc', 'vs110-project')
+    RETURNING id INTO v_doc_id;
+
+    -- create the workspace (opt-in per scope); idempotent on same scope,
+    -- refused on a taken name with a different scope
+    v_res := stewards.workspace_create('vs110-ws', 'project', 'vs110-project', 'virgin-smoke');
+    ASSERT (v_res->>'ok')::boolean, format('110: workspace_create must succeed, got %s', v_res);
+    ASSERT v_res->>'dir' = '_workspaces/vs110-ws', '110: dir must be _workspaces/<name>';
+    ASSERT (v_res->>'pending')::int >= 1, '110: the fixture doc must pend at creation';
+    v_res := stewards.workspace_create('vs110-ws', 'project', 'vs110-project', 'virgin-smoke');
+    ASSERT (v_res->>'ok')::boolean AND (v_res->>'existed')::boolean, '110: re-create with same scope must be idempotent';
+    v_res := stewards.workspace_create('vs110-ws', 'doc-kind', 'doc', 'virgin-smoke');
+    ASSERT NOT (v_res->>'ok')::boolean, '110: a taken name with a DIFFERENT scope must be refused';
+
+    -- catalog: pending at the workspace path, sha over the NORMALIZED body
+    SELECT * INTO v_p FROM stewards.workspace_projection_pending('vs110-ws') p
+     WHERE p.source_id = v_doc_id AND p.action = 'project';
+    ASSERT v_p.target_path = '_workspaces/vs110-ws/vs110-alpha.md',
+        format('110: pending must target _workspaces/vs110-ws/vs110-alpha.md, got %s', v_p.target_path);
+    ASSERT v_p.source_kind = 'ws:vs110-ws:doc', '110: workspace rows key as ws:<name>:doc';
+    ASSERT v_p.content_sha = stewards._ws_sha(E'# VS110 Alpha\n\nOriginal body.\n'),
+        '110: the catalog sha must be over the normalized body';
+
+    -- simulate the projector: record the watermark -> catalog goes quiet
+    PERFORM stewards.knowledge_projection_record(v_p.source_kind, v_p.source_id,
+        v_p.target_path, v_p.source_updated_at, v_p.content_sha);
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.workspace_projection_pending('vs110-ws') p
+                        WHERE p.source_id = v_doc_id),
+        '110: a recorded workspace projection must leave pending (incremental)';
+
+    -- ── file-changed + row-unchanged -> APPLY (file wins), revision + provenance
+    v_file := E'---\nid: "' || v_doc_id || E'"\nkind: "doc"\nworkspace: "vs110-ws"\n---\n\n'
+           || E'# VS110 Alpha\n\nEdited in the workspace.\n';
+    v_res := stewards.workspace_writeback('vs110-ws', 'vs110-alpha.md', v_file, stewards._ws_sha(v_file), 'tester');
+    ASSERT (v_res->>'ok')::boolean AND v_res->>'status' = 'applied',
+        format('110: file-changed + row-unchanged must apply, got %s', v_res);
+    ASSERT (SELECT d.body FROM stewards.docs d WHERE d.id = v_doc_id) = E'# VS110 Alpha\n\nEdited in the workspace.\n',
+        '110: the applied body must be the file''s (frontmatter stripped)';
+    ASSERT (SELECT count(*) FROM stewards.doc_versions dv WHERE dv.doc_id = v_doc_id) = 1,
+        '110: the apply must archive the prior revision (touch_doc idiom)';
+    ASSERT (SELECT dv.changed_by FROM stewards.doc_versions dv WHERE dv.doc_id = v_doc_id
+             ORDER BY dv.id DESC LIMIT 1) = 'workspace:vs110-ws:tester',
+        '110: the revision must carry the write-back actor (stewards.actor GUC)';
+    ASSERT (SELECT d.frontmatter->'workspace_writeback'->>'workspace' FROM stewards.docs d WHERE d.id = v_doc_id) = 'vs110-ws',
+        '110: the doc frontmatter must carry the merged workspace_writeback provenance stamp';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.workspace_projection_pending('vs110-ws') p
+                        WHERE p.source_id = v_doc_id),
+        '110: the apply must advance the watermark (no immediate re-projection churn)';
+    ASSERT (SELECT w.last_writeback_at IS NOT NULL FROM stewards.knowledge_workspaces w WHERE w.name = 'vs110-ws'),
+        '110: last_writeback_at must stamp';
+
+    -- same file again -> noop (S_file = S_proj), no extra revision
+    v_res := stewards.workspace_writeback('vs110-ws', 'vs110-alpha.md', v_file, stewards._ws_sha(v_file), 'tester');
+    ASSERT v_res->>'status' = 'noop', format('110: an unchanged file must noop, got %s', v_res);
+    ASSERT (SELECT count(*) FROM stewards.doc_versions dv WHERE dv.doc_id = v_doc_id) = 1,
+        '110: a noop must not version';
+
+    -- ── BOTH changed -> conflict parked + ONE ask + row NOT clobbered
+    UPDATE stewards.docs SET body = E'# VS110 Alpha\n\nRow-side change.\n' WHERE id = v_doc_id;  -- version 2
+    v_file := E'---\nid: "' || v_doc_id || E'"\nkind: "doc"\nworkspace: "vs110-ws"\n---\n\n'
+           || E'# VS110 Alpha\n\nDivergent file change.\n';
+    v_res := stewards.workspace_writeback('vs110-ws', 'vs110-alpha.md', v_file, stewards._ws_sha(v_file), 'tester');
+    ASSERT v_res->>'status' = 'conflict', format('110: both-changed must conflict, got %s', v_res);
+    v_cid := (v_res->>'conflict_id')::bigint;
+    -- INVERSE-PROVE half 1: the row body is the ROW's version — nothing clobbered
+    ASSERT (SELECT d.body FROM stewards.docs d WHERE d.id = v_doc_id) = E'# VS110 Alpha\n\nRow-side change.\n',
+        '110 INVERSE: after a both-changed conflict the row must still hold the ROW''s version';
+    ASSERT (SELECT count(*) FROM stewards.doc_versions dv WHERE dv.doc_id = v_doc_id) = 2,
+        '110: the conflict must not add a revision (2 = apply + the direct row bump)';
+    ASSERT (SELECT c.status FROM stewards.workspace_conflicts c WHERE c.id = v_cid) = 'pending',
+        '110: the conflict row must park pending';
+    ASSERT (SELECT c.file_content LIKE '%Divergent file change.%' FROM stewards.workspace_conflicts c WHERE c.id = v_cid),
+        '110: the file''s version must be preserved in the parked conflict';
+    ASSERT (SELECT c.row_sha IS NOT NULL AND c.projected_sha IS NOT NULL AND c.body_sha IS NOT NULL
+              FROM stewards.workspace_conflicts c WHERE c.id = v_cid),
+        '110: the conflict must record the full sha triple';
+    ASSERT EXISTS (SELECT 1 FROM stewards.needs_attention na
+                    WHERE na.source_kind = 'ask' AND na.title LIKE '%vs110-ws/vs110-alpha.md%'),
+        '110: the conflict must surface in needs_attention (the 89 ask bucket)';
+    -- THE FREEZE: the divergent row must NOT re-project over the parked file
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.workspace_projection_pending('vs110-ws') p
+                        WHERE p.source_id = v_doc_id),
+        '110: a pending conflict must FREEZE the path (no re-projection clobbers the divergent file)';
+    -- dedup: the same divergent file again -> same park, still ONE ask
+    v_res := stewards.workspace_writeback('vs110-ws', 'vs110-alpha.md', v_file, stewards._ws_sha(v_file), 'tester');
+    ASSERT v_res->>'status' = 'conflict' AND (v_res->>'conflict_id')::bigint = v_cid,
+        '110: a re-poll of the same divergence must refresh the SAME parked conflict';
+    ASSERT (SELECT count(*) FROM stewards.workspace_conflicts c
+             WHERE c.workspace = 'vs110-ws' AND c.status = 'pending') = 1,
+        '110: dedup — one pending conflict per (workspace, path)';
+    ASSERT (SELECT count(*) FROM stewards.hinge_reviews hr
+             WHERE hr.kind = 'ask' AND hr.status IN ('pending','escalated')
+               AND hr.payload->>'workspace' = 'vs110-ws') = 1,
+        '110: dedup — one standing ask per pending conflict';
+    ASSERT (SELECT wl.conflicts FROM stewards.workspace_list() wl WHERE wl.name = 'vs110-ws') = 1,
+        '110: workspace_list must count the pending conflict';
+
+    -- resolve file-wins -> the PARKED file body lands with provenance
+    v_res := stewards.workspace_conflict_resolve(v_cid, 'file-wins', 'michael');
+    ASSERT (v_res->>'ok')::boolean, format('110: file-wins resolve must succeed, got %s', v_res);
+    ASSERT (SELECT d.body FROM stewards.docs d WHERE d.id = v_doc_id) = E'# VS110 Alpha\n\nDivergent file change.\n',
+        '110: file-wins must apply the parked file body';
+    ASSERT (SELECT c.status FROM stewards.workspace_conflicts c WHERE c.id = v_cid) = 'resolved',
+        '110: the conflict must resolve';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.hinge_reviews hr
+                        WHERE hr.kind = 'ask' AND hr.status IN ('pending','escalated')
+                          AND hr.payload->>'workspace' = 'vs110-ws'),
+        '110: resolution must retire the standing ask';
+    -- INVERSE-PROVE half 2: the write-back path works again after resolution
+    v_file := E'---\nid: "' || v_doc_id || E'"\nkind: "doc"\nworkspace: "vs110-ws"\n---\n\n'
+           || E'# VS110 Alpha\n\nPost-resolution edit.\n';
+    v_res := stewards.workspace_writeback('vs110-ws', 'vs110-alpha.md', v_file, stewards._ws_sha(v_file), 'tester');
+    ASSERT (v_res->>'ok')::boolean AND v_res->>'status' = 'applied',
+        format('110 INVERSE: write-back must work again after resolution, got %s', v_res);
+    ASSERT (SELECT d.body FROM stewards.docs d WHERE d.id = v_doc_id) = E'# VS110 Alpha\n\nPost-resolution edit.\n',
+        '110: the post-resolution edit must land';
+
+    -- ── the wall: a frontmatter identity OUTSIDE the scope -> conflict, not a write
+    INSERT INTO stewards.docs (slug, title, body, kind, project_association)
+    VALUES ('vs110-outside', 'VS110 Outside', E'other project''s truth\n', 'doc', 'vs110-other')
+    RETURNING id INTO v_out_id;
+    v_file := E'---\nid: "' || v_out_id || E'"\nkind: "doc"\n---\n\nsmuggled write across the wall\n';
+    v_res := stewards.workspace_writeback('vs110-ws', 'smuggle.md', v_file, stewards._ws_sha(v_file), 'tester');
+    ASSERT v_res->>'status' = 'conflict', format('110: an out-of-scope claim must conflict, got %s', v_res);
+    ASSERT v_res->>'reason' LIKE '%OUTSIDE this workspace''s scope%',
+        format('110: the conflict must name the wall, got %s', v_res->>'reason');
+    ASSERT (SELECT d.body FROM stewards.docs d WHERE d.id = v_out_id) = E'other project''s truth\n',
+        '110 INVERSE: the out-of-scope row must be untouched';
+    PERFORM stewards.workspace_conflict_resolve(
+        (v_res->>'conflict_id')::bigint, 'dismiss', 'virgin-smoke');
+
+    -- ── a NEW file (no frontmatter identity) -> a NEW doc inside the scope, flagged
+    v_res := stewards.workspace_writeback('vs110-ws', 'notes/new-idea.md',
+        E'# A New Idea\n\nBorn in the workspace.\n',
+        stewards._ws_sha(E'# A New Idea\n\nBorn in the workspace.\n'), 'tester');
+    ASSERT v_res->>'status' = 'created', format('110: a new file must create in scope, got %s', v_res);
+    v_new_id := v_res->>'target_id';
+    ASSERT (SELECT d.project_association FROM stewards.docs d WHERE d.id = v_new_id) = 'vs110-project',
+        '110: the new doc must take the scope''s project association';
+    ASSERT (SELECT d.slug FROM stewards.docs d WHERE d.id = v_new_id) = 'vs110-ws-notes-new-idea',
+        '110: the new doc slug must be workspace-prefixed + path-derived';
+    ASSERT (SELECT d.source_type FROM stewards.docs d WHERE d.id = v_new_id) = 'workspace',
+        '110: the new doc must stamp source_type=workspace';
+    ASSERT EXISTS (SELECT 1 FROM stewards.workspace_projection_pending('vs110-ws') p
+                    WHERE p.source_id = v_new_id AND p.action = 'project'),
+        '110: the created doc must pend so the projector rewrites the file WITH identity frontmatter';
+
+    -- ── wiki scope: pages project and write back via the revision-aware path
+    PERFORM stewards.wiki_create('vs110-wiki', 'VS110 Wiki');
+    v_page_id := stewards.wiki_page_upsert('vs110-page', 'VS110 Page', E'# VS110 Page\n\nWiki body.\n');
+    PERFORM stewards.wiki_add_member('vs110-wiki', 'vs110-page', 'virgin-smoke');
+    v_res := stewards.workspace_create('vs110-wswiki', 'wiki', 'vs110-wiki', 'virgin-smoke');
+    ASSERT (v_res->>'ok')::boolean, format('110: wiki workspace_create must succeed, got %s', v_res);
+    v_res := stewards.workspace_create('vs110-bad', 'wiki', 'vs110-no-such-wiki', 'virgin-smoke');
+    ASSERT NOT (v_res->>'ok')::boolean, '110: a wiki workspace over a nonexistent wiki must be refused';
+    SELECT * INTO v_p FROM stewards.workspace_projection_pending('vs110-wswiki') p
+     WHERE p.source_id = v_page_id::text AND p.action = 'project';
+    ASSERT v_p.target_path = '_workspaces/vs110-wswiki/vs110-page.md',
+        format('110: the wiki page must pend in the wiki workspace, got %s', v_p.target_path);
+    PERFORM stewards.knowledge_projection_record(v_p.source_kind, v_p.source_id,
+        v_p.target_path, v_p.source_updated_at, v_p.content_sha);
+    v_file := E'---\nid: "' || v_page_id || E'"\nkind: "wiki_page"\nworkspace: "vs110-wswiki"\n---\n\n'
+           || E'# VS110 Page\n\nWiki body, edited in the workspace.\n';
+    v_res := stewards.workspace_writeback('vs110-wswiki', 'vs110-page.md', v_file, stewards._ws_sha(v_file), 'tester');
+    ASSERT (v_res->>'ok')::boolean AND v_res->>'status' = 'applied',
+        format('110: a wiki-page write-back must apply, got %s', v_res);
+    ASSERT (SELECT wp.content FROM stewards.wiki_pages wp WHERE wp.id = v_page_id)
+               = E'# VS110 Page\n\nWiki body, edited in the workspace.\n',
+        '110: the wiki page content must be the file''s';
+    ASSERT (SELECT max(r.rev) FROM stewards.wiki_page_revisions r WHERE r.page_id = v_page_id) = 2,
+        '110: the wiki write-back must append a revision (wiki_page_upsert idiom)';
+    ASSERT (SELECT r.reason LIKE 'workspace write-back%' FROM stewards.wiki_page_revisions r
+             WHERE r.page_id = v_page_id AND r.rev = 2),
+        '110: the wiki revision reason must carry the provenance stamp';
+
+    -- clean up (fixture rows, ws state, graph nodes from import_doc, embed queue)
+    DELETE FROM stewards.workspace_conflicts WHERE workspace IN ('vs110-ws','vs110-wswiki');
+    DELETE FROM stewards.hinge_reviews WHERE kind = 'ask' AND payload->>'workspace' IN ('vs110-ws','vs110-wswiki');
+    DELETE FROM stewards.knowledge_projections WHERE source_kind LIKE 'ws:vs110-%';
+    DELETE FROM stewards.knowledge_workspaces WHERE name IN ('vs110-ws','vs110-wswiki');
+    DELETE FROM stewards.work_queue WHERE payload->>'target_id' IN (v_doc_id, v_out_id, v_new_id);
+    DELETE FROM stewards.wiki_members WHERE wiki_id IN (SELECT id FROM stewards.wikis WHERE slug = 'vs110-wiki');
+    DELETE FROM stewards.wiki_pages WHERE slug = 'vs110-page';
+    DELETE FROM stewards.wikis WHERE slug = 'vs110-wiki';
+    DELETE FROM stewards.docs WHERE id IN (v_doc_id, v_out_id, v_new_id);
+    DELETE FROM stewards.edges
+     WHERE src IN (SELECT n.id FROM stewards.nodes n WHERE n.kind = 'doc' AND n.ref LIKE 'vs110-%')
+        OR dst IN (SELECT n.id FROM stewards.nodes n WHERE n.kind = 'doc' AND n.ref LIKE 'vs110-%');
+    DELETE FROM stewards.nodes WHERE kind = 'doc' AND ref LIKE 'vs110-%';
+
+    RAISE NOTICE 'OK 110: db-projected workspace (v30) — opt-in registry (idempotent create, scope-collision refused, dead wiki ref refused); the catalog pends at _workspaces/<name>/<slug>.md keyed ws:<name>:<kind> (no watermark collision with the main tree) and goes quiet once recorded; the sha triple decides: file-changed+row-unchanged APPLIES (touch_doc revision, actor in changed_by via the GUC, merged frontmatter stamp, watermark advanced), unchanged file noops, BOTH-changed parks a conflict with all three shas + the file''s version + ONE deduped needs_attention ask while the row is INVERSE-PROVEN untouched and the path FREEZES against re-projection; file-wins resolve lands the parked body, retires the ask, and write-back works after (inverse half 2); an out-of-scope frontmatter claim is a conflict at the wall, never a write; a new identity-less file becomes a NEW doc inside the scope (flagged, re-pends for identity frontmatter); wiki scopes write back through wiki_page_upsert with the provenance reason on the appended revision';
+END
+$vs110$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v30 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces) is sound =='

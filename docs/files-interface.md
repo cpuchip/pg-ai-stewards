@@ -77,6 +77,54 @@ stewards-cli project --pending  # preview what the next pass will do
 projector commits each changed pass (`projection: <n> changed`) — history of
 your substrate's prose for nothing.
 
-**One-way (v1):** edits inside `knowledge/` are never read back. The drop
-directory is the write path — copy the file into `drop/` (or just author it
-there) and the freshness ledger does the rest.
+**One-way by default:** edits inside `knowledge/` at large are never read
+back. The drop directory is the general write path — copy the file into
+`drop/` (or just author it there) and the freshness ledger does the rest.
+The one registered exception is below.
+
+## Both directions: db-projected workspaces (`knowledge/_workspaces/`)
+
+> v30 (`extension/v30-workspaces.sql` + the bridge's `workspacewatcher.go`
+> and the workspace pass in `projector.go`). The ratified direction
+> (.spec/proposals/db-projected-workspace.md): *"spin up claude code in a
+> db projected file system, where the updates land live in the db."*
+
+A **workspace** is an opt-in, per-scope *writable* projection: one scope of
+the database (a project, a wiki, a world's canon corpus, a doc kind)
+projected into its own directory, with write-back armed. Open the directory
+in any harness — Claude Code via loom, a plain editor, a remote seat — and
+saves land as canonical rows within one 30-second poll.
+
+```sh
+stewards-cli workspace create my-case --scope project:my-case --for-loom
+#   -> prints the absolute host dir + a ready-to-run:
+#      loom run --workdir <knowledge>/_workspaces/my-case
+stewards-cli workspace list
+```
+
+The contract:
+
+- **Opt-in per workspace, never global** — only dirs registered in
+  `stewards.knowledge_workspaces` are ever read back (the wall).
+- **Never silent clobber** — a sha triple (projected / file / row) decides
+  transactionally in SQL. File changed + row unchanged → the file wins
+  (it is the authoring surface): the row updates through the normal
+  revision idiom (prior version archived in `doc_versions` /
+  `wiki_page_revisions`). BOTH changed → the file's version parks in
+  `stewards.workspace_conflicts`, ONE deduped item lands in
+  `needs_attention`, the row is untouched, and the path freezes both
+  directions until you resolve:
+  `SELECT stewards.workspace_conflict_resolve(<id>, 'row-wins'|'file-wins'|'dismiss');`
+- **Provenance on every write-back** — `doc_versions.changed_by =
+  workspace:<name>:<actor>`, a `workspace_writeback` frontmatter stamp on
+  the doc, `last_writeback_at` on the registry row.
+- **New files become new rows in the scope** — a file with no frontmatter
+  identity creates a doc (or wiki page) inside the workspace's scope; the
+  projector then rewrites the file with identity frontmatter. A file
+  claiming a row *outside* the scope is a conflict, never a write.
+- **Live = one poll** — 30s file→row (the watcher), ~1s row→file after any
+  write-back or `workspace_create` (NOTIFY-driven re-projection).
+
+Deleting a *file* in a workspace is not a signal (rows are canonical; the
+file returns on the next row change). Delete rows DB-side and the projector
+removes the file.
