@@ -23,6 +23,13 @@
 --   §3 steward_tick (07)          — the alias-failover branch.
 -- + §2.5 a small helper for the tried-transient member set.
 --
+-- 103 (2026-07, war-game W2) makes ONE surgical edit inside §3's steward_tick
+-- body — NOT a full re-author — adding a to_regprocedure-guarded, exception-
+-- isolated sweep of stewards.abort_conditions_evaluate() right before the
+-- RETURN. This file remains steward_tick's LAST full author; 103 owns only
+-- that one inserted block (see its own comment there for why a surgical edit
+-- was chosen over yet another full-body re-author).
+--
 -- requires create_model_aliases (31). No schema change; no data migration.
 -- The mechanism mirrors the steward's existing escalation (set model_override +
 -- provider_override, re-dispatch with p_allow_failed_status). Known limit: like
@@ -410,12 +417,41 @@ BEGIN
         END;
     END LOOP;
 
+    -- 103 (W2, .spec/proposals/war-game-pipeline.md decision #3): sweep
+    -- ARMED war-game abort conditions across every non-terminal work item —
+    -- not just the failed ones the loop above walks (a budget_fraction or
+    -- tool_unavailable abort can trip on a RUNNING item too). 103 loads
+    -- AFTER this file in the chain, so at CREATE time of this very
+    -- function the callee does not exist yet — plpgsql resolves the name
+    -- at EXECUTION time, by which the full chain is installed; the
+    -- to_regprocedure guard mirrors 99/97's optional-sibling calls so a
+    -- partial/worktree build lacking 103 degrades honestly instead of
+    -- raising every tick. Isolated in its own exception block so an
+    -- evaluator bug can never abort the tick itself (the #330 poison-row
+    -- lesson, generalized). Folded into v_count so "actions taken" this
+    -- tick reflects trips too. Surgical addition only — steward_tick
+    -- itself is NOT restructured.
+    IF to_regprocedure('stewards.abort_conditions_evaluate()') IS NOT NULL THEN
+        BEGIN
+            v_count := v_count + stewards.abort_conditions_evaluate();
+        EXCEPTION WHEN OTHERS THEN
+            BEGIN
+                INSERT INTO stewards.steward_actions (observation, action, details)
+                VALUES ('abort_conditions_evaluate failed: ' || SQLERRM, 'tick_error',
+                        jsonb_build_object('sqlerrm', SQLERRM, 'sqlstate', SQLSTATE,
+                                           'source', 'abort_conditions_evaluate'));
+            EXCEPTION WHEN OTHERS THEN
+                NULL;
+            END;
+        END;
+    END IF;
+
     RETURN v_count;
 END;
 $func$;
 
 COMMENT ON FUNCTION stewards.steward_tick() IS
-'Watch→Diagnose→Act→Account orchestration (32): per-item exception isolation; an ALIAS-FAILOVER branch walks a transient/timeout alias failure to its next untried member before pick_model (which raises for stages-jsonb pipelines); #326 adds a PINNED-RETRY sibling branch — a transient/timeout failure on a pinned concrete-model stages-jsonb stage re-dispatches the same stage (failure_count<3 caps it) instead of getting no retry at all; otherwise lessons-aware retry guidance + pick_model escalation. Returns count of actions taken. Called by the bgworker on tick.';
+'Watch→Diagnose→Act→Account orchestration (32): per-item exception isolation; an ALIAS-FAILOVER branch walks a transient/timeout alias failure to its next untried member before pick_model (which raises for stages-jsonb pipelines); #326 adds a PINNED-RETRY sibling branch — a transient/timeout failure on a pinned concrete-model stages-jsonb stage re-dispatches the same stage (failure_count<3 caps it) instead of getting no retry at all; otherwise lessons-aware retry guidance + pick_model escalation. 103 adds a guarded post-loop sweep of stewards.abort_conditions_evaluate() (war-game W2 abort conditions) — isolated so an evaluator bug can never break the tick. Returns count of actions taken (includes abort trips). Called by the bgworker on tick.';
 
 
 -- =====================================================================

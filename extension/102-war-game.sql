@@ -133,6 +133,10 @@ ON CONFLICT (pipeline_family, stage_name) DO UPDATE SET
 -- §4 — capture at finalize: pooled war-game doc -> work_items.war_game
 --       (+ release a waiting mission item, if this war-game has one)
 -- ---------------------------------------------------------------------
+-- ★ 103-abort-conditions.sql RE-AUTHORS war_game_capture (adds: arming a
+--   work_item_abort_conditions row per aborts[] entry on the release path)
+--   — port THAT copy, not this one, if this function is touched again
+--   (highest number wins).
 CREATE OR REPLACE FUNCTION stewards.war_game_capture() RETURNS trigger
 LANGUAGE plpgsql AS $fn$
 DECLARE
@@ -209,6 +213,10 @@ BEGIN
                input    = (input - 'awaiting_war_game')
                           || jsonb_build_object('war_game_doc', NEW.slug)
          WHERE id = v_target
+           -- BUG (kept for the record, FIXED in 103's re-authored copy which
+           -- is the live one): 'done'/'error' are not valid work_items
+           -- statuses, so this guard was always-true. 103 uses
+           -- status = 'pending' — only a still-waiting mission releases.
            AND status NOT IN ('done', 'error');
         IF FOUND THEN
             BEGIN
