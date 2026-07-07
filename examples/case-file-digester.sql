@@ -591,7 +591,28 @@ INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, 
     '"section_ref":{"type":"string","description":"optional exact section address (doc_split_sections)"},'
     '"heading":{"type":"string","description":"optional heading substring to scope to (alternative to section_ref)"}'
   '}}'::jsonb,
-  '{"kind":"mcp_proxy","server":"pg-ai-stewards","tool":"citation_check"}'::jsonb, 'read', true )
+  '{"kind":"mcp_proxy","server":"pg-ai-stewards","tool":"citation_check"}'::jsonb, 'read', true ),
+-- The letter stage's draft tools are sql_fn ON PURPOSE (live catch, 2026-07-07):
+-- the bridge injects the caller's wi-- _session_id into sql_fn tools per call,
+-- but mcp_proxy tools ride ONE cached MCP client session per server — so the
+-- generic doc_read (mcp_proxy) could not see case_assemble's wi-scoped draft
+-- ("no draft in your session") even though doc_draft_session_match's same-wi
+-- branch allows it. These wrap the SAME v08 doc_*_tool(jsonb) functions the
+-- proxy path calls; only the session plumbing differs.
+( 'case_draft_read',
+  'Read the assembled case-file draft by handle (the handle from the assemble report). Session-scoped to this work item.',
+  '{"type":"object","required":["handle"],"properties":{'
+    '"handle":{"type":"string","description":"the draft handle from case_assemble (the assemble stage reported ASSEMBLED <handle>)"}'
+  '}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"doc_read_tool"}'::jsonb, 'read', true ),
+( 'case_draft_append',
+  'Append ONE section (heading + body) to the case-file draft by handle. Session-scoped to this work item.',
+  '{"type":"object","required":["handle","heading","body"],"properties":{'
+    '"handle":{"type":"string","description":"the draft handle from case_assemble"},'
+    '"heading":{"type":"string","description":"the section heading, e.g. Draft appeal letter"},'
+    '"body":{"type":"string","description":"the section body (markdown)"}'
+  '}}'::jsonb,
+  '{"kind":"sql_fn","schema":"stewards","name":"doc_append_section_tool"}'::jsonb, 'write_local', true )
 ON CONFLICT (name) DO UPDATE SET
     description = EXCLUDED.description, args_schema = EXCLUDED.args_schema,
     execute_target = EXCLUDED.execute_target, effect_class = EXCLUDED.effect_class, active = true;
@@ -602,8 +623,8 @@ INSERT INTO stewards.tool_groups (name, description, tool_patterns) VALUES
    'the case-file digester surface: shelf cursor (case_next/case_add), the deterministic spine (case_normalize_floor), the citation sanity pair (citation_check + case_citation_record), and server-side assembly (case_assemble)',
    ARRAY['case_next','case_add','case_normalize_floor','citation_check','case_citation_record','case_assemble']),
   ('case-finalize',
-   'the one finalize tool for the case-file publishing stage',
-   ARRAY['case_file_publish'])
+   'the letter/publish stage surface: wi-scoped draft read + the one generative append + the one finalize tool',
+   ARRAY['case_draft_read','case_draft_append','case_file_publish'])
 ON CONFLICT (name) DO UPDATE SET description = EXCLUDED.description, tool_patterns = EXCLUDED.tool_patterns;
 
 INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES
@@ -613,6 +634,8 @@ INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, sourc
     ('research', 'case_citation_record',  'allow', 'manual'),
     ('research', 'case_assemble',         'allow', 'manual'),
     ('research', 'case_file_publish',     'allow', 'manual'),
+    ('research', 'case_draft_read',       'allow', 'manual'),
+    ('research', 'case_draft_append',     'allow', 'manual'),
     ('research', 'citation_check',        'allow', 'manual')
 ON CONFLICT (agent_family, tool_pattern) DO UPDATE SET
     action = EXCLUDED.action, source = COALESCE(EXCLUDED.source, stewards.agent_tool_perms.source);
@@ -704,15 +727,15 @@ INSERT INTO stewards.pipelines (
         jsonb_build_object('name','letter','next',NULL,
             'model','reason','agent_family','research',
             'auto_advance',true,'tools_disabled',false,
-            'tool_groups', jsonb_build_array('doc-edit','case-finalize'),
+            'tool_groups', jsonb_build_array('case-finalize'),
             'input_template',
               'You are the LETTER stage of the case-file digester — the ONE generative section of the case file. Everything else was rendered server-side from typed rows.' || E'\n\n' ||
               'The assemble stage reported: {{stage_results.assemble.output}}' || E'\n\n' ||
               'Steps:' || E'\n' ||
-              '1. Call `doc_current` to get the assembled draft handle, then `doc_read` it once. Every fact you may use is already in it, with [doc-slug#section-ref] anchors.' || E'\n' ||
-              '2. `doc_append_section` ONE section, heading "Draft appeal letter": a firm, courteous draft appeal. Every factual claim in the letter must cite its anchor exactly as it appears in the sections above ([doc#ref]). If the Findings section shows a MISMATCH, that mismatch is the letter''s core argument. Do not invent dates, amounts, or policy language: if it is not in the draft above, it does not go in the letter.' || E'\n' ||
+              '1. The assemble report above reads "ASSEMBLED <handle>". Call `case_draft_read` with THAT handle — it is your only key to the draft (this stage runs in a fresh session). Every fact you may use is already in that draft, with [doc-slug#section-ref] anchors. If the handle is missing or the read refuses, reply with the error verbatim and STOP — never ground on any other document.' || E'\n' ||
+              '2. `case_draft_append` ONE section (same handle), heading "Draft appeal letter": a firm, courteous draft appeal. Every factual claim in the letter must cite its anchor exactly as it appears in the sections above ([doc#ref]). If the Findings section shows a MISMATCH, that mismatch is the letter''s core argument. Do not invent dates, amounts, or policy language: if it is not in the draft above, it does not go in the letter.' || E'\n' ||
               '3. The letter is a DRAFT for human review. Nothing is sent by this pipeline and no send capability exists — do not write send instructions or fabricate a sent status.' || E'\n' ||
-              '4. Call `case_file_publish` (omit the handle to use this run''s draft). It pools the case file and marks the case done.' || E'\n' ||
+              '4. Call `case_file_publish` with the SAME handle from step 1 (do not omit it — this session did not create the draft). It pools the case file and marks the case done.' || E'\n' ||
               '5. Reply with a short JOURNAL (2-3 sentences): the case, whether findings drove the letter, and that you published. Do NOT paste the document.' )
     ),
     false, false,
