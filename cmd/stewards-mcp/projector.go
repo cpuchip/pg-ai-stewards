@@ -28,8 +28,12 @@
 // the state row. If STEWARDS_KNOWLEDGE_DIR/.git exists, a changed pass is
 // committed best-effort ("projection: <n> changed").
 //
-// ONE-WAY v1: edits made in the knowledge tree are NEVER read back — the
-// drop directory (dropwatcher.go) is the write path into the substrate.
+// ONE-WAY by default: edits made in the knowledge tree at large are NEVER
+// read back — the drop directory (dropwatcher.go) is the general write
+// path. The v30 EXCEPTION is explicit and registered: _workspaces/<name>/
+// dirs (stewards.knowledge_workspaces) are writable projections whose
+// catalog rides this same pass (workspace_projection_pending, drained in
+// projectPass below) and whose read-back is workspacewatcher.go.
 //
 // Disabled when STEWARDS_PROJECTOR_DISABLED=1, or when the dir is absent.
 
@@ -53,6 +57,9 @@ const (
 	projectorNotifyChannel = "stewards_knowledge_projection"
 	projectorTickInterval  = time.Hour
 	projectorProvenance    = "projected from pg-ai-stewards — canonical store is the database; author changes via the drop directory"
+	// v30: workspace files are the WRITABLE projection — a different
+	// contract, said plainly in every file.
+	workspaceProvenance = "read-write workspace projection from pg-ai-stewards — edit this file and save; the write-back lands it as the canonical row (sha-guarded, provenance-stamped)"
 )
 
 // runProjector is started from runBridgeRun in a goroutine, mirroring
@@ -134,40 +141,69 @@ type projectionRow struct {
 	contentSha      *string
 }
 
-// projectPass drains stewards.knowledge_projection_pending() once:
-// 'project' rows are written atomically + recorded; 'delete' rows are
-// removed + forgotten. Errors are per-row (logged, row skipped — the
-// watermark is only advanced AFTER a successful write, so the next pass
-// retries). A changed pass ends with a best-effort git commit.
-func projectPass(ctx context.Context, pool *pgxpool.Pool, dir, trigger string) {
+// fetchPending runs one catalog query and scans its rows. Both catalogs
+// (the v28 knowledge tree and the v30 workspace projections) share the
+// exact column shape, so one fetch + one processing loop serve both.
+func fetchPending(ctx context.Context, pool *pgxpool.Pool, trigger, label, query string) ([]projectionRow, bool) {
 	queryCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
-	rows, err := pool.Query(queryCtx,
-		`SELECT action, source_kind, source_id, target_path, title, body,
-		        project, source_updated_at, content_sha
-		   FROM stewards.knowledge_projection_pending()`)
+	defer cancel()
+	rows, err := pool.Query(queryCtx, query)
 	if err != nil {
-		cancel()
-		log.Printf("projector: pending query failed (trigger=%s): %v", trigger, err)
-		return
+		log.Printf("projector: %s pending query failed (trigger=%s): %v", label, trigger, err)
+		return nil, false
 	}
+	defer rows.Close()
 	var pending []projectionRow
 	for rows.Next() {
 		var r projectionRow
 		if err := rows.Scan(&r.action, &r.sourceKind, &r.sourceID, &r.targetPath,
 			&r.title, &r.body, &r.project, &r.sourceUpdatedAt, &r.contentSha); err != nil {
-			rows.Close()
-			cancel()
-			log.Printf("projector: scan failed (trigger=%s): %v", trigger, err)
-			return
+			log.Printf("projector: %s scan failed (trigger=%s): %v", label, trigger, err)
+			return nil, false
 		}
 		pending = append(pending, r)
 	}
-	rows.Close()
-	cancel()
 	if rows.Err() != nil {
-		log.Printf("projector: pending rows failed (trigger=%s): %v", trigger, rows.Err())
+		log.Printf("projector: %s pending rows failed (trigger=%s): %v", label, trigger, rows.Err())
+		return nil, false
+	}
+	return pending, true
+}
+
+// projectPass drains stewards.knowledge_projection_pending() AND (v30) the
+// workspace catalog stewards.workspace_projection_pending(NULL) once —
+// workspace projection rides the same pass, same triggers, same file I/O
+// (the chosen seam; workspace rows arrive with source_kind='ws:<name>:...'
+// and target_path already under the workspace dir, so the loop below is
+// oblivious). 'project' rows are written atomically + recorded; 'delete'
+// rows are removed + forgotten. Errors are per-row (logged, row skipped —
+// the watermark is only advanced AFTER a successful write, so the next
+// pass retries). A changed pass ends with a best-effort git commit.
+func projectPass(ctx context.Context, pool *pgxpool.Pool, dir, trigger string) {
+	pending, ok := fetchPending(ctx, pool, trigger, "knowledge",
+		`SELECT action, source_kind, source_id, target_path, title, body,
+		        project, source_updated_at, content_sha
+		   FROM stewards.knowledge_projection_pending()`)
+	if !ok {
 		return
 	}
+
+	// v30 workspace catalog — probed per pass so a bridge running against
+	// a pre-v30 database stays quiet instead of erroring every tick.
+	var hasWs bool
+	probeCtx, probeCancel := context.WithTimeout(ctx, 15*time.Second)
+	if err := pool.QueryRow(probeCtx,
+		"SELECT to_regprocedure('stewards.workspace_projection_pending(text)') IS NOT NULL",
+	).Scan(&hasWs); err == nil && hasWs {
+		if wsPending, wsOK := fetchPending(ctx, pool, trigger, "workspace",
+			`SELECT action, source_kind, source_id, target_path, title, body,
+			        project, source_updated_at, content_sha
+			   FROM stewards.workspace_projection_pending(NULL)`); wsOK {
+			pending = append(pending, wsPending...)
+		}
+	}
+	probeCancel()
+
 	if len(pending) == 0 {
 		return // dominant quiet case
 	}
@@ -267,12 +303,26 @@ func safeKnowledgeRel(p string) (string, bool) {
 
 // renderKnowledgeFile composes YAML frontmatter + the body. The
 // frontmatter is the provenance stamp the four-layer ruling requires on
-// every projected file.
+// every projected file. v30 workspace rows (source_kind 'ws:<name>:<kind>')
+// render the REAL kind plus a `workspace:` key — that id/kind pair is the
+// identity workspace_writeback verifies against the scope wall, so it must
+// round-trip exactly.
 func renderKnowledgeFile(r projectionRow) []byte {
+	kind, workspace := r.sourceKind, ""
+	provenance := projectorProvenance
+	if strings.HasPrefix(r.sourceKind, "ws:") {
+		if parts := strings.SplitN(r.sourceKind, ":", 3); len(parts) == 3 {
+			workspace, kind = parts[1], parts[2]
+			provenance = workspaceProvenance
+		}
+	}
 	var b strings.Builder
 	b.WriteString("---\n")
 	fmt.Fprintf(&b, "id: %s\n", yamlQuote(r.sourceID))
-	fmt.Fprintf(&b, "kind: %s\n", yamlQuote(r.sourceKind))
+	fmt.Fprintf(&b, "kind: %s\n", yamlQuote(kind))
+	if workspace != "" {
+		fmt.Fprintf(&b, "workspace: %s\n", yamlQuote(workspace))
+	}
 	if r.project != nil && *r.project != "" {
 		fmt.Fprintf(&b, "project: %s\n", yamlQuote(*r.project))
 	}
@@ -283,7 +333,7 @@ func renderKnowledgeFile(r projectionRow) []byte {
 		fmt.Fprintf(&b, "source_updated_at: %s\n", r.sourceUpdatedAt.UTC().Format(time.RFC3339))
 	}
 	fmt.Fprintf(&b, "projected_at: %s\n", time.Now().UTC().Format(time.RFC3339))
-	fmt.Fprintf(&b, "provenance: %s\n", yamlQuote(projectorProvenance))
+	fmt.Fprintf(&b, "provenance: %s\n", yamlQuote(provenance))
 	b.WriteString("---\n\n")
 	if r.body != nil {
 		b.WriteString(*r.body)

@@ -266,6 +266,24 @@ extension_sql_file!(
     requires = ["create_v27_lifeless_core"],
 );
 
+// v30-workspaces.sql — NEW (feat/full-treatment, Builder M): the
+// DB-projected WORKSPACE — opt-in writable projection scopes
+// (knowledge_workspaces registry, workspace catalog riding the v28
+// projector, sha-triple write-back with conflict parking + needs_attention,
+// per .spec/proposals/db-projected-workspace.md P1). Companion bridge
+// loops: cmd/stewards-mcp/workspacewatcher.go + the workspace pass in
+// projector.go; CLI: `stewards-cli workspace`.
+//
+// INTEGRATION NOTE for the session lead: registered against
+// create_v28_files_interface because v29 (extension/v29-*.sql) is landing
+// in a parallel builder's branch — at integration, re-point `requires`
+// to v29's registration name so the linear volume chain stays linear.
+extension_sql_file!(
+    "../v30-workspaces.sql",
+    name = "create_v30_workspaces",
+    requires = ["create_v28_files_interface"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

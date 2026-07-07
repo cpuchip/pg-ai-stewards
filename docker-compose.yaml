@@ -103,10 +103,16 @@ services:
       # KNOWLEDGE: the projection tree — wiki pages, pooled docs, and
       # lessons written as markdown (wiki/<scope>/<slug>.md,
       # docs/<project>/<slug>.md, lessons/lesson-<id>-<kind>.md) with
-      # provenance frontmatter. ONE-WAY: edits here are never read back;
-      # author changes via the drop directory. `stewards-cli project`
-      # forces a pass; otherwise hourly + on NOTIFY. If this dir is a git
-      # repo, each changed pass is committed automatically.
+      # provenance frontmatter. ONE-WAY by default: edits here are never
+      # read back; author changes via the drop directory. `stewards-cli
+      # project` forces a pass; otherwise hourly + on NOTIFY. If this dir
+      # is a git repo, each changed pass is committed automatically.
+      #
+      # The v30 EXCEPTION: _workspaces/<name>/ subdirs registered via
+      # `stewards-cli workspace create` are WRITABLE projections — file
+      # edits there land as canonical rows within one 30s poll,
+      # sha-guarded (concurrent row changes park a conflict in
+      # needs_attention, never a clobber). See docs/files-interface.md.
       - ${KNOWLEDGE_DIR:-./knowledge}:/knowledge
     restart: unless-stopped
 
