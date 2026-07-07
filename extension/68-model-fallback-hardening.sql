@@ -78,36 +78,19 @@ $func$;
 COMMENT ON FUNCTION stewards.diagnose_failure(text, int) IS
 '68 (re-authors 32): classify a failure into (transient | timeout | model_limit | tool_error | unknown). Transient covers a pulled/unloaded model — the rig''s 404 "no local slot or reachable peer serves model X" and cloud "model not found / no such model" — and (#326) a gateway-wrapped upstream 400 ("Error from provider (X): Upstream request failed") — so failover/retry engages on real upstream blips instead of hard-failing. Bare 400s stay non-transient.';
 
--- ── §2 — the local MoE pair are mutual fallback members ─────────────
--- Drop any prior ad-hoc routing of these aliases to a single local, then seed a
--- clean local-first ladder: the live local anchor (qwen3.6-35b-a3b) and gemma
--- both present on the reasoning/local aliases, with paid cloud last. Failover
--- walks by priority and excludes the member that just failed, so a pulled model
--- is skipped and the walk lands on the other local.
-DO $$
-BEGIN
-    -- ingest (fast local): nemotron primary, then the live 35b local, then paid.
-    DELETE FROM stewards.model_aliases WHERE alias='ingest' AND provider='flexllama' AND provider_model='qwen3.6-35b-a3b';
-    UPDATE stewards.model_aliases SET priority=4 WHERE alias='ingest' AND provider='opencode_go';
-    INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority, notes) VALUES
-      ('ingest','flexllama','qwen3.6-35b-a3b',2,'68: live local fallback (gemma/nemotron pulled)'),
-      ('ingest','flexllama','gemma-4-26b-a4b',3,'68: local fallback')
-    ON CONFLICT DO NOTHING;
-
-    -- research-local: gemma primary, the live 35b local as fallback.
-    INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority, notes) VALUES
-      ('research-local','flexllama','gemma-4-26b-a4b',1,'68: local MoE primary'),
-      ('research-local','flexllama','qwen3.6-35b-a3b',2,'68: live local fallback (gemma pulled)')
-    ON CONFLICT DO NOTHING;
-
-    -- reason / critic already carry the qwen variants; add gemma as the vice-versa
-    -- local fallback (qwen pulled → gemma), ahead of the paid cloud member.
-    UPDATE stewards.model_aliases SET priority=4 WHERE alias IN ('reason','critic') AND provider='opencode_go';
-    INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority, notes) VALUES
-      ('reason','flexllama','gemma-4-26b-a4b',3,'68: local vice-versa fallback (qwen pulled → gemma)'),
-      ('critic','flexllama','gemma-4-26b-a4b',3,'68: local vice-versa fallback (qwen pulled → gemma)')
-    ON CONFLICT DO NOTHING;
-END $$;
+-- ── §2 — REMOVED 2026-07-07 (feat/lightening, model-agnostic audit §E):
+-- this block used to DELETE/UPDATE/INSERT concrete rows into
+-- stewards.model_aliases naming Michael's specific local-rig topology
+-- (gemma-4-26b-a4b / qwen3.6-35b-a3b on flexllama, re-prioritizing
+-- opencode_go members) directly in the numbered core chain — landing
+-- live on every fresh install instead of in the overlay this file's own
+-- sibling seeds (06-cost, 19-models, 31-model-aliases) already established
+-- as the pattern ("SEED ROWS MOVED TO THE OVERLAY"). Superseded in full by
+-- .spec/lightening/local-overlay-example.sql §3 (role aliases: reason/
+-- ingest/critic/vision/review), which carries the SAME local-first,
+-- mutual-fallback shape this block built, under Michael's current
+-- ratified economics rather than this file's 2026-06 ad-hoc version. Kept
+-- here as the historical record — port from the overlay, not from here.
 
 -- =====================================================================
 -- End of 68-model-fallback-hardening.sql

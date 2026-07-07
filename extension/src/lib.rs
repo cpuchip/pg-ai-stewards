@@ -1226,6 +1226,53 @@ extension_sql_file!(
     name = "create_world_wiki_bridge",
     requires = ["create_wiki_assets"],
 );
+// 107 — LIFELESS CORE (feat/lightening, model-agnostic audit,
+// .spec/lightening/model-agnostic-audit.md): "default is no models, it's
+// just a db that's lifeless. you give it models to bring it to life."
+// (Michael, ratified 2026-07-07). catalog_default_provider()/model()
+// become config-driven (NULL absent config, dropped IMMUTABLE -> STABLE);
+// trigger_embed_provider_route() stops forcing lm_studio on every embed
+// row (NULL config = land unembedded, no error, + a deduped hinge nudge);
+// work_item_dispatch_stage_safe() softens ONLY the "nothing configured"
+// shape of dispatch's RAISE EXCEPTIONs into an awaiting_review landing in
+// the existing needs_attention 'review' bucket, swapped in at the ~9
+// previously-unwrapped call sites (spawn_subagent_create, propose_prompt_
+// change_tool, attention_answer's review-resume, route_intake, spawn_
+// children, check_and_dispatch_fanout_aggregator, wiki_organize_start,
+// wiki_collect_start, crawl_start) plus steward_tick's 3 retry sites (32's
+// final body); 03-watchman's NOT NULL DEFAULT model columns become
+// nullable with a hinge-nudging degrade; 7 gate/sabbath/atonement/council
+// functions (08/10/12) resolve via a gate_dispatch_provider/model config
+// pair -> catalog_default; the __queue_for_opus__ escalation sentinel is
+// renamed __queue_for_strongest__ (pick_model + steward_tick); the judge-
+// family hand-built dispatches (15a/15b/16) read 36's own judge_dispatch_
+// provider/model config instead of hardcoding a literal, with 36's
+// literal-default config_set seeds removed (one central lifeless default
+// via catalog_default_* instead of two). Two generic sweeps close the
+// ~19-file STRIP inventory: every pipeline's stages.model/provider is
+// dropped unless it already names a role alias (35's pattern, preserved
+// automatically) or is one of the two documented KEEP-as-example persona
+// pipelines; every pipeline's metadata default_model/default_provider/
+// suggested_model/suggested_provider is dropped (the 12 brainstorm-lens
+// pipelines); stewards.stage_models is TRUNCATED (every row is operator
+// policy by its own table COMMENT). Every stripped value is re-seeded in
+// .spec/lightening/local-overlay-example.sql.
+// Placed at the true tail of the file (not just after 106): requires ALL
+// THREE current DAG tips. create_route_intake (99) and create_world_
+// wiki_bridge (97) are PARALLEL branches off create_crawler (98) /
+// create_wiki_assets (96) respectively — neither is an ancestor of
+// create_schedule_visibility (106), so depending on 106 alone would not
+// transitively guarantee 99/97 have run (pgrx orders extension_sql_file!
+// by the requires DAG, not file/lexical position — verified against
+// pgrx's own custom_sql example). §9's generic pipeline sweeps need EVERY
+// pipeline-seeding file's INSERTs to have already landed, including 99's
+// route-intake pipeline and 97's world-wiki-bridge content, so this file
+// is a genuine sink over all three tips.
+extension_sql_file!(
+    "../107-lifeless-core.sql",
+    name = "create_lifeless_core",
+    requires = ["create_schedule_visibility", "create_route_intake", "create_world_wiki_bridge"],
+);
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

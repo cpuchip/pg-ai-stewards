@@ -370,6 +370,12 @@ FOR EACH ROW EXECUTE FUNCTION stewards.cost_events_after_insert();
 -- means "transition to escalation_state='queued' instead of
 -- dispatching" — the human-mediated escalation queue. Rows in both
 -- tables are operator policy (your model chain); seed via the overlay.
+-- RENAMED 2026-07-07 (feat/lightening, model-agnostic audit §F): the
+-- sentinel is __queue_for_strongest__ as of 107-lifeless-core.sql's
+-- re-authored pick_model (a deployer's top rung isn't always Opus —
+-- 84-tool-effect-gate.sql's own "a Fable hinge is now possible"). This
+-- file's __queue_for_opus__ below is the historical record; port from
+-- 107, not from here.
 -- ---------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS stewards.stage_models (
     pipeline_family   text NOT NULL,

@@ -187,5 +187,155 @@ SELECT stewards.config_set('embed_dimensions', to_jsonb(768),
 
 
 -- =====================================================================
+-- §8 — stage_models: the retry-path defaults 107-lifeless-core.sql's §9(c)
+-- TRUNCATEd wholesale (every row was operator policy by the table's own
+-- COMMENT — the same discipline model_pricing/model_escalation already
+-- follow). These are the EXACT literal values that were living in core
+-- before the strip (13-research-pipelines / 20-coder / 90-harness-executor
+-- / 94-wiki-curator / 99-route-intake / 98-crawler), preserved here for
+-- 1:1 behavioral parity if you want it back verbatim — swap freely.
+-- war-game's stage_models (wargame/critique) already live in §4 below.
+-- =====================================================================
+INSERT INTO stewards.stage_models (pipeline_family, stage_name, default_model, notes) VALUES
+    ('planning', 'context_gather', 'qwen3.7-plus', 'local overlay: pre-strip literal (13-research-pipelines.sql)'),
+    ('planning', 'explore',        'kimi-k2.6',    'local overlay: pre-strip literal'),
+    ('planning', 'synthesize',     'kimi-k2.6',    'local overlay: pre-strip literal'),
+    ('planning', 'propose_work',   'qwen3.7-plus', 'local overlay: pre-strip literal'),
+    ('planning', 'review_plan',    'qwen3.7-plus', 'local overlay: pre-strip literal'),
+
+    ('agent-proposal',  'validate', 'qwen3.7-plus', 'local overlay: pre-strip literal'),
+    ('revise-proposal', 'revise',   'qwen3.7-plus', 'local overlay: pre-strip literal'),
+
+    ('code-write', 'plan',      'kimi-k2.6', 'local overlay: pre-strip literal (20-coder.sql)'),
+    ('code-write', 'implement', 'kimi-k2.6', 'local overlay: pre-strip literal'),
+    ('code-write', 'verify',    'kimi-k2.6', 'local overlay: pre-strip literal'),
+
+    ('code-pr', 'clone',       'kimi-k2.6', 'local overlay: pre-strip literal'),
+    ('code-pr', 'plan',        'kimi-k2.6', 'local overlay: pre-strip literal'),
+    ('code-pr', 'plan_review', 'glm-5.1',   'local overlay: pre-strip literal — a DIFFERENT model than the implementer, on purpose'),
+    ('code-pr', 'implement',   'kimi-k2.6', 'local overlay: pre-strip literal'),
+    ('code-pr', 'verify',      'kimi-k2.6', 'local overlay: pre-strip literal'),
+    ('code-pr', 'review',      'glm-5.1',   'local overlay: pre-strip literal — a DIFFERENT model than the implementer, on purpose'),
+    ('code-pr', 'pr',          'kimi-k2.6', 'local overlay: pre-strip literal'),
+
+    ('code-deploy', 'prepare', 'kimi-k2.6', 'local overlay: pre-strip literal'),
+    ('code-deploy', 'deploy',  'kimi-k2.6', 'local overlay: pre-strip literal'),
+
+    ('harness-review', 'dispatch', 'kimi-k2.6', 'local overlay: pre-strip literal (90-harness-executor.sql) — thin pilot turn, reliability over brilliance'),
+
+    ('wiki-organize',      'gather',   'kimi-k2.6', 'local overlay: pre-strip literal (94-wiki-curator.sql)'),
+    ('wiki-organize',      'propose',  'kimi-k2.6', 'local overlay: pre-strip literal'),
+    ('wiki-collect-entity','research', 'kimi-k2.6', 'local overlay: pre-strip literal'),
+    ('wiki-collect',       'plan',     'kimi-k2.6', 'local overlay: pre-strip literal'),
+
+    ('route-intake', 'classify', 'kimi-k2.6', 'local overlay: pre-strip literal (99-route-intake.sql)'),
+    ('route-intake', 'match',    'kimi-k2.6', 'local overlay: pre-strip literal'),
+
+    ('crawl', 'step', 'deepseek-v4-flash', 'local overlay: pre-strip literal (98-crawler.sql) — workhorse-grade link scoring')
+ON CONFLICT (pipeline_family, stage_name) DO UPDATE
+    SET default_model = EXCLUDED.default_model, notes = EXCLUDED.notes;
+
+
+-- =====================================================================
+-- §9 — stages jsonb: re-attach model/provider for FIRST dispatch (the
+-- resolution ladder reads stage.model/provider before ever consulting
+-- stage_models, which only governs steward RETRY). 107's §9(a) generic
+-- sweep drops these from every pipeline that doesn't already name a role
+-- alias — this section re-attaches the EXACT pre-strip literal per
+-- pipeline so applying this overlay reproduces identical first-dispatch
+-- behavior. Grouped one UPDATE per pipeline; each is idempotent (jsonb ||
+-- overwrites the two keys, safe to re-run after every migrate).
+-- =====================================================================
+
+-- Uniform-model pipelines (every stage takes the same model/provider) —
+-- one UPDATE per pipeline, no per-stage CASE needed.
+UPDATE stewards.pipelines
+   SET stages = (SELECT jsonb_agg(stage || jsonb_build_object('model','kimi-k2.6','provider','opencode_go') ORDER BY ord)
+                   FROM jsonb_array_elements(stages) WITH ORDINALITY t(stage, ord))
+ WHERE family IN ('code-write','code-deploy','echo-test','persona-turn','wiki-organize',
+                   'wiki-collect-entity','wiki-collect','route-intake','prompt-critic','lab-regression');
+
+UPDATE stewards.pipelines
+   SET stages = (SELECT jsonb_agg(stage || jsonb_build_object('model','qwen3.7-plus','provider','opencode_go') ORDER BY ord)
+                   FROM jsonb_array_elements(stages) WITH ORDINALITY t(stage, ord))
+ WHERE family IN ('decompose-fanout','aggregate-children',
+                   'subagent-url-summary','subagent-files-audit','subagent-session-investigate',
+                   'subagent-doc-summary','subagent-doc-investigate','subagent-docs-audit');
+
+UPDATE stewards.pipelines
+   SET stages = (SELECT jsonb_agg(stage || jsonb_build_object('model','deepseek-v4-flash','provider','opencode_go') ORDER BY ord)
+                   FROM jsonb_array_elements(stages) WITH ORDINALITY t(stage, ord))
+ WHERE family IN ('compact-context','subagent-research-codebase');
+
+-- crawl's 'step' stage: pre-strip literal used opencode_zen, not opencode_go.
+UPDATE stewards.pipelines
+   SET stages = (SELECT jsonb_agg(stage || jsonb_build_object('model','deepseek-v4-flash','provider','opencode_zen') ORDER BY ord)
+                   FROM jsonb_array_elements(stages) WITH ORDINALITY t(stage, ord))
+ WHERE family = 'crawl';
+
+-- code-pr: per-stage variation (plan_review/review get a DIFFERENT model
+-- than the implementer, on purpose — the review-discipline this pipeline
+-- is built around; see the stage_models notes above).
+UPDATE stewards.pipelines
+   SET stages = (
+       SELECT jsonb_agg(
+                  CASE stage->>'name'
+                      WHEN 'plan_review' THEN stage || jsonb_build_object('model','glm-5.1','provider','opencode_go')
+                      WHEN 'review'      THEN stage || jsonb_build_object('model','glm-5.1','provider','opencode_go')
+                      ELSE stage || jsonb_build_object('model','kimi-k2.6','provider','opencode_go')
+                  END
+                  ORDER BY ord)
+         FROM jsonb_array_elements(stages) WITH ORDINALITY t(stage, ord))
+ WHERE family = 'code-pr';
+
+-- war-game: wargame + critique are DIFFERENT loom seats (#role syntax —
+-- see 102-war-game.sql's own comment). §4 above already re-seeds this
+-- pipeline's stage_models; this is the matching FIRST-dispatch re-attach
+-- (stages.model, which the resolution ladder reads before stage_models
+-- is ever consulted).
+UPDATE stewards.pipelines
+   SET stages = (
+       SELECT jsonb_agg(
+                  CASE stage->>'name'
+                      WHEN 'wargame'  THEN stage || jsonb_build_object('model','sonnet#wargame','provider','loom')
+                      WHEN 'critique' THEN stage || jsonb_build_object('model','sonnet#critic', 'provider','loom')
+                      ELSE stage
+                  END
+                  ORDER BY ord)
+         FROM jsonb_array_elements(stages) WITH ORDINALITY t(stage, ord))
+ WHERE family = 'war-game';
+
+
+-- =====================================================================
+-- §10 — the 12 brainstorm-lens pipelines' metadata.default_model/
+-- default_provider/suggested_model/suggested_provider (107's §9(b) sweep
+-- drops all four keys from every pipeline's metadata). Each lens already
+-- ships with stages[0].model=NULL by design (j8b/j9b — the lens dispatches
+-- via the pipeline.metadata layer of the resolution ladder, one rung below
+-- stage.model), so THIS is the layer that actually needs re-attaching for
+-- these 12 to dispatch at all. Values are the exact pre-strip literals.
+-- =====================================================================
+UPDATE stewards.pipelines
+   SET metadata = metadata || jsonb_build_object(
+       'default_model', v.model, 'default_provider', 'opencode_go',
+       'suggested_model', v.model, 'suggested_provider', 'opencode_go')
+  FROM (VALUES
+      ('brainstorm-scamper',      'qwen3.7-plus'),
+      ('brainstorm-six-hats',     'kimi-k2.6'),
+      ('brainstorm-crazy8s',      'qwen3.7-plus'),
+      ('brainstorm-reverse',      'kimi-k2.6'),
+      ('brainstorm-mind-mapping', 'qwen3.7-plus'),
+      ('brainstorm-brainwriting', 'kimi-k2.6'),
+      ('brainstorm-starbursting', 'kimi-k2.6'),
+      ('brainstorm-disney',       'kimi-k2.6'),
+      ('brainstorm-storyboarding','qwen3.7-plus'),
+      ('brainstorm-triz',         'kimi-k2.6'),
+      ('brainstorm-forced-analogy','qwen3.7-plus'),
+      ('brainstorm-worst-idea',   'qwen3.7-plus')
+  ) AS v(family, model)
+ WHERE stewards.pipelines.family = v.family;
+
+
+-- =====================================================================
 -- End of local-overlay-example.sql
 -- =====================================================================

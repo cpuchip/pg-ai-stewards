@@ -164,6 +164,7 @@ COPY 103-abort-conditions.sql ./
 COPY 104-observations.sql ./
 COPY 105-seams.sql ./
 COPY 106-schedule-visibility.sql ./
+COPY 107-lifeless-core.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/

@@ -30,6 +30,15 @@
 -- that one inserted block (see its own comment there for why a surgical edit
 -- was chosen over yet another full-body re-author).
 --
+-- SUPERSEDED 2026-07-07 (feat/lightening, model-agnostic audit): 107-
+-- lifeless-core.sql re-authors this file's steward_tick ONE more time —
+-- the __queue_for_opus__ sentinel becomes __queue_for_strongest__, and all
+-- 3 dispatch call sites below (alias failover, pinned retry, normal retry)
+-- swap to work_item_dispatch_stage_safe, so an "unconfigured model"
+-- failure lands the item in awaiting_review instead of rolling back the
+-- failure_count bump and retrying the same item forever. §3's body below
+-- is the historical record — port from 107, not from here.
+--
 -- requires create_model_aliases (31). No schema change; no data migration.
 -- The mechanism mirrors the steward's existing escalation (set model_override +
 -- provider_override, re-dispatch with p_allow_failed_status). Known limit: like

@@ -77,7 +77,7 @@ SELECT stewards.pick_model('study','research', 2, 'model_limit') AS model;
 
 \echo ''
 \echo '=== K. pick_model: study/research, attempt 3 model_limit ==='
-\echo '    Expected: __queue_for_opus__ (GLM escalates to queue on its attempt 2)'
+\echo '    Expected: __queue_for_strongest__ (GLM escalates to queue on its attempt 2; renamed 2026-07-07, was __queue_for_opus__)'
 SELECT stewards.pick_model('study','research', 3, 'model_limit') AS model;
 
 \echo ''
@@ -102,7 +102,7 @@ SELECT stewards.pick_model('nonexistent','x', 1, 'initial');
 \echo '    Every (current_model, diagnosis) for our 4 chain models should have a row'
 SELECT
     array_agg(DISTINCT current_model) FILTER (WHERE next_model IS NOT NULL) AS escalating_models,
-    count(*) FILTER (WHERE next_model = '__queue_for_opus__') AS queue_sentinels,
+    count(*) FILTER (WHERE next_model = '__queue_for_strongest__') AS queue_sentinels,
     count(*) FILTER (WHERE next_model IS NULL) AS stay_on_current,
     count(*) AS total_rules
   FROM stewards.model_escalation;

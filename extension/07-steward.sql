@@ -28,6 +28,14 @@
 -- Per-item exception isolation: one bad item logs a tick_error and
 -- the loop continues.
 --
+-- SUPERSEDED 2026-07-07 (feat/lightening): steward_tick's true FINAL body
+-- is 32-alias-failover.sql's (later-file-wins), itself re-authored once
+-- more by 107-lifeless-core.sql (sentinel renamed __queue_for_strongest__,
+-- all 3 dispatch calls swapped to work_item_dispatch_stage_safe so an
+-- unconfigured model breaks the retry loop into awaiting_review instead
+-- of looping the same failed item forever). This file's copy below is the
+-- historical record — port from 107, not from here.
+--
 -- (steward_tick's body references retry_guidance_with_lessons and
 -- maybe_enqueue_atonement, which are created later in the chain —
 -- safe because the bundle installs atomically and plpgsql bodies are
