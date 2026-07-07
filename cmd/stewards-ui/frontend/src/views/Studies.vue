@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
-import { api, type StudiesListResp, type SearchResp } from '@/api'
+import { api, type StudiesListResp, type SearchResp, type StudyBrief } from '@/api'
 
 const route = useRoute()
 const router = useRouter()
@@ -24,6 +24,34 @@ const PAGE_SIZE = 100
 const offset = ref(0)
 const loadingMore = ref(false)
 
+// War-game 2026-07-07 finding: the kind dropdown was a hardcoded taxonomy
+// (study/proposal/phase-doc/journal) whose entries mostly match 0 rows in the
+// real data, while actual kinds (e.g. crawl-page) weren't options at all. The
+// options are now harvested from the rows the API actually returns —
+// accumulated across loads so picking a kind doesn't erase the other options —
+// with the old static list kept only as a pre-data fallback. No new backend:
+// when the first load is already filtered (deep link ?kind=… or ?q=…), one
+// unfiltered sample page is fetched just to harvest the real kinds.
+const FALLBACK_KINDS = ['study', 'doc', 'proposal', 'phase-doc', 'journal']
+const kindSet = new Set<string>()
+const kinds = ref<string[]>([])
+function harvestKinds(items: StudyBrief[]) {
+  let changed = false
+  for (const it of items) {
+    if (it.kind && !kindSet.has(it.kind)) {
+      kindSet.add(it.kind)
+      changed = true
+    }
+  }
+  if (changed) kinds.value = [...kindSet].sort()
+}
+const kindOptions = computed(() => {
+  const opts = kinds.value.length ? [...kinds.value] : [...FALLBACK_KINDS]
+  // keep a deep-linked ?kind=… selectable even if it matched 0 rows
+  if (kind.value && !opts.includes(kind.value)) opts.unshift(kind.value)
+  return opts
+})
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -39,6 +67,7 @@ async function load() {
         offset: 0,
       })
       search.value = null
+      harvestKinds(list.value.items)
     }
   } catch (e) {
     error.value = String(e)
@@ -58,6 +87,7 @@ async function loadMore() {
       offset: next,
     })
     list.value = { items: [...list.value.items, ...r.items], total: r.total }
+    harvestKinds(r.items)
     offset.value = next
   } catch (e) {
     error.value = String(e)
@@ -78,7 +108,14 @@ function submit() {
   load()
 }
 
-onMounted(load)
+onMounted(() => {
+  load()
+  // If the first load is filtered/searched it won't sample the corpus's real
+  // kinds — fetch one unfiltered page in the background just for the dropdown.
+  if (kind.value || query.value.trim()) {
+    api.studiesList({ limit: PAGE_SIZE }).then((r) => harvestKinds(r.items)).catch(() => {})
+  }
+})
 watch(
   () => route.query,
   (q) => {
@@ -121,11 +158,7 @@ function fmtDate(s?: string) {
         class="px-3 py-2 rounded border border-zinc-700 bg-zinc-900 text-sm"
       >
         <option value="">all kinds</option>
-        <option value="study">study</option>
-        <option value="doc">doc</option>
-        <option value="proposal">proposal</option>
-        <option value="phase-doc">phase-doc</option>
-        <option value="journal">journal</option>
+        <option v-for="k in kindOptions" :key="k" :value="k">{{ k }}</option>
       </select>
       <button
         type="submit"
