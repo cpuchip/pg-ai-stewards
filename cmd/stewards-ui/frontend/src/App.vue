@@ -107,19 +107,19 @@ const NAV_LINKS = [
       <nav class="hidden md:flex items-center gap-4 text-sm text-zinc-400">
         <RouterLink
           v-for="l in PRIMARY_LINKS" :key="l.to" :to="l.to"
-          class="hover:text-zinc-100 whitespace-nowrap" :class="l.accent ? 'text-sky-400' : ''"
+          class="py-2 hover:text-zinc-100 whitespace-nowrap" :class="l.accent ? 'text-sky-400' : ''"
         >{{ l.label }}</RouterLink>
 
         <!-- secondary: inline when the row fits… -->
         <RouterLink
           v-for="l in SECONDARY_LINKS" :key="`inline-${l.to}`" :to="l.to"
-          class="hidden min-[1100px]:inline hover:text-zinc-100 whitespace-nowrap"
+          class="hidden min-[1100px]:inline py-2 hover:text-zinc-100 whitespace-nowrap"
         >{{ l.label }}</RouterLink>
 
         <!-- …otherwise folded behind More -->
         <div class="relative min-[1100px]:hidden">
           <button
-            class="hover:text-zinc-100 whitespace-nowrap"
+            class="py-2 hover:text-zinc-100 whitespace-nowrap"
             :aria-expanded="moreOpen" aria-label="more navigation"
             @click="moreOpen = !moreOpen"
           >More ▾</button>
@@ -129,7 +129,7 @@ const NAV_LINKS = [
           >
             <RouterLink
               v-for="l in SECONDARY_LINKS" :key="`more-${l.to}`" :to="l.to" @click="moreOpen = false"
-              class="block px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+              class="block px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
             >{{ l.label }}</RouterLink>
           </nav>
         </div>
@@ -137,7 +137,7 @@ const NAV_LINKS = [
         <!-- dev-tools flyout (same toggle+absolute-panel idiom as More/AttentionBell) -->
         <div class="relative">
           <button
-            class="text-zinc-500 hover:text-zinc-100 whitespace-nowrap"
+            class="py-2 text-zinc-500 hover:text-zinc-100 whitespace-nowrap"
             :aria-expanded="devOpen" aria-label="developer tools"
             @click="devOpen = !devOpen"
           >Dev ▾</button>
@@ -147,7 +147,7 @@ const NAV_LINKS = [
           >
             <RouterLink
               v-for="l in DEV_LINKS" :key="`dev-${l.to}`" :to="l.to" @click="devOpen = false"
-              class="block px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+              class="block px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
             >{{ l.label }}</RouterLink>
           </nav>
         </div>

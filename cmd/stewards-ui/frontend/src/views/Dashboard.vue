@@ -263,7 +263,7 @@ const byProvider = computed(() => activity.value?.by_provider ?? [])
           <button
             @click="brainOff"
             :disabled="!!rigBusy"
-            class="text-sm px-3 py-1.5 rounded bg-red-800/80 hover:bg-red-800 disabled:opacity-50"
+            class="text-sm px-3 py-1.5 rounded border border-red-900 text-red-300 hover:bg-red-950/40 disabled:opacity-50"
           >{{ rigBusy === 'freeing' ? 'freeing…' : '■ Free GPUs (for games)' }}</button>
           <button
             @click="toggleAutonomy"
@@ -508,7 +508,7 @@ const byProvider = computed(() => activity.value?.by_provider ?? [])
         <h3 class="text-sm font-semibold">Last 7 scheduled runs</h3>
         <RouterLink
           to="/scheduled"
-          class="ml-auto text-xs text-zinc-400 hover:text-zinc-200"
+          class="ml-auto py-2 text-xs text-zinc-400 hover:text-zinc-200"
         >manage schedules →</RouterLink>
       </div>
       <div v-if="scheduledRunsError" class="px-4 py-3 text-xs text-red-400">{{ scheduledRunsError }}</div>

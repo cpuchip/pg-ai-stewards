@@ -15,6 +15,16 @@
   --border: 240 3.7% 15.9%;
 }
 
+/* Keyboard focus (ui-review 2026-07-07): the app had NO :focus-visible rules
+   anywhere, so keyboard users got the browser default at best. One visible
+   ring, mouse clicks unaffected (:focus-visible, not :focus). sky-500 matches
+   the active-nav accent. */
+:focus-visible {
+  outline: 2px solid #0ea5e9;
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
 /* =====================================================================
    Document theme — render-time skin for markdown docs/artifacts (THEME,
    audit §V). Content stays plain markdown; this is ONLY presentation,
