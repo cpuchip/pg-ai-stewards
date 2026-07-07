@@ -29,11 +29,23 @@ Routing rules:
 | PDF / Office / zip / images / anything else | `stewards.file_drop_ingest_binary` → a durable `chat_attachments` row + the existing doc-extract `doc_import_corpus` path (**requires the `docker-compose.doc-extract.yaml` overlay**; without it the ledger records the failure honestly and the bytes stay safe in the attachment) |
 | Dotfiles, `.git/`, `Thumbs.db`, `~$*`, `*.tmp`… | Skipped |
 
+**Binary drops need the doc-extract overlay — plainly.** PDF / Office / zip /
+image extraction runs in the sandboxed doc-extract container, which the base
+`docker compose up` does **not** start. Build the converter image once, then
+bring the stack up with both files (see `docker-compose.doc-extract.yaml`'s
+header for the two commands). Without the overlay a binary drop is
+**preserved but not extracted**: the bytes stay safe in `chat_attachments`,
+and the drop is flagged as an error in Intake and in the attention bell —
+the failure stays loud rather than the capability going dark. Plain
+markdown/text drops need no overlay and no models at all.
+
 **Freshness:** every drop is sha256'd into the `stewards.file_drops` ledger.
 Re-drop the same content → skipped silently. Re-drop *changed* content → the
 same doc is re-ingested and the prior revision is archived in
 `stewards.doc_versions` (the substrate's normal update idiom). Errors land as
-`status='error'` rows with the reason — check `SELECT * FROM
+`status='error'` rows with the reason — and every error rings the attention
+bell (a deduped `needs_attention` row per path, `kind=file-drop-error`, v29):
+a failed drop always has a face. The full ledger: `SELECT * FROM
 stewards.file_drops ORDER BY first_seen_at DESC`.
 
 ## Data out: the knowledge tree (`./knowledge` ← `/knowledge`)

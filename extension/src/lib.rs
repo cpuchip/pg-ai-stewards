@@ -266,6 +266,18 @@ extension_sql_file!(
     requires = ["create_v27_lifeless_core"],
 );
 
+// v29-normalize.sql — NEW (feat/full-treatment): the NORMALIZE primitive
+// (typed doc_facts + evidence_items with missing-as-first-class + the
+// deterministic parser floor + on-demand structural doc_sections) and
+// the file-drop honesty patch (status=error rings needs_attention,
+// deduped per path). Panel mandate:
+// .spec/wargames/2026-07-07-pipelines-skeleton/SYNTHESIS.md.
+extension_sql_file!(
+    "../v29-normalize.sql",
+    name = "create_v29_normalize",
+    requires = ["create_v28_files_interface"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

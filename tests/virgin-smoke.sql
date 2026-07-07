@@ -5623,4 +5623,229 @@ BEGIN
 END
 $vs108$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v28 volumes; v00→v27 was 00→107, v28 = files-interface) is sound =='
+-- ---------------------------------------------------------------------
+-- 109 — normalize (v29): the typed-fact primitive + evidence checklist
+-- + deterministic parser floor + structural sections + the file-drop
+-- honesty patch (a failure must have a face). All deterministic — zero
+-- models configured at this point in the suite, and everything here
+-- must work anyway (lifeless core).
+-- ---------------------------------------------------------------------
+DO $vs109$
+DECLARE
+    v_res    jsonb;
+    v_doc    text;
+    v_slug   text;
+    v_body   text;
+    v_md     text;
+    v_start  int;
+    v_end    int;
+BEGIN
+    -- schema + surface
+    ASSERT to_regclass('stewards.doc_facts') IS NOT NULL, '109: doc_facts table must exist';
+    ASSERT to_regclass('stewards.evidence_items') IS NOT NULL, '109: evidence_items table must exist';
+    ASSERT to_regclass('stewards.doc_sections') IS NOT NULL, '109: doc_sections table must exist';
+    ASSERT to_regprocedure('stewards.parse_facts_deterministic(text)') IS NOT NULL, '109: parse_facts_deterministic must exist';
+    ASSERT to_regprocedure('stewards.doc_split_sections(text)') IS NOT NULL, '109: doc_split_sections must exist';
+    ASSERT to_regprocedure('stewards.render_fact_timeline(text,text)') IS NOT NULL, '109: render_fact_timeline must exist';
+    ASSERT to_regprocedure('stewards.render_evidence_checklist(text,text)') IS NOT NULL, '109: render_evidence_checklist must exist';
+    ASSERT (SELECT count(*) FROM stewards.tool_defs
+             WHERE name IN ('doc_fact_add','doc_facts_list','evidence_set','evidence_checklist','doc_split_sections')
+               AND active) = 5,
+        '109: all five normalize tools must be registered and active';
+    ASSERT EXISTS (SELECT 1 FROM stewards.tool_groups WHERE name = 'normalize-tools'),
+        '109: the normalize-tools group must exist';
+
+    -- fixture doc via the v28 drop path (no markdown links -> no CITES rows;
+    -- planted: an ISO date, a month-name date, a $-amount, a fenced decoy heading)
+    v_res := stewards.file_drop_ingest('vs109-case/denial-letter.md',
+        E'# VS109 Denial\n\nPreamble under the title.\n\n# Determination\n\nClaim A-88214 was denied on 2026-06-01 per Policy Section 4.2(b).\n\n```\n# not a heading (fenced)\n```\n\n## Appeal rights\n\nYou must appeal by July 15, 2026. The disputed amount is $1,234.56.\n\n# Contact\n\nPhone 555-0100.\n',
+        'vs109-case', NULL);
+    ASSERT (v_res->>'ok')::boolean AND v_res->>'status' = 'ingested',
+        format('109: fixture drop must land, got %s', v_res);
+    v_doc  := v_res->>'doc_id';
+    v_slug := v_res->>'doc_slug';
+    SELECT d.body INTO v_body FROM stewards.docs d WHERE d.id = v_doc;
+
+    -- ── the deterministic parser floor finds the planted spans ──
+    ASSERT EXISTS (SELECT 1 FROM stewards.parse_facts_deterministic(v_body) p
+                    WHERE p.fact_kind = 'date' AND p.value_date = DATE '2026-06-01'
+                      AND p.raw_text = '2026-06-01'),
+        '109: parser must find the planted ISO date with its verbatim span';
+    ASSERT EXISTS (SELECT 1 FROM stewards.parse_facts_deterministic(v_body) p
+                    WHERE p.fact_kind = 'date' AND p.value_date = DATE '2026-07-15'
+                      AND p.raw_text = 'July 15, 2026'),
+        '109: parser must find the planted month-name date with its verbatim span';
+    ASSERT EXISTS (SELECT 1 FROM stewards.parse_facts_deterministic(v_body) p
+                    WHERE p.fact_kind = 'amount' AND p.value_numeric = 1234.56
+                      AND p.value_currency = 'USD' AND p.raw_text = '$1,234.56'),
+        '109: parser must find the planted $-amount typed to numeric';
+    ASSERT EXISTS (SELECT 1 FROM stewards.parse_facts_deterministic('due 7/4/2026') p
+                    WHERE p.fact_kind = 'date' AND p.value_date = DATE '2026-07-04'),
+        '109: parser must read US slash dates (m/d/yyyy)';
+    -- precision-over-recall inverses: no typed spans -> zero rows; an
+    -- invalid calendar date is DROPPED, not guessed
+    ASSERT (SELECT count(*) FROM stewards.parse_facts_deterministic('no typed spans here at all')) = 0,
+        '109: parser must return nothing for text with no typed spans (inverse)';
+    ASSERT (SELECT count(*) FROM stewards.parse_facts_deterministic('bogus 2026-13-40 date')) = 0,
+        '109: an invalid calendar date must be dropped, never guessed (precision floor)';
+
+    -- ── structural sections: addressable + fence-aware + idempotent ──
+    v_res := stewards.doc_split_sections(v_doc);
+    ASSERT (v_res->>'ok')::boolean AND (v_res->>'sections')::int = 4,
+        format('109: fixture must split into 4 sections (s1 title, s2 determination, s2.1 appeal, s3 contact; fenced decoy skipped), got %s', v_res);
+    ASSERT (SELECT ds.heading FROM stewards.doc_sections ds
+             WHERE ds.doc_id = v_doc AND ds.section_ref = 's2.1') = 'Appeal rights',
+        '109: the nested heading must land at the hierarchical address s2.1';
+    ASSERT (SELECT ds.level FROM stewards.doc_sections ds
+             WHERE ds.doc_id = v_doc AND ds.section_ref = 's2.1') = 2,
+        '109: s2.1 must carry level 2';
+    ASSERT (SELECT ds.body FROM stewards.doc_sections ds
+             WHERE ds.doc_id = v_doc AND ds.section_ref = 's2.1') LIKE '%appeal by July 15, 2026%',
+        '109: the section body must carry its own span text';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.doc_sections ds
+                        WHERE ds.doc_id = v_doc AND ds.heading LIKE '%not a heading%'),
+        '109: a fenced # line must NOT become a section (inverse)';
+    -- the char span is a REAL address into docs.body (0-based [start,end))
+    SELECT ds.char_start, ds.char_end INTO v_start, v_end
+      FROM stewards.doc_sections ds WHERE ds.doc_id = v_doc AND ds.section_ref = 's2.1';
+    ASSERT substring(v_body FROM v_start + 1 FOR v_end - v_start) LIKE '## Appeal rights%'
+       AND substring(v_body FROM v_start + 1 FOR v_end - v_start) LIKE '%$1,234.56%',
+        '109: [char_start,char_end) must slice docs.body to exactly the addressed section';
+    -- idempotency: a re-split rebuilds the same addresses, no duplicates
+    v_res := stewards.doc_split_sections(v_doc);
+    ASSERT (v_res->>'sections')::int = 4
+       AND (SELECT count(*) FROM stewards.doc_sections ds WHERE ds.doc_id = v_doc) = 4
+       AND EXISTS (SELECT 1 FROM stewards.doc_sections ds
+                    WHERE ds.doc_id = v_doc AND ds.section_ref = 's2.1'),
+        '109: doc_split_sections must be idempotent (delete+rebuild, same refs)';
+
+    -- ── doc_fact_add: the typed-value contract, both faces ──
+    v_res := stewards.doc_fact_add(jsonb_build_object(
+        'doc_slug', v_slug, 'fact_kind', 'deadline',
+        'raw_text', 'You must appeal by July 15, 2026',
+        'value_date', '2026-07-15', 'section_ref', 's2.1',
+        'confidence', 0.95, 'extracted_by', 'vs109'));
+    ASSERT (v_res->>'ok')::boolean, format('109: a typed deadline must insert, got %s', v_res);
+    v_res := stewards.doc_fact_add(jsonb_build_object(
+        'doc_slug', v_slug, 'fact_kind', 'date',
+        'raw_text', 'denied on 2026-06-01',
+        'value_date', '2026-06-01', 'section_ref', 's2', 'extracted_by', 'vs109'));
+    ASSERT (v_res->>'ok')::boolean, format('109: a typed date must insert, got %s', v_res);
+    -- mismatched kind rejected at the tool (readable error)...
+    v_res := stewards.doc_fact_add(jsonb_build_object(
+        'doc_slug', v_slug, 'fact_kind', 'amount',
+        'raw_text', 'the disputed amount', 'value_date', '2026-07-15'));
+    ASSERT NOT (v_res->>'ok')::boolean AND v_res->>'error' LIKE '%value_numeric%',
+        format('109: an amount without value_numeric must be refused by the tool, got %s', v_res);
+    -- ...and at the table (the CHECK is the enforcement, not the prompt)
+    BEGIN
+        INSERT INTO stewards.doc_facts (doc_id, fact_kind, raw_text)
+        VALUES (v_doc, 'deadline', 'a deadline with no date');
+        ASSERT false, '109: the typed-value CHECK must reject a deadline without value_date';
+    EXCEPTION WHEN check_violation THEN
+        NULL;  -- exactly right: Postgres holds the contract even when the tool is bypassed
+    END;
+    ASSERT (SELECT (stewards.doc_facts_list(jsonb_build_object('doc_slug', v_slug))->>'count')::int) = 2,
+        '109: doc_facts_list must see exactly the two typed facts';
+
+    -- ── evidence: missing documents as first-class rows ──
+    v_res := stewards.evidence_set(jsonb_build_object(
+        'scope_kind', 'project', 'scope_id', 'vs109-case',
+        'item', 'physician letter of medical necessity'));
+    ASSERT (v_res->>'ok')::boolean AND v_res->'evidence'->>'status' = 'missing',
+        format('109: a new expectation must be born missing, got %s', v_res);
+    v_res := stewards.evidence_set(jsonb_build_object(
+        'scope_kind', 'project', 'scope_id', 'vs109-case',
+        'item', 'denial letter', 'status', 'have', 'satisfied_by_doc_slug', v_slug));
+    ASSERT (v_res->>'ok')::boolean AND v_res->'evidence'->>'satisfied_by_doc_id' = v_doc,
+        format('109: have must resolve + record the satisfying doc, got %s', v_res);
+    v_res := stewards.evidence_checklist(jsonb_build_object(
+        'scope_kind', 'project', 'scope_id', 'vs109-case'));
+    ASSERT (v_res->'counts'->>'have')::int = 1 AND (v_res->'counts'->>'missing')::int = 1,
+        format('109: checklist counts must be 1 have / 1 missing, got %s', v_res->'counts');
+    v_md := v_res->>'markdown';
+    ASSERT position('- [ ] **MISSING** — physician letter of medical necessity' in v_md) > 0,
+        '109: the checklist render must lead with the gap';
+    ASSERT position('- [x] denial letter — satisfied by [' || v_slug || ']' in v_md) > 0,
+        '109: the checklist render must name the satisfying doc';
+    ASSERT position('MISSING' in v_md) < position('- [x]' in v_md),
+        '109: missing items must render BEFORE have items (the gap is the product)';
+    -- upsert (not a sibling row): flipping the gap to have updates in place
+    v_res := stewards.evidence_set(jsonb_build_object(
+        'scope_kind', 'project', 'scope_id', 'vs109-case',
+        'item', 'physician letter of medical necessity', 'status', 'have'));
+    ASSERT (SELECT count(*) FROM stewards.evidence_items e
+             WHERE e.scope_kind = 'project' AND e.scope_id = 'vs109-case') = 2,
+        '109: evidence_set must upsert per (scope,item), never duplicate';
+    ASSERT position('MISSING' in stewards.render_evidence_checklist('project', 'vs109-case')) = 0,
+        '109: after the flip the render must show no MISSING line (inverse)';
+
+    -- ── the fact timeline render: chronological, anchored, verbatim ──
+    v_md := stewards.render_fact_timeline('project', 'vs109-case');
+    ASSERT position('**2026-06-01**' in v_md) > 0 AND position('**2026-07-15** (DEADLINE)' in v_md) > 0,
+        format('109: the timeline must carry both dated facts, got %s', v_md);
+    ASSERT position('2026-06-01' in v_md) < position('2026-07-15' in v_md),
+        '109: the timeline must be chronological';
+    ASSERT position('[' || v_slug || '#s2.1]' in v_md) > 0,
+        '109: the timeline must anchor each fact to its doc + section address';
+    ASSERT position('"You must appeal by July 15, 2026"' in v_md) > 0,
+        '109: the timeline must quote the verbatim raw span';
+
+    -- ── the honesty patch: a failure must have a face, exactly one ──
+    -- (the alarm trigger is INITIALLY DEFERRED — it fires at COMMIT and
+    -- re-reads the row, so the ingest functions' transient
+    -- provenance-first error state never rings. SET CONSTRAINTS
+    -- IMMEDIATE fires the queued events NOW so this block can assert.)
+    INSERT INTO stewards.file_drops (path, sha256, status, error)
+    VALUES ('vs109-case/broken.pdf', 'vs109sha-one', 'error', 'vs109 boom one');
+    INSERT INTO stewards.file_drops (path, sha256, status, error)
+    VALUES ('vs109-case/broken.pdf', 'vs109sha-two', 'error', 'vs109 boom two');
+    SET CONSTRAINTS stewards.file_drops_error_alarm IMMEDIATE;
+    ASSERT (SELECT count(*) FROM stewards.hinge_reviews h
+             WHERE h.kind = 'file-drop-error'
+               AND h.payload->>'path' = 'vs109-case/broken.pdf') = 1,
+        '109: two errors on the same path must land EXACTLY ONE attention row (dedup)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.hinge_reviews h
+                    WHERE h.kind = 'file-drop-error'
+                      AND h.subject LIKE 'file drop failed: vs109-case/broken.pdf%boom%'),
+        '109: the face must name the path and the error';
+    ASSERT EXISTS (SELECT 1 FROM stewards.needs_attention na
+                    WHERE na.source_kind = 'hinge'
+                      AND na.title LIKE 'file drop failed: vs109-case/broken.pdf%'),
+        '109: the face must surface in needs_attention (the bell)';
+    -- the SUCCESSFUL fixture drop above wrote a transient error row in
+    -- its transaction — its queued event just fired too, and must NOT
+    -- have rung (the row ended the transaction ingested)
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.hinge_reviews h
+                        WHERE h.kind = 'file-drop-error'
+                          AND h.payload->>'path' = 'vs109-case/denial-letter.md'),
+        '109: a successful ingest''s transient provenance-first error state must NOT ring (inverse)';
+    -- inverse of the dedup: resolve the face, and a NEW error on the
+    -- same path rings again (one OPEN face per path, not one ever)
+    UPDATE stewards.hinge_reviews SET status = 'applied'
+     WHERE kind = 'file-drop-error' AND payload->>'path' = 'vs109-case/broken.pdf';
+    INSERT INTO stewards.file_drops (path, sha256, status, error)
+    VALUES ('vs109-case/broken.pdf', 'vs109sha-three', 'error', 'vs109 boom three');
+    ASSERT (SELECT count(*) FROM stewards.hinge_reviews h
+             WHERE h.kind = 'file-drop-error'
+               AND h.payload->>'path' = 'vs109-case/broken.pdf'
+               AND h.status = 'pending') = 1,
+        '109: a resolved face must not suppress the NEXT failure (dedup inverse)';
+
+    -- clean up
+    DELETE FROM stewards.hinge_reviews
+     WHERE kind = 'file-drop-error' AND payload->>'path' LIKE 'vs109-%';
+    DELETE FROM stewards.evidence_items WHERE scope_kind = 'project' AND scope_id = 'vs109-case';
+    DELETE FROM stewards.work_queue WHERE payload->>'target_id' = v_doc;
+    DELETE FROM stewards.docs WHERE id = v_doc;   -- cascades doc_facts + doc_sections
+    DELETE FROM stewards.file_drops WHERE path LIKE 'vs109-%';
+    DELETE FROM stewards.edges
+     WHERE src IN (SELECT n.id FROM stewards.nodes n WHERE n.kind = 'doc' AND n.ref = v_slug)
+        OR dst IN (SELECT n.id FROM stewards.nodes n WHERE n.kind = 'doc' AND n.ref = v_slug);
+    DELETE FROM stewards.nodes WHERE kind = 'doc' AND ref = v_slug;
+
+    RAISE NOTICE 'OK 109: normalize (v29) — the deterministic parser floor types planted ISO/month-name/slash dates + $-amounts with verbatim spans and DROPS what it cannot validate (precision over recall, inverse-proven on an invalid calendar date); doc_split_sections yields hierarchical addressable sections (s2.1) whose [char_start,char_end) really slices docs.body, skips fenced decoys, and rebuilds idempotently; the typed-value contract holds at the tool (readable refusal) AND the table (check_violation when bypassed); evidence expectations are born missing, upsert per (scope,item), and render gap-first; the fact timeline renders chronological, anchored, verbatim; and a file_drops failure gets EXACTLY ONE deduped face in needs_attention that a successful ingest''s transient error state never rings and a resolved face does not suppress (both inverses proven)';
+END
+$vs109$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v29 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize) is sound =='
