@@ -105,6 +105,22 @@ COPY 101-lab-dispatch.sql ./
 # `docker compose build` exit codes UNPIPED.
 COPY 102-war-game.sql ./
 
+# 103-abort-conditions.sql (WAR-GAME W2, 2026-07-05, decision #3): aborts[]
+# materialized into stewards.work_item_abort_conditions + the evaluator,
+# wired into steward_tick (32). Own continuation-free COPY line — 103-105
+# land in parallel on this branch (feat/lightening), each adding their own.
+COPY 103-abort-conditions.sql ./
+
+# 104-observations.sql (KNOWLEDGE ENGINE, feat/lightening): the observations
+# store — one small, sourced, confidence-labelled claim per row, counter-
+# evidence first-class via a self-FK. Own continuation-free COPY line, same
+# parallel-landing discipline as 100/101/102/103 above.
+COPY 104-observations.sql ./
+
+# 105-seams.sql (KNOWLEDGE ENGINE, feat/lightening): stewards.seams_report —
+# where two worlds (lenses) on the same territory diverge. Requires 104.
+COPY 105-seams.sql ./
+
 # 106-schedule-visibility.sql (feat/lightening: paused-tick log + staleness
 # alarm; 103-105 land in parallel on this branch and add their own lines).
 # This whole enumerated-COPY section is slated for a GENERATED manifest in

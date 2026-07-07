@@ -1127,6 +1127,55 @@ extension_sql_file!(
     name = "create_war_game",
     requires = ["create_lab_dispatch"],
 );
+// 103 — ABORT CONDITIONS (W2, #331, ratified 2026-07-05 decision #3,
+// .spec/proposals/war-game-pipeline.md): materializes war_game.aborts[] as
+// first-class rows in stewards.work_item_abort_conditions — a STRUCTURED
+// predicate (kind from a fixed evaluator vocabulary + params), never
+// model-authored SQL, same discipline as route_on's edge vocabulary. 103
+// RE-AUTHORS war_game_capture (102) to arm one row per aborts[] entry on
+// the release path (a mission work item, not the standalone war-game
+// item — nothing to execute there, nothing to abort). Adds
+// abort_conditions_evaluate(): checks every armed row on a non-terminal
+// work item mechanically (error_matches/repeat_failure/budget_fraction/
+// tool_unavailable; unknown kinds — e.g. D3C's invented
+// "metric_threshold" — coerce to 'other' at arming time and never
+// auto-trip). Wired into steward_tick's LAST author (32-alias-failover.sql)
+// via a to_regprocedure-guarded, exception-isolated call — see that file
+// for the surgical edit; forks still -> route_on, assumptions still ->
+// ask_up (their existing right homes).
+extension_sql_file!(
+    "../103-abort-conditions.sql",
+    name = "create_abort_conditions",
+    requires = ["create_war_game"],
+);
+// 104 — OBSERVATIONS STORE: the atomic unit of sourced, confidence-labelled
+// knowledge (stewards.observations: claim + confidence [is it reliable] +
+// fidelity [how lossy was the extraction — kept distinct on purpose] +
+// optional source_doc_id/source_ref/world_id/entity_id + counter_of [a
+// self-FK — counter-evidence is first-class, not a flag]). observation_add
+// /observation_search/observation_counter (jsonb-in/jsonb-out, *_tool
+// wrappers per the universal sql_fn convention verified live — every
+// sql_fn tool_defs row in this codebase points at a *_tool-suffixed
+// function, no exceptions) granted to research + work-item-chat.
+extension_sql_file!(
+    "../104-observations.sql",
+    name = "create_observations",
+    requires = ["create_abort_conditions"],
+);
+// 105 — SEAMS REPORT: stewards.seams_report(world_a, world_b) — where two
+// worlds (lenses) built over the same territory diverge: shared_divergent
+// (name/alias-matched entities across both, each with kind+summary+
+// same_kind), only_in_a/only_in_b (blind spots), edge_disagreements (a
+// relationship present between shared entities in one world but not the
+// other). v1 deterministic (normalized string match, no embedding
+// distance). seams_report_tool granted to work-item-chat (the ratified
+// ask) + research/loremaster (57/85's precedent: a read-only world-graph
+// tool granted to the families that already read that graph).
+extension_sql_file!(
+    "../105-seams.sql",
+    name = "create_seams",
+    requires = ["create_observations"],
+);
 // 106 — SCHEDULE VISIBILITY (#336, feat/lightening): re-authors
 // scheduled_pipelines_fire porting the LIVE body (22's autonomy_paused kill
 // switch, which 18's repo copy predates) + ONE LOG line per paused tick so a
@@ -1138,7 +1187,7 @@ extension_sql_file!(
 extension_sql_file!(
     "../106-schedule-visibility.sql",
     name = "create_schedule_visibility",
-    requires = ["create_war_game"],
+    requires = ["create_seams"], // re-chained onto the 103→104→105 tail after wave-1 landed
 );
 // 99 — ROUTER (raw-to-wiki, .spec/proposals/ingestion-crawler-and-raw-to-wiki.md
 // Part 2): route_intake(kind, ref, instruction) -> a route-intake work_item
