@@ -1,6 +1,12 @@
 # Files as Interface, DB as Engine — the lightening verdict
 
-**Status:** SYNTHESIS of the 2026-07-07 five-agent war-game panel (opposed mandates). Awaiting Michael's ratification.
+**Status:** ★ RATIFIED 2026-07-07 (Michael), with amendments:
+1. Four-layer ruling — **ratified as-is**.
+2. Core/pack list — **ratified with the loreworks inversion confirmed: "loreworks is the point, everything else supports it."** Worlds/seams are core; brainstorm-zoo, crawler, yt/frames, code-graph, TTRPG extras, lab → packs.
+3. **NEW FOUNDING PRINCIPLE — the substrate ships MODEL-AGNOSTIC:** *"default is no models, it's just a db that's lifeless. you give it models to bring it to life."* Core seeds NO providers and NO model defaults; the wizard is the front door for whatever a deployer has (a Claude Code license via loom, Vertex, Azure, AWS, raw keys, local). Any model preference is deployment config, never core schema. (Locally: lean sonnet-5/haiku-4.5/opus-4.8 via loom + opencode-go/local — that's an OVERLAY choice.)
+4. Observations store + seams report — **green-lit**.
+5. UI 29→~12 — **go**; post before/after and march; dev-menu hiding acceptable for marginal views.
+Build branch: `feat/lightening`.
 **Panel:** RIP (Fable, steelman the file-based pivot) · KEEP (Fable, defend the database — with receipts) · OPERATOR (Sonnet, walked all 24 routes) · PIONEER (Sonnet, prior-art sweep) · plus an enterprise war-gamer whose artifact lives outside this repo. Full briefs: `.spec/wargames/2026-07-07/`.
 **Prompted by:** the owner's honest weight report — "so many rough edges, poor UI still, broken paths, 102 sql files... painful updates between systems... helpful but heavy. Part of me just thinks I need to go file based."
 

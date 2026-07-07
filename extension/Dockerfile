@@ -105,6 +105,12 @@ COPY 101-lab-dispatch.sql ./
 # `docker compose build` exit codes UNPIPED.
 COPY 102-war-game.sql ./
 
+# 106-schedule-visibility.sql (feat/lightening: paused-tick log + staleness
+# alarm; 103-105 land in parallel on this branch and add their own lines).
+# This whole enumerated-COPY section is slated for a GENERATED manifest in
+# the consolidation pass — the forgetting-a-line failure class dies there.
+COPY 106-schedule-visibility.sql ./
+
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
 # with the directory tree rooted at /, containing the .so, .control,
 # and generated .sql under the standard pg_config paths.

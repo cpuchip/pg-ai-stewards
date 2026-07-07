@@ -1127,6 +1127,19 @@ extension_sql_file!(
     name = "create_war_game",
     requires = ["create_lab_dispatch"],
 );
+// 106 — SCHEDULE VISIBILITY (#336, feat/lightening): re-authors
+// scheduled_pipelines_fire porting the LIVE body (22's autonomy_paused kill
+// switch, which 18's repo copy predates) + ONE LOG line per paused tick so a
+// deliberate pause is never mistaken for a dead scheduler (it was, for 14
+// days) + per-row dispatch isolation + schedule_staleness_check(): an
+// enabled schedule past due by >2x its missed window with autonomy ON rings
+// the hinge bell (kind=schedule-stale, deduped). Numbered 106; 103-105 are
+// being authored in parallel on this branch and slot in before this line.
+extension_sql_file!(
+    "../106-schedule-visibility.sql",
+    name = "create_schedule_visibility",
+    requires = ["create_war_game"],
+);
 // 99 — ROUTER (raw-to-wiki, .spec/proposals/ingestion-crawler-and-raw-to-wiki.md
 // Part 2): route_intake(kind, ref, instruction) -> a route-intake work_item
 // (classify -> match, LLM) -> route_intake_disposition (deterministic: a
