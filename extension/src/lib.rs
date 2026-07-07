@@ -293,6 +293,19 @@ extension_sql_file!(
     requires = ["create_v29_normalize"],
 );
 
+// v31-steward-park.sql — NEW (#338): park tick-errored items out of the
+// steward retry lane. Re-authors steward_tick (previous full author:
+// v27/107) so a per-item exception — classically pick_model's "no
+// stage_models row" on an item with no routing config — parks the item
+// at awaiting_review (visible in the bell) instead of leaving the row
+// untouched to monopolize the LIMIT-10 lane every 30s tick (the
+// starvation churn found live 2026-07-07).
+extension_sql_file!(
+    "../v31-steward-park.sql",
+    name = "create_v31_steward_park",
+    requires = ["create_v30_workspaces"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

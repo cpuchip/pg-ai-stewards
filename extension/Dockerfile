@@ -87,6 +87,7 @@ COPY v27-lifeless-core.sql ./
 COPY v28-files-interface.sql ./
 COPY v29-normalize.sql ./
 COPY v30-workspaces.sql ./
+COPY v31-steward-park.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/

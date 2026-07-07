@@ -6074,4 +6074,75 @@ BEGIN
 END
 $vs110$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v30 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces) is sound =='
+-- =====================================================================
+-- v31 — steward tick-error park (#338: retry-lane starvation)
+-- =====================================================================
+DO $vs111$
+DECLARE
+    v_poison uuid;
+    v_intent uuid;
+    v_status text;
+    v_error  text;
+    v_logs   int;
+BEGIN
+    -- A deliberately unroutable failed item: a real pipelines row (FK)
+    -- but NO stage_models row, so pick_model() raises its P0001 — the
+    -- exact live churn shape (operator-era families whose routing rows
+    -- were lost in the OSS cut).
+    INSERT INTO stewards.pipelines (family, description, stages)
+    VALUES ('vs111-poison', 'virgin-smoke #338 fixture', '[{"name":"stuck"}]'::jsonb)
+    ON CONFLICT (family) DO NOTHING;
+
+    INSERT INTO stewards.intents (slug, purpose) VALUES ('default','virgin smoke')
+    ON CONFLICT (slug) DO NOTHING;
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug='default';
+
+    INSERT INTO stewards.work_items
+        (pipeline_family, current_stage, status, failure_count, last_failure_reason, intent_id)
+    VALUES
+        ('vs111-poison', 'stuck', 'failed', 0,
+         'vs111: deliberately unroutable (no stage_models row)', v_intent)
+    RETURNING id INTO v_poison;
+
+    -- tick 1: the item must PARK (visible), not silently churn
+    PERFORM stewards.steward_tick();
+    SELECT w.status, w.error INTO v_status, v_error
+      FROM stewards.work_items w WHERE w.id = v_poison;
+    ASSERT v_status = 'awaiting_review',
+        format('111: an unroutable failed item must park in awaiting_review, got %s', v_status);
+    ASSERT v_error LIKE '%vs111-poison/stuck%',
+        format('111: the park error must name the family/stage, got %s', v_error);
+    ASSERT EXISTS (SELECT 1 FROM stewards.steward_actions a
+                    WHERE a.work_item_id = v_poison AND a.action = 'tick_error'
+                      AND (a.details->>'parked_awaiting_review')::boolean),
+        '111: the tick_error account must record the park';
+
+    -- the park has a FACE: needs_attention's review bucket renders the
+    -- error as the question (v19 idiom — awaiting_review, no a2a_question)
+    ASSERT EXISTS (SELECT 1 FROM stewards.needs_attention n
+                    WHERE n.source_kind = 'review' AND n.work_item_id = v_poison
+                      AND n.question LIKE '%vs111-poison/stuck%'),
+        '111: the parked item must ring the bell with the readable error';
+
+    -- ticks 2+3: the lane is FREE — the anti-churn oracle. Before this
+    -- fix the same item was re-picked every tick (row untouched by the
+    -- savepoint rollback); now exactly ONE tick_error account exists.
+    PERFORM stewards.steward_tick();
+    PERFORM stewards.steward_tick();
+    SELECT count(*) INTO v_logs FROM stewards.steward_actions a
+     WHERE a.work_item_id = v_poison AND a.action = 'tick_error';
+    ASSERT v_logs = 1,
+        format('111: exactly one tick_error account expected, got %s (the churn is back)', v_logs);
+    ASSERT (SELECT w.status FROM stewards.work_items w WHERE w.id = v_poison) = 'awaiting_review',
+        '111: the parked item must STAY parked across subsequent ticks';
+
+    -- cleanup
+    DELETE FROM stewards.steward_actions WHERE work_item_id = v_poison;
+    DELETE FROM stewards.work_items WHERE id = v_poison;
+    DELETE FROM stewards.pipelines WHERE family = 'vs111-poison';
+
+    RAISE NOTICE 'OK 111: steward park (v31/#338) — an unroutable failed item (real pipeline, no stage_models row -> pick_model P0001) PARKS at awaiting_review on the first tick with a readable error naming the family/stage, the tick_error account records parked_awaiting_review, the parked item rings needs_attention''s review bucket, and two further ticks produce ZERO new tick_error accounts while the item stays parked — the LIMIT-10 retry lane is free (the starvation churn found live 2026-07-07 cannot recur)';
+END
+$vs111$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v31 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park) is sound =='
