@@ -53,6 +53,19 @@ const pickProvider = ref('')
 const pickModels = ref<string[]>([])
 const pickError = ref('')
 const pickBusy = ref(false)
+
+// --- inline probe verdict per model (keyed by model id) ---
+type ProbePhase = { phase: 'probing' | 'ok' | 'fail'; detail?: string }
+const probeState = ref<Record<string, ProbePhase>>({})
+
+// Manually name a model to probe — for providers whose /models can't be listed
+// with a static bearer (Vertex service-account) or that don't enumerate.
+const manualModel = ref('')
+function addManualModel() {
+  const m = manualModel.value.trim()
+  if (m && !pickModels.value.includes(m)) pickModels.value = [...pickModels.value, m]
+  manualModel.value = ''
+}
 const priceIn = ref<Record<string, string>>({})   // model -> $/Mtok input
 const priceOut = ref<Record<string, string>>({})
 const assignBusy = ref('')
@@ -166,6 +179,17 @@ async function save() {
       pickModels.value = resp.models ?? []
       prefillKnownPrices(prov, pickModels.value)
       secret.value = ''
+    } else if (resp.sa_key) {
+      // A Google service-account key: stored & encrypted, but a bearer GET
+      // /models can't verify it (only the dispatcher mints the token). Show it
+      // as stored + dispatcher-usable, and point at probe / test-chat.
+      saveOk.value = 'service-account stored & encrypted' +
+        (resp.pg_decrypt === 'ok' ? ' · dispatcher can decrypt ✓' : (resp.pg_decrypt ? ` · ⚠ pg: ${resp.pg_decrypt}` : '')) +
+        (resp.provider_live ? ' · provider live' : '') +
+        ' — enter a model below and hit “probe”, or use Test chat, to confirm it answers'
+      pickProvider.value = prov
+      pickModels.value = resp.models ?? []
+      secret.value = ''
     } else {
       saveError.value = resp.verify_error || 'verification failed'
       if (resp.stored) saveError.value += ' (the key WAS stored — fix and re-save, or delete it below)'
@@ -248,11 +272,30 @@ function kindOf(prov: string): string {
 
 async function probe(prov: string, model: string) {
   pickError.value = ''
+  probeState.value = { ...probeState.value, [model]: { phase: 'probing' } }
   try {
     const r = await api.modelProbe({ provider: prov, model })
-    saveOk.value = `real-path probe enqueued (work_queue #${r.work_queue_id}) — the verdict lands in the catalog below`
+    // Poll the verdict inline (the terminal-transition trigger writes it into
+    // model_capability the moment the probe row lands done/error) so the ✓/✗
+    // shows right here, not down in the catalog.
+    const deadline = Date.now() + 90_000
+    while (Date.now() < deadline) {
+      await new Promise(res => setTimeout(res, 1200))
+      const s = await api.probeStatus(prov, model, r.work_queue_id)
+      if (s.done) {
+        const ok = s.usable === true
+        probeState.value = {
+          ...probeState.value,
+          [model]: { phase: ok ? 'ok' : 'fail', detail: s.probe_detail || s.queue_error || '' },
+        }
+        await load() // keep the catalog row below in sync too
+        return
+      }
+    }
+    probeState.value = { ...probeState.value, [model]: { phase: 'fail', detail: 'probe timed out (90s)' } }
   } catch (e) {
     pickError.value = String(e)
+    probeState.value = { ...probeState.value, [model]: { phase: 'fail', detail: String(e) } }
   }
 }
 
@@ -393,6 +436,12 @@ onMounted(load)
       <h3>Models on <code>{{ pickProvider }}</code>
         <span v-if="pickBusy" class="dim"> — loading…</span>
       </h3>
+      <!-- name a model to probe when /models can't be listed (Vertex SA keys) -->
+      <div class="add-model">
+        <input v-model="manualModel" placeholder="model id (e.g. google/gemini-3.1-pro-preview)"
+               @keydown.enter.prevent="addManualModel" />
+        <button class="btn" type="button" :disabled="!manualModel.trim()" @click="addManualModel">+ add model</button>
+      </div>
       <div v-if="pickError" class="wiz-error">{{ pickError }}</div>
       <table v-if="pickModels.length" class="pick-table">
         <thead>
@@ -417,8 +466,17 @@ onMounted(load)
               <input v-model="priceIn[m]" placeholder="in" title="input $/Mtok (applied when a role is assigned)" />
               <input v-model="priceOut[m]" placeholder="out" title="output $/Mtok (applied when a role is assigned)" />
             </td>
-            <td>
-              <button class="btn" title="real-path streaming probe through the actual dispatcher" @click="probe(pickProvider, m)">probe</button>
+            <td class="probe-cell">
+              <button class="btn"
+                      title="real-path streaming probe through the actual dispatcher"
+                      :disabled="probeState[m]?.phase === 'probing'"
+                      @click="probe(pickProvider, m)">
+                {{ probeState[m]?.phase === 'probing' ? 'probing…' : 'probe' }}
+              </button>
+              <span v-if="probeState[m]?.phase === 'ok'" class="probe-chip ok"
+                    :title="probeState[m]?.detail || 'model answered the real-path probe'">✓ usable</span>
+              <span v-else-if="probeState[m]?.phase === 'fail'" class="probe-chip fail"
+                    :title="probeState[m]?.detail || 'probe failed'">✗ {{ probeState[m]?.detail ? 'failed' : 'unusable' }}</span>
             </td>
           </tr>
         </tbody>
@@ -535,4 +593,29 @@ onMounted(load)
   color: inherit;
   font-size: 0.85rem;
 }
+.add-model {
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.4rem 0 0.8rem;
+}
+.add-model input {
+  flex: 1;
+  max-width: 420px;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border, #444);
+  border-radius: 4px;
+  background: var(--surface, #1a1a1a);
+  color: inherit;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85rem;
+}
+.probe-cell { white-space: nowrap; }
+.probe-chip {
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: help;
+}
+.probe-chip.ok { color: #2ecc71; }
+.probe-chip.fail { color: #ff6b5b; }
 </style>

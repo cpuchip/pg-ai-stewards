@@ -283,6 +283,29 @@ type credentialSaveResp struct {
 	Models       []string `json:"models,omitempty"`
 	PgDecrypt    string   `json:"pg_decrypt,omitempty"`    // 'ok' = the pg dispatcher can use this key
 	ProviderLive bool     `json:"provider_live"`           // present in providers_loaded()
+	SAKey        bool     `json:"sa_key,omitempty"`        // stored secret is a Google service-account JSON (verified by probing, not a bearer test)
+}
+
+// looksLikeServiceAccountJSON reports whether secret is a Google service-account
+// key JSON — the shape the Rust dispatcher (gcp_sa) exchanges for an OAuth token.
+// Mirrors extension gcp_sa::is_service_account_json: requires the three fields
+// the mint uses. Such a key CANNOT be verified by a static-bearer GET /models
+// (only the dispatcher mints the token), so test-on-save skips the bearer probe
+// for it and points the operator at the model probe / test-chat instead.
+func looksLikeServiceAccountJSON(secret string) bool {
+	s := strings.TrimSpace(secret)
+	if s == "" || s[0] != '{' {
+		return false
+	}
+	var sa struct {
+		ClientEmail string `json:"client_email"`
+		PrivateKey  string `json:"private_key"`
+		TokenURI    string `json:"token_uri"`
+	}
+	if json.Unmarshal([]byte(s), &sa) != nil {
+		return false
+	}
+	return sa.ClientEmail != "" && sa.PrivateKey != "" && sa.TokenURI != ""
 }
 
 func (d *Deps) credentialSaveHandler(w http.ResponseWriter, r *http.Request) {
@@ -396,15 +419,25 @@ func (d *Deps) credentialSaveHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := credentialSaveResp{Stored: stored}
 
-	// TEST-ON-SAVE — the live read-only probe.
-	models, probeErr := probeProviderModels(ctx, baseURL, kind, probeKey)
-	if probeErr != nil {
-		resp.VerifyError = probeErr.Error()
+	// TEST-ON-SAVE — the live read-only probe. A Google service-account key is
+	// the exception: it's not a static bearer, it must be exchanged for an OAuth
+	// token, which only the Rust dispatcher does (gcp_sa). Sending the JSON as a
+	// bearer would spuriously "fail" a perfectly good key — so for an SA JSON we
+	// skip the bearer probe and let the operator confirm via the model probe /
+	// test-chat, both of which run through the dispatcher that DOES mint.
+	if looksLikeServiceAccountJSON(probeKey) {
+		resp.SAKey = true
+		resp.VerifyError = "service-account key stored & encrypted — verify by probing a model or using test-chat (the dispatcher mints the OAuth token; a static-key test doesn't apply)"
 	} else {
-		resp.Verified = true
-		resp.Models = models
-		if stored {
-			_, _ = d.Pool.Exec(ctx, `SELECT stewards.credential_mark_verified($1)`, credName)
+		models, probeErr := probeProviderModels(ctx, baseURL, kind, probeKey)
+		if probeErr != nil {
+			resp.VerifyError = probeErr.Error()
+		} else {
+			resp.Verified = true
+			resp.Models = models
+			if stored {
+				_, _ = d.Pool.Exec(ctx, `SELECT stewards.credential_mark_verified($1)`, credName)
+			}
 		}
 	}
 

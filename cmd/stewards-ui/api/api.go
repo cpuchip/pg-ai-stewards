@@ -48,6 +48,7 @@ func Register(mux *http.ServeMux, deps *Deps) {
 	deps.registerScheduled(mux)
 	deps.registerBrainstorm(mux)
 	deps.registerModels(mux)
+	deps.registerModelTestChat(mux) // Models page: raw send/receive test-chat (no tools/skills)
 	deps.registerRig(mux)
 	deps.registerActivity(mux)
 	deps.registerObjects(mux)

@@ -10,12 +10,83 @@ package api
 import (
 	"context"
 	"net/http"
+	"strconv"
 	"time"
 )
 
 func (d *Deps) registerModels(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/models", d.modelsHandler)
-	mux.HandleFunc("GET /api/models/aliases", d.modelAliasesHandler) // role aliases → provider/model members
+	mux.HandleFunc("GET /api/models/aliases", d.modelAliasesHandler)   // role aliases → provider/model members
+	mux.HandleFunc("GET /api/models/probe-status", d.probeStatusHandler) // inline probe verdict (poll after /api/models/probe)
+}
+
+type probeStatusResp struct {
+	QueueStatus  string  `json:"queue_status"`            // work_queue status: pending|in_progress|waiting_for_tools|done|error ("" if no id given)
+	QueueError   string  `json:"queue_error,omitempty"`   // dispatch error when the probe row failed
+	Usable       *bool   `json:"usable,omitempty"`        // model_capability verdict (nil = never probed)
+	ProbeDetail  string  `json:"probe_detail,omitempty"`  // the verdict note or error
+	ProbedVia    string  `json:"probed_via,omitempty"`    // seed | manual | auto-probe
+	LastProbedAt *string `json:"last_probed_at,omitempty"`
+	Done         bool    `json:"done"` // queue row reached a terminal state — stop polling
+}
+
+// GET /api/models/probe-status?provider=&model=&work_queue_id=
+// The read side of the probe button: the queue row's live status (so the UI can
+// show "probing…") plus the model_capability verdict the terminal-transition
+// trigger writes on done/error (so the UI can show ✓ usable / ✗ with the
+// reason) — inline, no hunting for the catalog row below.
+func (d *Deps) probeStatusHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	provider := r.URL.Query().Get("provider")
+	model := r.URL.Query().Get("model")
+	if provider == "" || model == "" {
+		writeErr(w, http.StatusBadRequest, "provider and model are required")
+		return
+	}
+	workID, _ := strconv.ParseInt(r.URL.Query().Get("work_queue_id"), 10, 64)
+
+	resp := probeStatusResp{}
+
+	if workID > 0 {
+		var status string
+		var qErr *string
+		if err := d.Pool.QueryRow(ctx,
+			`SELECT status, error FROM stewards.work_queue WHERE id = $1`,
+			workID).Scan(&status, &qErr); err == nil {
+			resp.QueueStatus = status
+			if qErr != nil {
+				resp.QueueError = *qErr
+			}
+			resp.Done = status == "done" || status == "error"
+		}
+	}
+
+	// The verdict the probe records (usable + detail). Absent until the first
+	// probe of this (provider, model) lands.
+	var usable *bool
+	var detail, via *string
+	var lastProbed *time.Time
+	if err := d.Pool.QueryRow(ctx,
+		`SELECT usable, probe_detail, probed_via, last_probed_at
+		   FROM stewards.model_capability
+		  WHERE provider = $1 AND model = $2`,
+		provider, model).Scan(&usable, &detail, &via, &lastProbed); err == nil {
+		resp.Usable = usable
+		if detail != nil {
+			resp.ProbeDetail = *detail
+		}
+		if via != nil {
+			resp.ProbedVia = *via
+		}
+		if lastProbed != nil {
+			s := lastProbed.UTC().Format(time.RFC3339)
+			resp.LastProbedAt = &s
+		}
+	}
+
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type aliasRow struct {

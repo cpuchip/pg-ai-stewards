@@ -743,6 +743,21 @@ export const api = {
     postJSON<{ deleted: boolean }>('/api/models/aliases/delete', req),
   modelProbe: (req: { provider: string; model: string }) =>
     postJSON<{ work_queue_id: number }>('/api/models/probe', req),
+  // Inline probe verdict — poll after modelProbe() so the ✓/✗ shows next to the
+  // model instead of down in the catalog.
+  probeStatus: (provider: string, model: string, workQueueId: number) =>
+    getJSON<ProbeStatusResp>(
+      `/api/models/probe-status?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}&work_queue_id=${workQueueId}`),
+
+  // Raw model test-chat (Models page): a bare send/receive to confirm a model
+  // answers — no tools, no skills, no agent loop. modelTestChatSend appends a
+  // user turn + enqueues a raw completion; the reply is read back via
+  // modelTestChatPoll (tails stewards.messages by session).
+  modelTestChatSend: (req: { provider: string; model: string; session_id?: string; prompt: string; system?: string }) =>
+    postJSON<TestChatSendResp>('/api/models/test-chat/send', req),
+  modelTestChatPoll: (sessionId: string, since: number, workQueueId: number) =>
+    getJSON<TestChatPollResp>(
+      `/api/models/test-chat/poll?session_id=${encodeURIComponent(sessionId)}&since=${since}&work_queue_id=${workQueueId}`),
 
   // 95 model-role toggles: per-member enable/disable + priority reorder + the
   // "rest all local models" bulk switch (+ its inverse) — click, not SQL.
@@ -848,6 +863,36 @@ export type ModelsListResp = {
   total: number
 }
 
+// Inline probe status (Phase 4): the queue row's live status + the recorded
+// model_capability verdict.
+export type ProbeStatusResp = {
+  queue_status: string
+  queue_error?: string
+  usable?: boolean
+  probe_detail?: string
+  probed_via?: string
+  last_probed_at?: string
+  done: boolean
+}
+
+// Raw test-chat (Phase 5).
+export type TestChatSendResp = {
+  session_id: string
+  work_queue_id: number
+  user_message_id: number
+}
+export type TestChatMsg = {
+  id: number
+  role: string
+  content: string
+}
+export type TestChatPollResp = {
+  status: string
+  error?: string
+  messages: TestChatMsg[]
+  done: boolean
+}
+
 export type AliasRow = {
   alias: string
   provider: string
@@ -898,6 +943,7 @@ export type CredentialSaveResp = {
   models?: string[]
   pg_decrypt?: string
   provider_live: boolean
+  sa_key?: boolean // stored secret is a Google service-account JSON (verified by probing, not a bearer test)
 }
 
 export type BrainstormLensRow = {
