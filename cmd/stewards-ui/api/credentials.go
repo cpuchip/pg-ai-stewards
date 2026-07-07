@@ -185,6 +185,74 @@ func probeProviderModels(ctx context.Context, baseURL, kind, apiKey string) ([]s
 	return ids, nil
 }
 
+// fetchModelList GETs a provider-declared model-list URL (OpenAI /models shape
+// or a bare array) and returns the ids, each given modelPrefix when it lacks it.
+// A provider whose own endpoint can't enumerate (Vertex's OpenAI-compat surface
+// isn't a catalog) can declare provider.<name>.model_list_url so the wizard
+// still lists live — generic, nothing provider-specific here. Unauthenticated:
+// the declared endpoint is expected to handle its own auth (e.g. a local proxy
+// that already holds the service-account).
+func fetchModelList(ctx context.Context, listURL, modelPrefix string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, listURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := probeClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		snippet := strings.TrimSpace(string(body))
+		if len(snippet) > 300 {
+			snippet = snippet[:300] + "…"
+		}
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, snippet)
+	}
+	var wrapped struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	var ids []string
+	if err := json.Unmarshal(body, &wrapped); err == nil && len(wrapped.Data) > 0 {
+		for _, m := range wrapped.Data {
+			if m.ID != "" {
+				ids = append(ids, m.ID)
+			}
+		}
+	} else {
+		var bare []struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(body, &bare); err == nil {
+			for _, m := range bare {
+				if m.ID != "" {
+					ids = append(ids, m.ID)
+				}
+			}
+		}
+	}
+	if modelPrefix != "" {
+		for i, id := range ids {
+			if !strings.HasPrefix(id, modelPrefix) {
+				ids[i] = modelPrefix + id
+			}
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// providerConfigStr reads one provider.<name>.<field> config value (empty if unset).
+func (d *Deps) providerConfigStr(ctx context.Context, provider, field string) string {
+	var v string
+	_ = d.Pool.QueryRow(ctx, `SELECT value #>> '{}' FROM stewards.config WHERE key = $1`,
+		"provider."+provider+"."+field).Scan(&v)
+	return v
+}
+
 // ---------------------------------------------------------------------------
 // GET /api/credentials — wizard state: DB providers + is_set booleans +
 // budgets + the honest pg-side decrypt check. Never the key.
@@ -482,6 +550,19 @@ func (d *Deps) credentialModelsHandler(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if !providerNameRe.MatchString(name) {
 		writeErr(w, http.StatusBadRequest, "bad credential name")
+		return
+	}
+	// A provider may declare where to enumerate its models (for endpoints that
+	// aren't a /models catalog — e.g. Vertex, via a proxy that live-lists). If
+	// set, that wins: list from there with an optional id prefix. Generic — no
+	// provider-specific code.
+	if listURL := d.providerConfigStr(ctx, name, "model_list_url"); listURL != "" {
+		models, err := fetchModelList(ctx, listURL, d.providerConfigStr(ctx, name, "model_prefix"))
+		if err != nil {
+			writeErr(w, http.StatusBadGateway, "model_list_url ("+listURL+"): "+err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": models, "source": "model_list_url"})
 		return
 	}
 	var baseURL, kind string
