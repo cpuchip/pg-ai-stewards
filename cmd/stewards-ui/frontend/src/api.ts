@@ -433,6 +433,10 @@ export const api = {
   // docs.work_item_id provenance link (not the stage-prose text-scrape).
   workItemProducedDocs: (id: string) =>
     getJSON<ProducedDocsResp>(`/api/work-items/produced-docs?id=${encodeURIComponent(id)}`),
+  // The Receipt (war-game 2026-07-07 finding #2): what was read / what
+  // changed / what needs you — the reviewer's one-glance aggregate.
+  workItemReceipt: (id: string) =>
+    getJSON<WorkItemReceipt>(`/api/work-items/receipt?id=${encodeURIComponent(id)}`),
   pipelinesList: () => getJSON<PipelinesListResp>('/api/pipelines/list'),
   // Stewdio P2: a pipeline's ordered stages (the "plan" for plan=progress).
   pipelineGet: (family: string) =>
@@ -2063,4 +2067,93 @@ export const searchApi = {
 export const wikiApi = {
   list: () => getJSON<WikiListResp>('/api/wiki/list'),
   add: (req: WikiAddReq) => postJSON<WikiAddResp>('/api/wiki/add', req),
+}
+
+// =====================================================================
+// Intake — the stewards.file_drops read surface (v28's drop ledger).
+// Until this existed the ledger had no UI face: a failed binary drop
+// (doc-extract overlay absent) landed as status='error' in a table only
+// psql could see. Backs Library → Intake + the Dashboard intake chip.
+// =====================================================================
+export type FileDropRow = {
+  id: number
+  path: string
+  project_hint?: string
+  // 'doc:<id> slug:<slug>' | 'corpus:<name> attachment:<id>' — parse the
+  // slug: token for the doc link.
+  routed_to?: string
+  status: 'ingested' | 'skipped_unchanged' | 'error'
+  error?: string
+  size_bytes: number
+  first_seen_at?: string
+  ingested_at?: string
+}
+export type IntakeDropsResp = {
+  items: FileDropRow[]
+  total: number
+  error_count: number
+}
+export type IntakeSummaryResp = {
+  drops_today: number
+  error_count: number
+  total: number
+  last_drop_at?: string
+}
+
+export const intakeApi = {
+  drops: (params?: { status?: string; limit?: number; offset?: number }) => {
+    const q = new URLSearchParams()
+    if (params?.status) q.set('status', params.status)
+    if (params?.limit) q.set('limit', String(params.limit))
+    if (params?.offset) q.set('offset', String(params.offset))
+    const qs = q.toString()
+    return getJSON<IntakeDropsResp>(`/api/intake/drops${qs ? '?' + qs : ''}`)
+  },
+  summary: () => getJSON<IntakeSummaryResp>('/api/intake/summary', { timeoutMs: 5000 }),
+}
+
+// =====================================================================
+// The Receipt (GET /api/work-items/receipt) — reviewer-shaped aggregate:
+// what was read / what changed / what needs you. notes[] carries the
+// ledger-fidelity honesty labels ("sessions recorded no tool calls", …).
+// =====================================================================
+export type ReceiptDocRead = { slug: string; times: number }
+export type ReceiptSearch = { query: string; times: number }
+export type ReceiptURL = { url: string; times: number }
+export type ReceiptToolTally = { tool: string; count: number }
+export type ReceiptCitation = { doc_slug: string; ref: string; count: number }
+export type ReceiptChangedDoc = {
+  slug: string
+  title?: string
+  kind?: string
+  verb: 'created' | 'updated'
+  at?: string
+}
+export type ReceiptNeed = {
+  kind: string
+  id: string
+  title: string
+  question?: string
+  created_at?: string
+}
+export type WorkItemReceipt = {
+  work_item_id: string
+  slug: string
+  status: string
+  read: {
+    session_count: number
+    tool_call_count: number
+    docs_opened: ReceiptDocRead[]
+    searches_run: ReceiptSearch[]
+    urls_fetched: ReceiptURL[]
+    other_tools: ReceiptToolTally[]
+    cited_by_outputs: ReceiptCitation[]
+  }
+  changed: {
+    docs: ReceiptChangedDoc[]
+    file_destination?: string
+    file_enqueued_at?: string
+  }
+  needs_you: ReceiptNeed[]
+  notes?: string[]
 }

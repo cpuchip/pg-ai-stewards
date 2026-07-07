@@ -34,3 +34,5 @@ COPY v25-war-game.sql ./
 COPY v26-knowledge.sql ./
 COPY v27-lifeless-core.sql ./
 COPY v28-files-interface.sql ./
+COPY v29-normalize.sql ./
+COPY v30-workspaces.sql ./

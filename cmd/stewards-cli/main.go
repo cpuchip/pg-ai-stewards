@@ -73,6 +73,8 @@ func main() {
 		runUpdate(ctx, os.Args[2:])
 	case "project":
 		runProject(ctx, os.Args[2:])
+	case "workspace":
+		runWorkspace(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -234,6 +236,17 @@ Commands:
       the BRIDGE's projector — which owns the mounted knowledge directory —
       writes the tree. --pending previews what the next pass will
       project/delete without firing it.
+
+  workspace create <name> --scope <kind>:<ref> [--for-loom] [--created-by X] [--wait N]
+  workspace list
+      v30 db-projected workspace: register a WRITABLE projection of one
+      scope (project:<name> | wiki:<slug> | world:<slug> | doc-kind:<kind>)
+      into knowledge/_workspaces/<name>, force a projection pass, and print
+      the absolute host directory. Edits saved there land as canonical rows
+      within one 30s poll — sha-guarded (a concurrently-changed row parks a
+      conflict in needs_attention instead of being clobbered), provenance-
+      stamped. --for-loom prints a ready-to-run "loom run --workdir <dir>"
+      line: a Claude Code seat authoring inside the database.
 
 Environment:
   STEWARDS_DSN    Postgres DSN (default: postgres://stewards:stewards@localhost:5432/stewards?sslmode=disable)

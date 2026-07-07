@@ -89,7 +89,10 @@ One engine, the full arc:
 **Stewdio** (`/stewdio`) is the cockpit — a dark, three-pane studio: browse a
 world's sources on the left, read and build artifacts in the center, chat grounded
 in the corpus on the right. Drag in a PDF, Office doc, or zipped folder and it
-becomes safe, searchable subject material. Ask for a document and watch a pipeline
+becomes safe, searchable subject material — binary extraction requires the opt-in
+doc-extract overlay (`docker-compose.doc-extract.yaml`); without it the bytes are
+preserved and the drop is flagged as an error in Intake, never silently dropped.
+Plain markdown/text needs no overlay at all. Ask for a document and watch a pipeline
 walk plan → build → deliver in the conversation. Everyday surface stays clean; the
 power and ops depth tuck behind a developer view.
 
@@ -129,6 +132,7 @@ public, generalized substrate. The interfaces still move; the engine is solid. O
 | [Personas + ai-chattermax](docs/personas-and-chattermax.md) | Put a durable-mind persona in a live room; the D&D holodeck as a tool-using example. |
 | [Rich documents in chat](docs/rich-documents.md) | Attach a PDF / Office doc / zipped folder and reason over it — the hardened no-network doc-extract sandbox. |
 | [The files interface](docs/files-interface.md) | Drop files into `./drop/` to ingest (provenance-stamped, freshness-aware); read the substrate's prose back as a greppable `./knowledge/` markdown tree. |
+| [DB-projected workspaces](docs/files-interface.md) | `stewards-cli workspace create --for-loom` projects one scope as a WRITABLE directory — open it in Claude Code (via loom) or any editor and saves land as canonical rows, sha-guarded, provenance-stamped. |
 | [Loreworks](docs/loreworks.md) | Build, explore, and inhabit a *world* from source lore — entities, a typed edge-graph, and hybrid (lexical + semantic) lore search. |
 | [Operations](docs/operations.md) | The upgrade / migrate / verify runbook — code-in-image, data-in-volume, config-is-code. |
 | [Delegation limits](docs/delegation-limits.md) | How far an agent may spawn sub-agents (depth / width / grants), and how to raise the bounds as models improve. |

@@ -16,6 +16,9 @@ func (d *Deps) registerWorkItems(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/work-items/actions", d.workItemsActionsHandler)
 	mux.HandleFunc("GET /api/work-items/gate-decisions", d.workItemsGateDecisionsHandler)
 	mux.HandleFunc("GET /api/work-items/produced-docs", d.workItemsProducedDocsHandler)
+	// The Receipt (war-game 2026-07-07 finding #2): the reviewer-shaped
+	// what-was-read / what-changed / what-needs-you aggregate. receipt.go.
+	mux.HandleFunc("GET /api/work-items/receipt", d.workItemsReceiptHandler)
 	mux.HandleFunc("POST /api/work-items/set-file-destination", d.workItemsSetFileDestinationHandler)
 	mux.HandleFunc("POST /api/work-items/materialize-file", d.workItemsMaterializeFileHandler)
 	// H.3-followup: agent_planning proposal actions

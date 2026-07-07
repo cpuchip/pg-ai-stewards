@@ -33,7 +33,7 @@ const routes: RouteRecordRaw[] = [
   // so an unknown tab (e.g. /library/bogus) still falls through to NotFound
   // instead of silently rendering a default. No :tab = the view's default
   // (Library→Studies, Ledger→Watchman per merge map, Steering→Intents).
-  { path: '/library/:tab(studies|lessons|search)?', name: 'library', component: Library, props: true, meta: { title: 'Library' } },
+  { path: '/library/:tab(studies|lessons|search|intake)?', name: 'library', component: Library, props: true, meta: { title: 'Library' } },
   { path: '/ledger/:tab(covenant|watchman|bridge|trust|councils|sabbath)?', name: 'ledger', component: Ledger, props: true, meta: { title: 'Ledger' } },
   { path: '/steering/:tab(intents|projects|scheduled)?', name: 'steering', component: Steering, props: true, meta: { title: 'Steering' } },
 

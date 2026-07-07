@@ -29,11 +29,23 @@ Routing rules:
 | PDF / Office / zip / images / anything else | `stewards.file_drop_ingest_binary` → a durable `chat_attachments` row + the existing doc-extract `doc_import_corpus` path (**requires the `docker-compose.doc-extract.yaml` overlay**; without it the ledger records the failure honestly and the bytes stay safe in the attachment) |
 | Dotfiles, `.git/`, `Thumbs.db`, `~$*`, `*.tmp`… | Skipped |
 
+**Binary drops need the doc-extract overlay — plainly.** PDF / Office / zip /
+image extraction runs in the sandboxed doc-extract container, which the base
+`docker compose up` does **not** start. Build the converter image once, then
+bring the stack up with both files (see `docker-compose.doc-extract.yaml`'s
+header for the two commands). Without the overlay a binary drop is
+**preserved but not extracted**: the bytes stay safe in `chat_attachments`,
+and the drop is flagged as an error in Intake and in the attention bell —
+the failure stays loud rather than the capability going dark. Plain
+markdown/text drops need no overlay and no models at all.
+
 **Freshness:** every drop is sha256'd into the `stewards.file_drops` ledger.
 Re-drop the same content → skipped silently. Re-drop *changed* content → the
 same doc is re-ingested and the prior revision is archived in
 `stewards.doc_versions` (the substrate's normal update idiom). Errors land as
-`status='error'` rows with the reason — check `SELECT * FROM
+`status='error'` rows with the reason — and every error rings the attention
+bell (a deduped `needs_attention` row per path, `kind=file-drop-error`, v29):
+a failed drop always has a face. The full ledger: `SELECT * FROM
 stewards.file_drops ORDER BY first_seen_at DESC`.
 
 ## Data out: the knowledge tree (`./knowledge` ← `/knowledge`)
@@ -65,6 +77,54 @@ stewards-cli project --pending  # preview what the next pass will do
 projector commits each changed pass (`projection: <n> changed`) — history of
 your substrate's prose for nothing.
 
-**One-way (v1):** edits inside `knowledge/` are never read back. The drop
-directory is the write path — copy the file into `drop/` (or just author it
-there) and the freshness ledger does the rest.
+**One-way by default:** edits inside `knowledge/` at large are never read
+back. The drop directory is the general write path — copy the file into
+`drop/` (or just author it there) and the freshness ledger does the rest.
+The one registered exception is below.
+
+## Both directions: db-projected workspaces (`knowledge/_workspaces/`)
+
+> v30 (`extension/v30-workspaces.sql` + the bridge's `workspacewatcher.go`
+> and the workspace pass in `projector.go`). The ratified direction
+> (.spec/proposals/db-projected-workspace.md): *"spin up claude code in a
+> db projected file system, where the updates land live in the db."*
+
+A **workspace** is an opt-in, per-scope *writable* projection: one scope of
+the database (a project, a wiki, a world's canon corpus, a doc kind)
+projected into its own directory, with write-back armed. Open the directory
+in any harness — Claude Code via loom, a plain editor, a remote seat — and
+saves land as canonical rows within one 30-second poll.
+
+```sh
+stewards-cli workspace create my-case --scope project:my-case --for-loom
+#   -> prints the absolute host dir + a ready-to-run:
+#      loom run --workdir <knowledge>/_workspaces/my-case
+stewards-cli workspace list
+```
+
+The contract:
+
+- **Opt-in per workspace, never global** — only dirs registered in
+  `stewards.knowledge_workspaces` are ever read back (the wall).
+- **Never silent clobber** — a sha triple (projected / file / row) decides
+  transactionally in SQL. File changed + row unchanged → the file wins
+  (it is the authoring surface): the row updates through the normal
+  revision idiom (prior version archived in `doc_versions` /
+  `wiki_page_revisions`). BOTH changed → the file's version parks in
+  `stewards.workspace_conflicts`, ONE deduped item lands in
+  `needs_attention`, the row is untouched, and the path freezes both
+  directions until you resolve:
+  `SELECT stewards.workspace_conflict_resolve(<id>, 'row-wins'|'file-wins'|'dismiss');`
+- **Provenance on every write-back** — `doc_versions.changed_by =
+  workspace:<name>:<actor>`, a `workspace_writeback` frontmatter stamp on
+  the doc, `last_writeback_at` on the registry row.
+- **New files become new rows in the scope** — a file with no frontmatter
+  identity creates a doc (or wiki page) inside the workspace's scope; the
+  projector then rewrites the file with identity frontmatter. A file
+  claiming a row *outside* the scope is a conflict, never a write.
+- **Live = one poll** — 30s file→row (the watcher), ~1s row→file after any
+  write-back or `workspace_create` (NOTIFY-driven re-projection).
+
+Deleting a *file* in a workspace is not a signal (rows are canonical; the
+file returns on the next row change). Delete rows DB-side and the projector
+removes the file.
