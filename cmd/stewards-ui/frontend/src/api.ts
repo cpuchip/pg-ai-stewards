@@ -734,7 +734,7 @@ export const api = {
     return r.json()
   },
   credentialModels: (name: string) =>
-    getJSON<{ models: string[] }>(`/api/credentials/${encodeURIComponent(name)}/models`),
+    getJSON<{ models: string[]; note?: string; sa_key?: boolean }>(`/api/credentials/${encodeURIComponent(name)}/models`),
   modelRegister: (req: { provider: string; model: string; api_format?: string; input_micro_per_mtok?: number; output_micro_per_mtok?: number }) =>
     postJSON<{ registered: boolean; priced_now: boolean; has_pricing: boolean }>('/api/models/register', req),
   aliasSet: (req: { alias: string; provider: string; model: string; priority?: number }) =>

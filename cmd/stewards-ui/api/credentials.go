@@ -508,6 +508,19 @@ func (d *Deps) credentialModelsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		apiKey = plain
 	}
+	// A Google service-account key can't list models via a bearer GET (the JSON
+	// isn't a bearer — the dispatcher mints a token), and Vertex's OpenAI-compat
+	// endpoint isn't a model catalog anyway: models are named explicitly
+	// (google/gemini-…). Return empty + a note instead of a raw header error;
+	// the wizard's "+ add model" is how you name one to probe.
+	if looksLikeServiceAccountJSON(apiKey) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"models": []string{},
+			"sa_key": true,
+			"note":   "service-account provider — models aren't listable here; use “+ add model” to name one (e.g. google/gemini-3.5-flash), then probe",
+		})
+		return
+	}
 	models, err := probeProviderModels(ctx, baseURL, kind, apiKey)
 	if err != nil {
 		writeErr(w, http.StatusBadGateway, err.Error())

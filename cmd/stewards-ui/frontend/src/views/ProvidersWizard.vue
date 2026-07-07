@@ -52,6 +52,7 @@ const saveOk = ref('')
 const pickProvider = ref('')
 const pickModels = ref<string[]>([])
 const pickError = ref('')
+const pickNote = ref('')
 const pickBusy = ref(false)
 
 // --- inline probe verdict per model (keyed by model id) ---
@@ -94,15 +95,22 @@ async function onJsonFile(e: Event) {
   const f = (e.target as HTMLInputElement).files?.[0]
   if (!f) return
   const text = await f.text()
+  let j: any
   try {
-    const j = JSON.parse(text)
-    if (!j.client_email || !j.private_key) {
-      saveError.value = 'that JSON is missing client_email / private_key — is it a service-account key?'
-      return
-    }
+    j = JSON.parse(text)
   } catch {
     saveError.value = 'could not parse that file as JSON — drop the service-account key file'
     return
+  }
+  if (!j.client_email || !j.private_key) {
+    saveError.value = 'that JSON is missing client_email / private_key — is it a service-account key?'
+    return
+  }
+  // Auto-fill the GCP project into the endpoint from the SA's project_id so the
+  // operator never has to hand-replace PROJECT (leaving it in is the #1 Vertex
+  // setup trap — a placeholder base_url that silently shadows a working one).
+  if (j.project_id && baseUrl.value.includes('PROJECT')) {
+    baseUrl.value = baseUrl.value.replace(/PROJECT/g, j.project_id)
   }
   secret.value = text
   jsonFileName.value = f.name
@@ -160,6 +168,12 @@ async function save() {
   const prov = provider.value.trim().toLowerCase()
   if (!/^[a-z0-9_]+$/.test(prov)) {
     saveError.value = 'provider id must be lowercase letters/digits/underscores (it becomes the substrate provider id)'
+    return
+  }
+  // Guard the Vertex placeholder: a base_url still containing PROJECT would be
+  // stored as-is and shadow any working URL. (Dropping the SA key auto-fills it.)
+  if (baseUrl.value.includes('PROJECT')) {
+    saveError.value = 'the endpoint still contains “PROJECT” — replace it with your GCP project id (dropping the service-account key fills it in automatically)'
     return
   }
   saving.value = true
@@ -225,10 +239,12 @@ async function openModels(prov: string) {
   pickProvider.value = prov
   pickModels.value = []
   pickError.value = ''
+  pickNote.value = ''
   pickBusy.value = true
   try {
     const r = await api.credentialModels(prov)
     pickModels.value = r.models
+    pickNote.value = r.note ?? ''
     prefillKnownPrices(prov, r.models)
   } catch (e) {
     pickError.value = String(e)
@@ -442,6 +458,7 @@ onMounted(load)
                @keydown.enter.prevent="addManualModel" />
         <button class="btn" type="button" :disabled="!manualModel.trim()" @click="addManualModel">+ add model</button>
       </div>
+      <p v-if="pickNote" class="hint dim">{{ pickNote }}</p>
       <div v-if="pickError" class="wiz-error">{{ pickError }}</div>
       <table v-if="pickModels.length" class="pick-table">
         <thead>
