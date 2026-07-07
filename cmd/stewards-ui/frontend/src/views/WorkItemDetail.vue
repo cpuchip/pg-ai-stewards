@@ -2,7 +2,7 @@
 import { ref, onMounted, watch, computed } from 'vue'
 import { useRoute, useRouter, RouterLink } from 'vue-router'
 import MarkdownIt from 'markdown-it'
-import { api, type WorkItemDetail, type CostEventsResp, type StewardActionsResp, type GateDecisionsResp, type ProducedDoc } from '@/api'
+import { api, type WorkItemDetail, type CostEventsResp, type StewardActionsResp, type GateDecisionsResp, type ProducedDoc, type WorkItemReceipt } from '@/api'
 import { parseStageResults, extractPooledSlugs } from '@/stageArtifacts'
 import { makeLinkClick } from './stewdio/useDocLinks'
 
@@ -30,6 +30,42 @@ const cost = ref<CostEventsResp | null>(null)
 const actions = ref<StewardActionsResp | null>(null)
 const gateDecisions = ref<GateDecisionsResp | null>(null)
 const producedDocs = ref<ProducedDoc[]>([])
+
+// The Receipt (war-game 2026-07-07 finding #2) — the reviewer's panel at the
+// top of the page: what was read / what changed / what needs you, in human
+// sentences. The operator panels below stay untouched; this is the glance
+// object, they are the deep-dive.
+const receipt = ref<WorkItemReceipt | null>(null)
+const receiptErr = ref('')
+
+// One lead-in sentence for "What was read", composed from what the ledger
+// actually holds. Null when there is nothing to say (the empty state speaks
+// instead).
+const readSummary = computed<string | null>(() => {
+  const r = receipt.value?.read
+  if (!r) return null
+  const parts: string[] = []
+  if (r.docs_opened.length) parts.push(`opened ${r.docs_opened.length} document${r.docs_opened.length === 1 ? '' : 's'}`)
+  if (r.searches_run.length) parts.push(`ran ${r.searches_run.length} search${r.searches_run.length === 1 ? '' : 'es'}`)
+  if (r.urls_fetched.length) parts.push(`fetched ${r.urls_fetched.length} page${r.urls_fetched.length === 1 ? '' : 's'}`)
+  if (parts.length === 0) return null
+  const last = parts.pop() as string
+  const joined = parts.length ? parts.join(', ') + ' and ' + last : last
+  const sentence = joined.charAt(0).toUpperCase() + joined.slice(1)
+  return `${sentence} across ${r.session_count} session${r.session_count === 1 ? '' : 's'}.`
+})
+
+// Human label per needs_attention source_kind (the 89-attention union).
+function needKindLabel(kind: string): string {
+  switch (kind) {
+    case 'gate': return 'tool approval'
+    case 'hinge': return 'hinge review'
+    case 'ask': return 'question'
+    case 'a2a_question': return 'blocking question'
+    case 'review': return 'paused stage'
+    default: return kind
+  }
+}
 
 // #item5: the doc(s) this run pooled, linked. Real provenance
 // (docs.work_item_id) is primary; fall back to the stage-prose text-scrape only
@@ -319,20 +355,26 @@ async function load(idOrSlug: string) {
   actions.value = null
   gateDecisions.value = null
   producedDocs.value = []
+  receipt.value = null
+  receiptErr.value = ''
   try {
     const detail = await api.workItemGet(idOrSlug)
     wi.value = detail
-    // Fire cost + actions + gate decisions + produced docs in parallel; failures don't block the view
-    const [c, a, g, p] = await Promise.allSettled([
+    // Fire cost + actions + gate decisions + produced docs + receipt in
+    // parallel; failures don't block the view
+    const [c, a, g, p, rc] = await Promise.allSettled([
       api.workItemCost(detail.id),
       api.workItemActions(detail.id),
       api.workItemGateDecisions(detail.id),
       api.workItemProducedDocs(detail.id),
+      api.workItemReceipt(detail.id),
     ])
     if (c.status === 'fulfilled') cost.value = c.value
     if (a.status === 'fulfilled') actions.value = a.value
     if (g.status === 'fulfilled') gateDecisions.value = g.value
     if (p.status === 'fulfilled') producedDocs.value = p.value.docs
+    if (rc.status === 'fulfilled') receipt.value = rc.value
+    else receiptErr.value = String(rc.reason)
   } catch (e) {
     error.value = String(e)
   } finally {
@@ -551,6 +593,131 @@ function errorCategoryInfo(cat?: string): { label: string; hint: string; budget:
           <span v-if="wi.completed_at">completed {{ fmtDate(wi.completed_at) }}</span>
         </div>
       </header>
+
+      <!-- The Receipt (war-game 2026-07-07 finding #2) — the reviewer's
+           panel: always the same three questions, in sentences. Empty
+           sections say so plainly instead of hiding; notes[] carries the
+           ledger-fidelity honesty labels. The operator panels below are
+           the deep-dive; this is the glance. -->
+      <section class="rounded-md border border-zinc-800 bg-zinc-900/50 p-4">
+        <div class="flex items-baseline justify-between mb-3 flex-wrap gap-2">
+          <h3 class="text-sm font-semibold">Receipt</h3>
+          <span class="text-xs text-zinc-500">what was read · what changed · what needs you</span>
+        </div>
+
+        <p v-if="receiptErr" class="text-xs text-zinc-500">
+          Receipt unavailable: <span class="text-red-400">{{ receiptErr }}</span>
+        </p>
+        <p v-else-if="!receipt" class="text-xs text-zinc-500">loading…</p>
+
+        <div v-else class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <!-- 1 · What was read -->
+          <div class="space-y-2 min-w-0">
+            <div class="text-xs uppercase tracking-wide text-zinc-500">What was read</div>
+
+            <template v-if="readSummary || receipt.read.cited_by_outputs.length">
+              <p v-if="readSummary" class="text-sm text-zinc-300 leading-relaxed">{{ readSummary }}</p>
+
+              <!-- links get inline-block py-1.5 -my-1: a ≥24px tap target
+                   (ui-lint hard rule) without moving the text baseline -->
+              <ul v-if="receipt.read.docs_opened.length" class="space-y-0.5">
+                <li v-for="dr in receipt.read.docs_opened" :key="dr.slug" class="text-xs truncate">
+                  <RouterLink
+                    :to="`/studies/${encodeURIComponent(dr.slug)}`"
+                    class="text-sky-400 hover:text-sky-300 font-mono inline-block py-1.5 -my-1"
+                  >{{ dr.slug }}</RouterLink>
+                  <span v-if="dr.times > 1" class="text-zinc-600"> ×{{ dr.times }}</span>
+                </li>
+              </ul>
+
+              <div v-if="receipt.read.searches_run.length" class="text-xs text-zinc-400 leading-relaxed">
+                Searched for
+                <template v-for="(s, i) in receipt.read.searches_run" :key="s.query">
+                  <span class="text-zinc-300">“{{ s.query }}”</span><span v-if="i < receipt.read.searches_run.length - 1">, </span>
+                </template>.
+              </div>
+
+              <ul v-if="receipt.read.urls_fetched.length" class="space-y-0.5">
+                <li v-for="u in receipt.read.urls_fetched" :key="u.url" class="text-xs truncate">
+                  <a :href="u.url" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:text-sky-300 inline-block py-1.5 -my-1">{{ u.url }}</a>
+                </li>
+              </ul>
+
+              <div v-if="receipt.read.cited_by_outputs.length" class="text-xs text-zinc-400 leading-relaxed">
+                The output cites
+                <template v-for="(c, i) in receipt.read.cited_by_outputs" :key="c.doc_slug + c.ref">
+                  <span class="text-zinc-300 font-mono">{{ c.ref }}</span><span v-if="i < receipt.read.cited_by_outputs.length - 1">, </span>
+                </template>.
+              </div>
+
+              <div v-if="receipt.read.other_tools.length" class="text-xs text-zinc-600 leading-relaxed">
+                Other tools:
+                <template v-for="(t, i) in receipt.read.other_tools" :key="t.tool">
+                  <span class="font-mono">{{ t.tool }}</span><span v-if="t.count > 1"> ×{{ t.count }}</span><span v-if="i < receipt.read.other_tools.length - 1">, </span>
+                </template>
+              </div>
+            </template>
+            <p v-else class="text-sm text-zinc-500">
+              Nothing the ledger can show — no reads were recorded for this item.
+            </p>
+          </div>
+
+          <!-- 2 · What changed -->
+          <div class="space-y-2 min-w-0">
+            <div class="text-xs uppercase tracking-wide text-zinc-500">What changed</div>
+
+            <template v-if="receipt.changed.docs.length || receipt.changed.file_destination">
+              <ul v-if="receipt.changed.docs.length" class="space-y-1">
+                <li v-for="cd in receipt.changed.docs" :key="cd.slug" class="text-sm leading-relaxed">
+                  <span class="text-zinc-400">{{ (cd.verb === 'created' ? 'Created' : 'Updated') + (cd.kind ? ' ' + cd.kind : '') }}</span>
+                  <RouterLink
+                    :to="`/studies/${encodeURIComponent(cd.slug)}`"
+                    class="text-sky-400 hover:text-sky-300 ml-1"
+                  >{{ cd.title || cd.slug }}</RouterLink>
+                </li>
+              </ul>
+              <p v-if="receipt.changed.file_destination" class="text-xs text-zinc-400 leading-relaxed">
+                <template v-if="receipt.changed.file_enqueued_at">
+                  Queued to write <span class="font-mono text-zinc-300">{{ receipt.changed.file_destination }}</span>
+                  ({{ fmtDate(receipt.changed.file_enqueued_at) }}).
+                </template>
+                <template v-else>
+                  Will write <span class="font-mono text-zinc-300">{{ receipt.changed.file_destination }}</span> when materialized.
+                </template>
+              </p>
+            </template>
+            <p v-else class="text-sm text-zinc-500">
+              Nothing durable yet — no documents were created or updated by this item.
+            </p>
+          </div>
+
+          <!-- 3 · What needs you -->
+          <div class="space-y-2 min-w-0">
+            <div class="text-xs uppercase tracking-wide text-zinc-500">What needs you</div>
+
+            <ul v-if="receipt.needs_you.length" class="space-y-2">
+              <li v-for="n in receipt.needs_you" :key="n.kind + n.id" class="text-sm leading-relaxed">
+                <span class="text-xs px-1.5 py-0.5 rounded border border-amber-700/50 bg-amber-900/30 text-amber-300">{{ needKindLabel(n.kind) }}</span>
+                <span class="text-zinc-200 ml-1.5">{{ n.title }}</span>
+                <div v-if="n.question && n.question !== n.title" class="text-xs text-zinc-400 mt-0.5">{{ n.question }}</div>
+              </li>
+            </ul>
+            <p v-else class="text-sm text-zinc-500">
+              Nothing. No open gates, questions, or reviews for this item.
+            </p>
+          </div>
+        </div>
+
+        <!-- Honesty footer: fidelity of the derivation + any server-side
+             notes about what the ledger could NOT reconstruct. -->
+        <div v-if="receipt" class="mt-3 pt-2 border-t border-zinc-800/60 space-y-0.5">
+          <p v-for="note in receipt.notes ?? []" :key="note" class="text-xs text-amber-500/90 max-w-[75ch]">{{ note }}</p>
+          <p v-if="receipt.read.tool_call_count > 0" class="text-xs text-zinc-600 max-w-[75ch]">
+            Reads are derived from the ledger's tool-call records ({{ receipt.read.tool_call_count }} calls) and the
+            output's own citations — what was fetched and cited, not a claim about what the model relied on.
+          </p>
+        </div>
+      </section>
 
       <!-- J.12 — classified failure banner (budget/cap stands out). Gated off
            status==='completed' (war-game 2026-07-07, finding #10): wi.error /

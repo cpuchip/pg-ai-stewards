@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
-import { api, scheduledApi, type DashboardResp, type ScheduledRunRow, type RigState, type ActivityResp } from '@/api'
+import { api, scheduledApi, intakeApi, type DashboardResp, type ScheduledRunRow, type RigState, type ActivityResp, type IntakeSummaryResp } from '@/api'
 import AutonomyBanner from '@/components/AutonomyBanner.vue'
 
 const router = useRouter()
@@ -13,6 +13,14 @@ const loading = ref(false)
 // PE-C.3 — last 7 scheduled runs
 const scheduledRuns = ref<ScheduledRunRow[]>([])
 const scheduledRunsError = ref('')
+
+// Intake chip — the file_drops ledger's dashboard face (war-game 2026-07-07:
+// "no failure without a face"). Independent of dashboard health; a failed
+// read leaves the chip in its loading dash rather than flagging the page.
+const intake = ref<IntakeSummaryResp | null>(null)
+async function loadIntake() {
+  try { intake.value = await intakeApi.summary() } catch { /* tolerated */ }
+}
 
 // Local rig (llama-chip) — control + state, so the GPUs can be freed for games.
 const rig = ref<RigState | null>(null)
@@ -62,6 +70,7 @@ async function load() {
     loading.value = false
   }
   loadRig() // independent of dashboard health; tolerates llama-chip being offline
+  loadIntake() // ditto — the intake chip degrades to '—' if the read fails
   // Scheduled-runs is independent of dashboard health and tolerated to
   // fail without flagging the overall dashboard error.
   try {
@@ -150,8 +159,8 @@ const byProvider = computed(() => activity.value?.by_provider ?? [])
 
     <AutonomyBanner />
 
-    <!-- Top row: 4 status cards -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <!-- Top row: 5 status cards (md wraps 3+2, lg is one row) -->
+    <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-5 gap-4">
       <!-- pg health -->
       <div class="rounded-md border border-zinc-800 bg-zinc-900/50 p-4">
         <div class="text-xs uppercase tracking-wide text-zinc-500 mb-2">Postgres</div>
@@ -203,6 +212,28 @@ const byProvider = computed(() => activity.value?.by_provider ?? [])
         </div>
         <div class="text-xs text-zinc-400 mt-1">active work_items</div>
       </div>
+
+      <!-- intake — the file_drops ledger chip. Errors are the loud part:
+           red count when any drop failed, calm zinc otherwise. Whole card
+           links to Library → Intake. -->
+      <RouterLink
+        to="/library/intake"
+        class="rounded-md border bg-zinc-900/50 p-4 block hover:bg-zinc-900"
+        :class="(intake?.error_count ?? 0) > 0 ? 'border-red-800/60' : 'border-zinc-800'"
+      >
+        <div class="text-xs uppercase tracking-wide text-zinc-500 mb-2">Intake</div>
+        <div class="text-2xl font-semibold tabular-nums">
+          {{ intake ? intake.drops_today : '—' }}
+        </div>
+        <div class="text-xs mt-1">
+          <span class="text-zinc-400">drops today · </span>
+          <span
+            v-if="(intake?.error_count ?? 0) > 0"
+            class="text-red-400 font-semibold"
+          >{{ intake!.error_count }} error(s)</span>
+          <span v-else class="text-zinc-400">no errors</span>
+        </div>
+      </RouterLink>
     </div>
 
     <!-- Local rig control (llama-chip) — free the GPUs for games, bring the brain back -->

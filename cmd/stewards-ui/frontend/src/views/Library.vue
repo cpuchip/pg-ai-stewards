@@ -17,14 +17,20 @@ import { useRouter } from 'vue-router'
 import Studies from './Studies.vue'
 import Lessons from './Lessons.vue'
 import Search from './Search.vue'
+import Intake from './Intake.vue'
 
 const props = defineProps<{ tab?: string }>()
 const router = useRouter()
 
+// Intake (4th tab, 2026-07-07): the file_drops ledger — what came INTO the
+// corpus by drop, including the failures. Same shelf as the other three:
+// they browse what's in the corpus; Intake shows what just arrived (or
+// didn't). Router whitelist updated in router.ts to match.
 const TABS = [
   { key: 'studies', label: 'Studies', component: Studies },
   { key: 'lessons', label: 'Lessons', component: Lessons },
   { key: 'search', label: 'Search', component: Search },
+  { key: 'intake', label: 'Intake', component: Intake },
 ] as const
 
 const DEFAULT_TAB = 'studies'
