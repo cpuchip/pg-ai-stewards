@@ -23,15 +23,24 @@ function toggle(parentId: string) {
   collapsed.value[parentId] = !collapsed.value[parentId]
 }
 
+// War-game 2026-07-07 finding #4: "all statuses" silently capped at 200 rows
+// (673 total) with no way to reach the rest. The API now supports offset
+// (work_items.go) — load more appends a page instead of re-fetching from 0.
+const PAGE_SIZE = 200
+const offset = ref(0)
+const loadingMore = ref(false)
+
 async function load() {
   loading.value = true
   error.value = ''
+  offset.value = 0
   try {
     data.value = await api.workItemsList({
       pipeline: pipeline.value || undefined,
       status: status.value || undefined,
       origin: origin.value || undefined,
-      limit: 200,
+      limit: PAGE_SIZE,
+      offset: 0,
     })
   } catch (e) {
     error.value = String(e)
@@ -39,6 +48,28 @@ async function load() {
     loading.value = false
   }
 }
+
+async function loadMore() {
+  if (!data.value || loadingMore.value) return
+  loadingMore.value = true
+  try {
+    const next = offset.value + PAGE_SIZE
+    const r = await api.workItemsList({
+      pipeline: pipeline.value || undefined,
+      status: status.value || undefined,
+      origin: origin.value || undefined,
+      limit: PAGE_SIZE,
+      offset: next,
+    })
+    data.value = { items: [...data.value.items, ...r.items], total: r.total }
+    offset.value = next
+  } catch (e) {
+    error.value = String(e)
+  } finally {
+    loadingMore.value = false
+  }
+}
+
 function submit() {
   const q: Record<string, string> = {}
   if (pipeline.value) q.pipeline = pipeline.value
@@ -289,6 +320,18 @@ function fmtRelative(s?: string) {
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- war-game finding #4: real pagination instead of a silent 200-row cap -->
+    <div v-if="data && data.items.length < data.total" class="flex items-center justify-between text-xs text-zinc-500 px-1">
+      <span>showing {{ data.items.length.toLocaleString() }} of {{ data.total.toLocaleString() }}</span>
+      <button
+        class="px-3 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800 text-zinc-200 disabled:opacity-50"
+        :disabled="loadingMore"
+        @click="loadMore"
+      >
+        {{ loadingMore ? 'loading…' : 'load more' }}
+      </button>
     </div>
   </div>
 </template>

@@ -14,9 +14,20 @@ const loading = ref(false)
 const query = ref<string>(String(route.query.q ?? ''))
 const kind = ref<string>(String(route.query.kind ?? ''))
 
+// War-game 2026-07-07 finding #4: the list silently capped at 100 rows while
+// the header claimed the full total (391), with no way to reach the rest.
+// The API already supports offset (studies.go) — this was purely a missing
+// frontend affordance. loadingMore tracks the "load more" click separately
+// from the initial/filter-change load so the button can show its own spinner
+// without blanking the list that's already on screen.
+const PAGE_SIZE = 100
+const offset = ref(0)
+const loadingMore = ref(false)
+
 async function load() {
   loading.value = true
   error.value = ''
+  offset.value = 0
   try {
     if (query.value.trim()) {
       search.value = await api.studiesSearch(query.value.trim(), { limit: 50 })
@@ -24,7 +35,8 @@ async function load() {
     } else {
       list.value = await api.studiesList({
         kind: kind.value || undefined,
-        limit: 100,
+        limit: PAGE_SIZE,
+        offset: 0,
       })
       search.value = null
     }
@@ -32,6 +44,25 @@ async function load() {
     error.value = String(e)
   } finally {
     loading.value = false
+  }
+}
+
+async function loadMore() {
+  if (!list.value || loadingMore.value) return
+  loadingMore.value = true
+  try {
+    const next = offset.value + PAGE_SIZE
+    const r = await api.studiesList({
+      kind: kind.value || undefined,
+      limit: PAGE_SIZE,
+      offset: next,
+    })
+    list.value = { items: [...list.value.items, ...r.items], total: r.total }
+    offset.value = next
+  } catch (e) {
+    error.value = String(e)
+  } finally {
+    loadingMore.value = false
   }
 }
 
@@ -176,6 +207,18 @@ function fmtDate(s?: string) {
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- war-game finding #4: real pagination instead of a silent 100-row cap -->
+    <div v-if="list && list.items.length < list.total" class="flex items-center justify-between text-xs text-zinc-500 px-1">
+      <span>showing {{ list.items.length.toLocaleString() }} of {{ list.total.toLocaleString() }}</span>
+      <button
+        class="px-3 py-1.5 rounded border border-zinc-700 hover:bg-zinc-800 text-zinc-200 disabled:opacity-50"
+        :disabled="loadingMore"
+        @click="loadMore"
+      >
+        {{ loadingMore ? 'loading…' : 'load more' }}
+      </button>
     </div>
   </div>
 </template>

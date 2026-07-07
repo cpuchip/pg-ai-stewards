@@ -62,7 +62,13 @@ func (d *Deps) covenantsActiveHandler(w http.ResponseWriter, r *http.Request) {
 		&teachingNull, &c.TeachingExtension,
 		&c.ActivatedAt, &c.DeactivatedAt, &c.RatifiedBy, &c.SourceFile)
 	if err != nil {
-		writeErr(w, http.StatusNotFound, err.Error())
+		// No active covenant for this scope is a normal state (a fresh
+		// database before .spec/covenant.yaml has been seeded, or a scope
+		// that was never ratified) — a 404 carrying a raw pgx error string
+		// ("no rows in result set") read as a broken page (war-game
+		// 2026-07-07, finding #2). 200 + null lets the UI render a clean
+		// empty state instead of an error banner.
+		writeJSON(w, http.StatusOK, nil)
 		return
 	}
 	if teachingNull {

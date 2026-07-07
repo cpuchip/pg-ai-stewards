@@ -145,10 +145,19 @@ type sessionDetail struct {
 	Dispatches []chatDispatch `json:"dispatches"`
 	TokensIn   int            `json:"tokens_in"`
 	TokensOut  int            `json:"tokens_out"`
+	// Note is set when part of the load failed or timed out — the response is
+	// still 200 with whatever was gathered, not a hard error (war-game
+	// 2026-07-07, finding #9: a session_id reused ~15x on one work item can
+	// carry many large body_messages/system_prompt payloads, slow enough to
+	// blow the old 5s budget).
+	Note string `json:"note,omitempty"`
 }
 
+// sessionsGetHandler is a one-shot, user-initiated navigation (a click, not a
+// poll) — like the graph/cosmos reads, it can legitimately run past the usual
+// 5s read budget on a heavily-reused session_id, so it gets a longer ceiling.
 func (d *Deps) sessionsGetHandler(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
 	sid := r.URL.Query().Get("id")
@@ -209,7 +218,12 @@ func (d *Deps) sessionsGetHandler(w http.ResponseWriter, r *http.Request) {
 		sid,
 	)
 	if err != nil {
-		writeErr(w, http.StatusInternalServerError, err.Error())
+		// Degrade instead of hard-failing: the dispatches above may have
+		// loaded fine (or this may just be a slow/ambiguous session_id
+		// blowing the timeout) — show whatever we have with a note rather
+		// than a page-blocking "Error: timeout after Nms".
+		resp.Note = "message timeline could not be loaded: " + err.Error()
+		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	defer rows.Close()

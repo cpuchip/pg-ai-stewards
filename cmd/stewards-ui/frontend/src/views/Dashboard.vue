@@ -2,6 +2,7 @@
 import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter, RouterLink } from 'vue-router'
 import { api, scheduledApi, type DashboardResp, type ScheduledRunRow, type RigState, type ActivityResp } from '@/api'
+import AutonomyBanner from '@/components/AutonomyBanner.vue'
 
 const router = useRouter()
 
@@ -146,6 +147,8 @@ const byProvider = computed(() => activity.value?.by_provider ?? [])
         </button>
       </div>
     </div>
+
+    <AutonomyBanner />
 
     <!-- Top row: 4 status cards -->
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">

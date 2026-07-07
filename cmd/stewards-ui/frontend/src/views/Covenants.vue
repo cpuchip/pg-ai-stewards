@@ -35,6 +35,11 @@ onMounted(load)
 
     <p v-if="loading" class="text-sm text-zinc-400">loading…</p>
     <p v-else-if="error" class="text-sm text-red-400">{{ error }}</p>
+    <p v-else-if="!covenant" class="text-sm text-zinc-500">
+      No covenant is configured for this scope yet. Covenants are edited in
+      <code class="font-mono text-zinc-300">.spec/covenant.yaml</code> and seeded into the
+      substrate via the git pre-commit hook.
+    </p>
 
     <template v-if="covenant">
       <div class="text-xs text-zinc-500 flex gap-4 font-mono">

@@ -262,6 +262,14 @@ function fmtDate(s?: string) {
       <p v-else-if="error" class="text-sm text-red-400">{{ error }}</p>
 
       <template v-if="session">
+        <!-- partial-load notice (war-game 2026-07-07, finding #9): the backend
+             returns whatever it gathered + this note instead of a hard error
+             when one part of the load (usually the message timeline on a
+             heavily-reused session_id) times out. -->
+        <div v-if="session.note" class="rounded-md border border-amber-700/50 bg-amber-950/30 px-4 py-2 text-xs text-amber-300">
+          ⚠ Partial data — {{ session.note }}
+        </div>
+
         <!-- First-dispatch system prompt + tools — the invisible context -->
         <section
           v-if="firstDispatch && firstDispatch.system_prompt"

@@ -18,6 +18,7 @@ import ModelsPanel from './stewdio/ModelsPanel.vue'
 import WorldGraphPanel from './stewdio/WorldGraphPanel.vue'
 import ExperimentsPanel from './stewdio/ExperimentsPanel.vue'
 import AttentionBell from './stewdio/AttentionBell.vue'
+import AutonomyBanner from '../components/AutonomyBanner.vue'
 
 // the shared cockpit store — panels coordinate through it; we read store.dev here
 // to drive the Details toggle (one surface, two depths) + gate the details-only panes.
@@ -218,7 +219,16 @@ watch(() => store.selectedRef, (v) => { if (v && isMobile.value) mobileTab.value
 </script>
 
 <template>
-  <div class="h-full w-full relative">
+  <div class="h-full w-full flex flex-col">
+    <!-- Ratified 2026-07-07: a paused-autonomy banner has to live somewhere in
+         the cockpit too, but Stewdio's whole layout below is a pixel-driven
+         dockview canvas (position:absolute chrome + a DockviewVue that fills
+         its parent) — the banner needs its own row above that canvas rather
+         than fighting dockview's own sizing. Renders nothing when not paused
+         (a zero-height comment node), so the flex-1 canvas below is unaffected
+         in the common case. -->
+    <AutonomyBanner class="shrink-0" />
+    <div class="flex-1 min-h-0 relative">
     <!-- MOBILE (<768px): one pane at a time — Library / Work / Chat — instead of
          dockview's multi-pane VS-Code shell. Its own header row (not absolute
          chrome floating over the canvas) carries the segmented switcher plus the
@@ -308,5 +318,27 @@ watch(() => store.selectedRef, (v) => { if (v && isMobile.value) mobileTab.value
         @ready="onReady"
       />
     </template>
+    </div>
   </div>
 </template>
+
+<style>
+/* War-game 2026-07-07 finding #12: dockview's own default-tab CSS sets
+   white-space:nowrap + text-overflow:ellipsis on .dv-default-tab but never
+   overflow:hidden on that same element (required for ellipsis to do anything)
+   or min-width:0 on the flex-grow label span. When dockview's JS narrows a
+   tab below its label's natural width (e.g. "Library" in the collapsed-width
+   left rail), the label just overflowed and got silently clipped by a sibling
+   instead of ellipsing cleanly — "Library ✕" rendered as "brary ✕". This
+   makes the ellipsis actually apply, and gives every tab a floor width so the
+   label + close button always both fit. Global (not scoped): dockview mounts
+   its chrome outside this component's scoped-attribute tree. */
+.dv-tab .dv-default-tab-content {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.dv-tab {
+  min-width: 64px;
+}
+</style>

@@ -15,7 +15,7 @@ defineOptions({ inheritAttrs: false })
 const store = useStewdioStore()
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
 // Arc A: links in assistant replies navigate (internal) or open (external).
-const onLink = makeLinkClick(store)
+const onLink = makeLinkClick(store.select)
 
 // The grounding lens (b1). '' = follow the currently-selected doc/work item (the
 // default); '__all__' = the whole pool; a project name = that corpus. An explicit
@@ -574,10 +574,10 @@ function onKey(e: KeyboardEvent) {
       <span class="text-sky-200 text-sm">drop a document, image, or zip to attach</span>
     </div>
     <div class="border-b border-zinc-800 px-3 py-2 flex items-center gap-2 text-xs">
-      <button class="text-zinc-400 hover:text-zinc-200" :title="`${sessions.length} conversation(s)`"
+      <button class="shrink-0 whitespace-nowrap text-zinc-400 hover:text-zinc-200" :title="`${sessions.length} conversation(s)`"
               @click="showSessions = !showSessions">💬<span class="text-zinc-600 ml-0.5">{{ sessions.length || '' }}</span></button>
       <a v-if="activeSession && messages.length" :href="`/api/chat/export?session_id=${encodeURIComponent(activeSession)}&format=md`"
-         class="text-zinc-500 hover:text-sky-300" title="export this conversation as markdown" download>⬇</a>
+         class="shrink-0 text-zinc-500 hover:text-sky-300" title="export this conversation as markdown" download>⬇</a>
       <!-- Details: the session id, click to copy (paste it to ground a follow-up / debug a stall) -->
       <button v-if="store.dev && activeSession" @click="copySession"
               class="text-zinc-500 hover:text-sky-300 font-mono text-[10px] flex items-center gap-0.5 max-w-[28%]"
@@ -596,9 +596,15 @@ function onKey(e: KeyboardEvent) {
           <option v-for="p in projects" :key="p.name" :value="p.name">{{ p.name }}<span v-if="p.doc_count"> ({{ p.doc_count }})</span></option>
         </select>
       </div>
-      <button v-if="chatRef" class="text-sky-400 hover:text-sky-300" title="new conversation" @click="newSession">＋ New chat</button>
+      <!-- war-game 2026-07-07 finding #11: this button had no shrink-0/nowrap, so
+           when the lens select above (a flex-1 sibling) rendered a long doc-title
+           chip, the flex row squeezed this button down to ~24x48px and wrapped
+           its label illegibly. shrink-0 + whitespace-nowrap keep it at its
+           natural size; the lens select already truncates instead (max-w+truncate
+           above), which is the one that should give up space under pressure. -->
+      <button v-if="chatRef" class="shrink-0 whitespace-nowrap text-sky-400 hover:text-sky-300" title="new conversation" @click="newSession">＋ New chat</button>
       <!-- ease-of-life E: 🩺 Diagnose this chat (find + auto-fix trouble) -->
-      <button v-if="activeSession" class="text-zinc-400 hover:text-amber-300 disabled:opacity-40" :disabled="diagnosing"
+      <button v-if="activeSession" class="shrink-0 whitespace-nowrap text-zinc-400 hover:text-amber-300 disabled:opacity-40" :disabled="diagnosing"
               title="diagnose this chat — find + auto-fix trouble (stuck/duplicate builds, a wedged rig slot)" @click="runDiagnose">
         🩺<span v-if="diagnosing" class="text-zinc-600">…</span></button>
       <!-- ease-of-life C: always-visible model switch — ⚡ Fast (local) / 🧠 Smart

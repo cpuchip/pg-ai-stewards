@@ -4,10 +4,21 @@ import { useRoute, useRouter, RouterLink } from 'vue-router'
 import MarkdownIt from 'markdown-it'
 import { api, type StudyDetail } from '@/api'
 import SourcesPulledPanel from './wiki/SourcesPulledPanel.vue'
+import { makeLinkClick } from './stewdio/useDocLinks'
 
 const route = useRoute()
 const router = useRouter()
 const md = new MarkdownIt({ html: false, linkify: true, typographer: false })
+
+// War-game 2026-07-07 finding #5: this page rendered the doc body with plain
+// v-html and no link handler, so a relative markdown link like
+// `[Full report](other-doc.md)` fell through to the browser's own relative-URL
+// resolution → `/studies/other-doc.md` → a 404 (the API's slug has no `.md`).
+// makeLinkClick already solves this for Stewdio's ArtifactPanel/ChatPanel
+// (strips the .md + basename); reuse it here instead of duplicating the regex.
+const onLink = makeLinkClick((ref, kind) => {
+  router.push(kind === 'work_item' ? `/work-items/${encodeURIComponent(ref)}` : `/studies/${encodeURIComponent(ref)}`)
+})
 
 const study = ref<StudyDetail | null>(null)
 const error = ref<string>('')
@@ -78,7 +89,7 @@ function fmtDate(s?: string) {
 
       <!-- doc-theme (THEME, audit §V): the same render-time skin ArtifactPanel
            uses, replacing this ad hoc prose-* utility soup with one shared class. -->
-      <article v-if="tab === 'doc'" class="doc-theme prose prose-invert max-w-none" v-html="renderedBody"></article>
+      <article v-if="tab === 'doc'" class="doc-theme prose prose-invert max-w-none" v-html="renderedBody" @click="onLink"></article>
       <SourcesPulledPanel v-else :doc-ref="study.slug" @open="(ref) => router.push(`/studies/${encodeURIComponent(ref)}`)" />
 
       <!-- Citations -->
