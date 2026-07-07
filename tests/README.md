@@ -3,7 +3,11 @@
 ## `virgin-smoke.sql` — the authoritative virgin-boot test
 
 Installs the extension on a fresh Postgres and asserts the clean-room
-invariants of the authored chain (`extension/00-config.sql` → `86-sticky-agent-family.sql`).
+invariants of the authored chain (now the consolidated volumes
+`extension/v00-foundations.sql` → `v27-lifeless-core.sql`; the 109-file
+`00-config.sql` → `107-lifeless-core.sql` chain was concatenated into 28
+byte-preserving themed volumes on feat/lightening — see
+`extension/consolidation-map.txt` and `extension/verify-consolidation.py`).
 It uses plpgsql `ASSERT`, so any regression makes `psql` exit non-zero — the
 test fails loudly rather than printing a wrong value.
 

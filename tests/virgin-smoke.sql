@@ -2,7 +2,8 @@
 -- tests/virgin-smoke.sql — the authoritative virgin-boot test
 -- =====================================================================
 -- Run against a FRESH Postgres (pgvector image) with the pg_ai_stewards
--- extension installed. Proves the authored chain (00→91) installs cleanly
+-- extension installed. Proves the authored chain (now the v00→v27 consolidated
+-- volumes; was 00→107, feat/lightening) installs cleanly
 -- and the clean-room invariants hold. Uses plpgsql ASSERT so a regression
 -- makes psql exit non-zero (CI goes red), not just print.
 --
@@ -5462,4 +5463,4 @@ BEGIN
 END
 $vs102$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (00→107) is sound =='
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v27 volumes, was 00→107) is sound =='
