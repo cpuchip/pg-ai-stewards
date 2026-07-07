@@ -20,3 +20,8 @@ docker-compose.override.yaml
 docker-compose.override.yml
 # hinge-review scratch (per-review working files; not durable content)
 scripts/hinge-review/hinge/*-body.txt
+
+# files-interface host dirs (v28/v30) — the projection tree and drop dir are
+# runtime data, never repo content; knowledge/ may be its own git repo.
+/drop/
+/knowledge/
