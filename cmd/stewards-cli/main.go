@@ -71,6 +71,8 @@ func main() {
 		runMigrate(ctx, os.Args[2:])
 	case "update":
 		runUpdate(ctx, os.Args[2:])
+	case "project":
+		runProject(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 	default:
@@ -225,6 +227,13 @@ Commands:
       THROWAWAY scratch container booted from the fresh image (never the
       live pg) -> a step/exit summary table. Any non-zero step stops the
       run immediately. --dry-run prints the plan and makes no changes.
+
+  project [--pending]
+      v28 files-interface: force a knowledge-projection pass. Fires the
+      stewards_knowledge_projection NOTIFY (stewards.knowledge_project_now());
+      the BRIDGE's projector — which owns the mounted knowledge directory —
+      writes the tree. --pending previews what the next pass will
+      project/delete without firing it.
 
 Environment:
   STEWARDS_DSN    Postgres DSN (default: postgres://stewards:stewards@localhost:5432/stewards?sslmode=disable)

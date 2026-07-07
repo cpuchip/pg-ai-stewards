@@ -120,6 +120,18 @@ func runBridgeRun(args []string) error {
 	// OTEL_EXPORTER_OTLP_ENDPOINT is set -- see otel_export.go + docs/otel.md.
 	go runOtelExporter(rootCtx, pool)
 
+	// v28 files-interface (feat/files-interface): the two ratified
+	// increments from the files-as-interface verdict, Layer 3. The drop
+	// watcher polls STEWARDS_DROP_DIR (30s — the poll is the contract;
+	// inotify is unreliable across Docker Desktop bind mounts) and ingests
+	// via stewards.file_drop_ingest/_binary; the projector writes the
+	// knowledge tree under STEWARDS_KNOWLEDGE_DIR on LISTEN
+	// stewards_knowledge_projection + an hourly safety tick. Both disable
+	// themselves cleanly when their directory is absent. See
+	// dropwatcher.go + projector.go.
+	go runDropWatcher(rootCtx, pool)
+	go runProjector(rootCtx, pool)
+
 	// LISTEN on a dedicated pgx connection. Acquire from the pool's
 	// underlying conn pool but pin it (Hijack) for the duration so
 	// pgx's pool doesn't recycle it under us.

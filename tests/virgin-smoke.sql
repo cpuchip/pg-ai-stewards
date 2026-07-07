@@ -5463,4 +5463,164 @@ BEGIN
 END
 $vs102$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v27 volumes, was 00→107) is sound =='
+-- ---------------------------------------------------------------------
+-- 108 — files-interface (v28): ingest-by-drop provenance + freshness,
+-- and the knowledge projection catalog (incremental + deletions).
+-- LIFELESS-CORE PROOF baked in: no provider/model is configured at this
+-- point in the suite, and the text drop must LAND anyway (the docs row +
+-- provenance stamp arrive; embedding rides the existing trigger and
+-- degrades per v27 §2). The binary path is proven to the honest boundary
+-- a virgin boot allows: attachment + doc_import_corpus mcp_proxy row
+-- enqueued, and file_drop_reconcile() flags a dead extract on the ledger
+-- (there is no doc-extract sandbox in a virgin container to run it).
+-- ---------------------------------------------------------------------
+DO $vs108$
+DECLARE
+    v_res    jsonb;
+    v_doc_id text;
+    v_slug   text;
+    v_sha1   text;
+    v_target text;
+    v_upd    timestamptz;
+    v_csha   text;
+    v_att    bigint;
+    v_wq     bigint;
+    v_lesson bigint;
+    v_n      int;
+BEGIN
+    -- schema + surface
+    ASSERT to_regclass('stewards.file_drops') IS NOT NULL, '108: file_drops table must exist';
+    ASSERT to_regclass('stewards.knowledge_projections') IS NOT NULL, '108: knowledge_projections table must exist';
+    ASSERT to_regprocedure('stewards.file_drop_ingest(text,text,text,text)') IS NOT NULL, '108: file_drop_ingest must exist';
+    ASSERT to_regprocedure('stewards.file_drop_ingest_binary(text,bytea,text,text,text)') IS NOT NULL, '108: file_drop_ingest_binary must exist';
+    ASSERT to_regprocedure('stewards.file_drop_reconcile()') IS NOT NULL, '108: file_drop_reconcile must exist';
+    ASSERT to_regprocedure('stewards.knowledge_projection_pending()') IS NOT NULL, '108: knowledge_projection_pending must exist';
+    ASSERT to_regprocedure('stewards.knowledge_projection_record(text,text,text,timestamptz,text)') IS NOT NULL, '108: knowledge_projection_record must exist';
+    ASSERT to_regprocedure('stewards.knowledge_projection_forget(text,text)') IS NOT NULL, '108: knowledge_projection_forget must exist';
+    ASSERT to_regprocedure('stewards.knowledge_project_now()') IS NOT NULL, '108: knowledge_project_now must exist';
+    ASSERT EXISTS (SELECT 1 FROM stewards.config WHERE key = 'knowledge_projection.doc_kinds'),
+        '108: knowledge_projection.doc_kinds config must be seeded';
+
+    -- text drop lands LIFELESS (no models configured here), provenance stamped
+    v_res := stewards.file_drop_ingest('vs108-project/notes/alpha.md',
+        E'# VS108 Alpha\n\nBody with a [link](docs/beta.md).\n', 'vs108-project', NULL);
+    ASSERT (v_res->>'ok')::boolean AND v_res->>'status' = 'ingested',
+        format('108: first text ingest must land with zero models, got %s', v_res);
+    v_doc_id := v_res->>'doc_id';
+    v_slug   := v_res->>'doc_slug';
+    ASSERT v_slug = 'vs108-project-notes-alpha',
+        format('108: slug must be path-derived + stable, got %s', v_slug);
+    ASSERT (SELECT d.frontmatter->>'origin' FROM stewards.docs d WHERE d.id = v_doc_id) = 'file-drop',
+        '108: doc frontmatter must stamp origin=file-drop';
+    ASSERT (SELECT d.source_type FROM stewards.docs d WHERE d.id = v_doc_id) = 'file-drop',
+        '108: docs.source_type must stamp file-drop';
+    ASSERT (SELECT d.project_association FROM stewards.docs d WHERE d.id = v_doc_id) = 'vs108-project',
+        '108: the project hint must become project_association';
+    ASSERT (SELECT d.title FROM stewards.docs d WHERE d.id = v_doc_id) = 'VS108 Alpha',
+        '108: the first H1 must become the title';
+    SELECT fd.sha256 INTO v_sha1 FROM stewards.file_drops fd
+     WHERE fd.path = 'vs108-project/notes/alpha.md' AND fd.status = 'ingested';
+    ASSERT v_sha1 IS NOT NULL, '108: the ledger row must land status=ingested';
+
+    -- re-drop, SAME sha -> skipped_unchanged; no new ledger row, no doc revision
+    v_res := stewards.file_drop_ingest('vs108-project/notes/alpha.md',
+        E'# VS108 Alpha\n\nBody with a [link](docs/beta.md).\n', 'vs108-project', NULL);
+    ASSERT v_res->>'status' = 'skipped_unchanged',
+        format('108: unchanged re-drop must skip, got %s', v_res);
+    ASSERT (SELECT count(*) FROM stewards.file_drops fd WHERE fd.path = 'vs108-project/notes/alpha.md') = 1,
+        '108: unchanged re-drop must not add a ledger row';
+    ASSERT (SELECT count(*) FROM stewards.doc_versions dv WHERE dv.doc_id = v_doc_id) = 0,
+        '108: unchanged re-drop must not version the doc';
+
+    -- re-drop, NEW sha -> the freshness update: same doc, prior revision archived
+    v_res := stewards.file_drop_ingest('vs108-project/notes/alpha.md',
+        E'# VS108 Alpha\n\nRevised body.\n', 'vs108-project', NULL);
+    ASSERT v_res->>'status' = 'ingested', format('108: changed re-drop must re-ingest, got %s', v_res);
+    ASSERT v_res->>'doc_id' = v_doc_id, '108: changed re-drop must update the SAME doc (stable slug)';
+    ASSERT v_res->>'superseded_sha' = v_sha1, '108: the freshness update must name the sha it supersedes';
+    ASSERT (SELECT count(*) FROM stewards.file_drops fd WHERE fd.path = 'vs108-project/notes/alpha.md') = 2,
+        '108: a changed re-drop is a natural new ledger row';
+    ASSERT (SELECT count(*) FROM stewards.doc_versions dv WHERE dv.doc_id = v_doc_id) = 1,
+        '108: touch_doc must archive the prior revision (the existing update idiom)';
+    ASSERT (SELECT d.body FROM stewards.docs d WHERE d.id = v_doc_id) LIKE '%Revised body%',
+        '108: the doc body must be the new content';
+
+    -- projection catalog: the doc is pending with the layout path
+    SELECT p.target_path, p.source_updated_at, p.content_sha INTO v_target, v_upd, v_csha
+      FROM stewards.knowledge_projection_pending() p
+     WHERE p.source_kind = 'doc' AND p.source_id = v_doc_id AND p.action = 'project';
+    ASSERT v_target = 'docs/vs108-project/vs108-project-notes-alpha.md',
+        format('108: pending must return the doc at docs/<project>/<slug>.md, got %s', v_target);
+
+    -- record (simulating the bridge's write) -> pending goes quiet for it (incremental)
+    PERFORM stewards.knowledge_projection_record('doc', v_doc_id, v_target, v_upd, v_csha);
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.knowledge_projection_pending() p
+                        WHERE p.source_kind = 'doc' AND p.source_id = v_doc_id),
+        '108: a recorded projection must leave pending (incremental, not full-rescan)';
+
+    -- source bump -> pending again (updated_at watermark)
+    UPDATE stewards.docs SET body = body || E'\nmore.' WHERE id = v_doc_id;
+    ASSERT EXISTS (SELECT 1 FROM stewards.knowledge_projection_pending() p
+                    WHERE p.source_kind = 'doc' AND p.source_id = v_doc_id AND p.action = 'project'),
+        '108: bumping the source must re-pend the projection';
+
+    -- lessons project too (append-only branch)
+    INSERT INTO stewards.lessons (kind, content) VALUES ('lesson', 'vs108 fixture lesson')
+    RETURNING id INTO v_lesson;
+    ASSERT EXISTS (SELECT 1 FROM stewards.knowledge_projection_pending() p
+                    WHERE p.source_kind = 'lesson' AND p.source_id = v_lesson::text
+                      AND p.target_path = 'lessons/lesson-' || v_lesson || '-lesson.md'),
+        '108: a lesson must pend at lessons/lesson-<id>-<kind>.md';
+
+    -- vanished source -> a delete action carrying the recorded path; forget clears it
+    DELETE FROM stewards.docs WHERE id = v_doc_id;
+    ASSERT EXISTS (SELECT 1 FROM stewards.knowledge_projection_pending() p
+                    WHERE p.action = 'delete' AND p.source_kind = 'doc'
+                      AND p.source_id = v_doc_id AND p.target_path = v_target),
+        '108: a vanished source must pend a delete for its recorded file';
+    ASSERT stewards.knowledge_projection_forget('doc', v_doc_id),
+        '108: forget must report the state row it dropped';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.knowledge_projection_pending() p
+                        WHERE p.source_kind = 'doc' AND p.source_id = v_doc_id),
+        '108: after forget the delete must be gone (inverse)';
+
+    -- binary drop: durable attachment + the EXISTING doc_import_corpus path
+    v_res := stewards.file_drop_ingest_binary('vs108-project/report.pdf',
+        '\x255044462d312e34'::bytea, 'application/pdf', 'vs108-project', NULL);
+    ASSERT (v_res->>'ok')::boolean AND v_res->>'status' = 'ingested',
+        format('108: binary ingest must enqueue (doc-extract is core-seeded), got %s', v_res);
+    v_att := (v_res->>'attachment_id')::bigint;
+    v_wq  := (v_res->>'work_queue_id')::bigint;
+    ASSERT (SELECT a.kind FROM stewards.chat_attachments a WHERE a.id = v_att) = 'document',
+        '108: binary bytes must land as a document attachment';
+    ASSERT (SELECT wq.payload->>'tool' FROM stewards.work_queue wq WHERE wq.id = v_wq) = 'doc_import_corpus',
+        '108: the extract must ride the existing doc_import_corpus tool';
+    ASSERT (SELECT wq.payload->'args'->>'corpus_name' FROM stewards.work_queue wq WHERE wq.id = v_wq) = 'vs108-project',
+        '108: the project hint must become the corpus name';
+    -- simulate the async extract dying (a virgin boot has no doc-extract sandbox)
+    UPDATE stewards.work_queue SET status = 'error', error = 'vs108 simulated extract failure', done_at = now()
+     WHERE id = v_wq;
+    v_n := stewards.file_drop_reconcile();
+    ASSERT v_n >= 1, '108: reconcile must flip at least the vs108 row';
+    ASSERT (SELECT fd.status FROM stewards.file_drops fd WHERE fd.path = 'vs108-project/report.pdf') = 'error',
+        '108: a dead extract must FLAG on the ledger, never sit as ingested';
+    ASSERT (SELECT fd.error FROM stewards.file_drops fd WHERE fd.path = 'vs108-project/report.pdf')
+               LIKE '%vs108 simulated%',
+        '108: the ledger must carry the extract failure text';
+
+    -- clean up (docs row already deleted above; embed rows ride payload.target_id)
+    DELETE FROM stewards.work_queue WHERE id = v_wq OR payload->>'target_id' = v_doc_id;
+    DELETE FROM stewards.chat_attachments WHERE id = v_att;
+    DELETE FROM stewards.file_drops WHERE path LIKE 'vs108-%';
+    DELETE FROM stewards.knowledge_projections WHERE source_id IN (v_doc_id, v_lesson::text);
+    DELETE FROM stewards.lessons WHERE id = v_lesson;
+    DELETE FROM stewards.edges
+     WHERE src IN (SELECT n.id FROM stewards.nodes n WHERE n.kind = 'doc' AND n.ref = v_slug)
+        OR dst IN (SELECT n.id FROM stewards.nodes n WHERE n.ref = 'docs/beta.md');
+    DELETE FROM stewards.nodes WHERE (kind = 'doc' AND ref = v_slug) OR ref = 'docs/beta.md';
+
+    RAISE NOTICE 'OK 108: files-interface (v28) — a text drop LANDS with zero models (lifeless core) with provenance stamped (frontmatter.origin + source_type + ledger); same-sha re-drop skips without a row or a revision; changed-sha re-drop is the freshness update (same doc, prior revision archived via touch_doc, superseded sha named); the projection catalog pends the doc at docs/<project>/<slug>.md and a lesson at lessons/lesson-<id>-<kind>.md, goes quiet once recorded (incremental), re-pends on a source bump, and pends a delete when the source vanishes (forget clears it); a binary drop rides the EXISTING attachment + doc_import_corpus path and a dead extract is FLAGGED on the ledger by reconcile';
+END
+$vs108$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v28 volumes; v00→v27 was 00→107, v28 = files-interface) is sound =='

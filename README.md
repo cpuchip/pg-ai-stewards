@@ -128,6 +128,7 @@ public, generalized substrate. The interfaces still move; the engine is solid. O
 | [Wiring up MCP servers](docs/wiring-up-mcp-servers.md) | Give agents tools — stdio + remote-HTTP MCP, deny-by-default grants, worked examples. |
 | [Personas + ai-chattermax](docs/personas-and-chattermax.md) | Put a durable-mind persona in a live room; the D&D holodeck as a tool-using example. |
 | [Rich documents in chat](docs/rich-documents.md) | Attach a PDF / Office doc / zipped folder and reason over it — the hardened no-network doc-extract sandbox. |
+| [The files interface](docs/files-interface.md) | Drop files into `./drop/` to ingest (provenance-stamped, freshness-aware); read the substrate's prose back as a greppable `./knowledge/` markdown tree. |
 | [Loreworks](docs/loreworks.md) | Build, explore, and inhabit a *world* from source lore — entities, a typed edge-graph, and hybrid (lexical + semantic) lore search. |
 | [Operations](docs/operations.md) | The upgrade / migrate / verify runbook — code-in-image, data-in-volume, config-is-code. |
 | [Delegation limits](docs/delegation-limits.md) | How far an agent may spawn sub-agents (depth / width / grants), and how to raise the bounds as models improve. |

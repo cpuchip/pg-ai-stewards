@@ -255,6 +255,17 @@ extension_sql_file!(
     requires = ["create_v26_knowledge"],
 );
 
+// v28-files-interface.sql — NEW (feat/files-interface): ingest-by-drop +
+// the knowledge projection tree, the two ratified files-interface
+// increments (.spec/proposals/files-as-interface-db-as-engine.md,
+// Layer 3 / lightening item 6). Companion bridge loops:
+// cmd/stewards-mcp/dropwatcher.go + projector.go.
+extension_sql_file!(
+    "../v28-files-interface.sql",
+    name = "create_v28_files_interface",
+    requires = ["create_v27_lifeless_core"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

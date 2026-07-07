@@ -89,6 +89,25 @@ services:
       # the safe default, not a misconfiguration. Change :ro to :rw only if you
       # want the substrate to write files into your tree on its own.
       - ${WORKSPACE_DIR:-./workspace}:/workspace:ro
+      # v28 files-interface (docs/files-interface.md). Both default ON —
+      # empty directories are harmless, and the loops disable themselves
+      # cleanly when a dir is missing.
+      #
+      # DROP: files placed here are ingested into the substrate within one
+      # 30s poll. First path segment = project hint (drop/work-corpus/x.md ->
+      # project 'work-corpus'); md/txt pool as docs, binaries ride the
+      # doc-extract path (needs the doc-extract overlay). Provenance lands
+      # in stewards.file_drops; a re-drop with changed content is a
+      # freshness update, unchanged content is skipped.
+      - ${DROP_DIR:-./drop}:/drop
+      # KNOWLEDGE: the projection tree — wiki pages, pooled docs, and
+      # lessons written as markdown (wiki/<scope>/<slug>.md,
+      # docs/<project>/<slug>.md, lessons/lesson-<id>-<kind>.md) with
+      # provenance frontmatter. ONE-WAY: edits here are never read back;
+      # author changes via the drop directory. `stewards-cli project`
+      # forces a pass; otherwise hourly + on NOTIFY. If this dir is a git
+      # repo, each changed pass is committed automatically.
+      - ${KNOWLEDGE_DIR:-./knowledge}:/knowledge
     restart: unless-stopped
 
   ui:
