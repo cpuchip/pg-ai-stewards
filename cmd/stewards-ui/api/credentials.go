@@ -510,15 +510,18 @@ func (d *Deps) credentialModelsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// A Google service-account key can't list models via a bearer GET (the JSON
 	// isn't a bearer — the dispatcher mints a token), and Vertex's OpenAI-compat
-	// endpoint isn't a model catalog anyway: models are named explicitly
-	// (google/gemini-…). Return empty + a note instead of a raw header error;
-	// the wizard's "+ add model" is how you name one to probe.
+	// endpoint isn't a model catalog anyway. So fall back to the models the
+	// SUBSTRATE already knows for this provider (seeds, prior probes/registers:
+	// model_pricing ∪ model_capability) — a real, generic listing that needs no
+	// auth and no Vertex-specific code. Empty only on a truly fresh provider,
+	// where "+ add model" is the path.
 	if looksLikeServiceAccountJSON(apiKey) {
-		writeJSON(w, http.StatusOK, map[string]any{
-			"models": []string{},
-			"sa_key": true,
-			"note":   "service-account provider — models aren't listable here; use “+ add model” to name one (e.g. google/gemini-3.5-flash), then probe",
-		})
+		known := d.catalogModels(ctx, name)
+		note := "service-account provider — showing models known to the substrate; probe to (re)confirm, or “+ add model” to name others (e.g. google/gemini-3.5-flash)"
+		if len(known) == 0 {
+			note = "service-account provider — no models known yet; use “+ add model” to name one (e.g. google/gemini-3.5-flash), then probe"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"models": known, "sa_key": true, "note": note})
 		return
 	}
 	models, err := probeProviderModels(ctx, baseURL, kind, apiKey)
@@ -530,6 +533,30 @@ func (d *Deps) credentialModelsHandler(w http.ResponseWriter, r *http.Request) {
 		_, _ = d.Pool.Exec(ctx, `SELECT stewards.credential_mark_verified($1)`, name)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": models})
+}
+
+// catalogModels returns the model ids the substrate already knows for a provider
+// — the union of model_pricing and model_capability. Used as the "models" listing
+// for providers that can't be live-listed (service-account/Vertex), so seeded or
+// previously-probed models are still pickable for role assignment.
+func (d *Deps) catalogModels(ctx context.Context, provider string) []string {
+	out := []string{}
+	rows, err := d.Pool.Query(ctx, `
+		SELECT model FROM stewards.model_pricing WHERE provider = $1
+		UNION
+		SELECT model FROM stewards.model_capability WHERE provider = $1
+		ORDER BY 1`, provider)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var m string
+		if rows.Scan(&m) == nil {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
