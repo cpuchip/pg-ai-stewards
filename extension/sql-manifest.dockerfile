@@ -33,3 +33,4 @@ COPY v24-lab-dispatch.sql ./
 COPY v25-war-game.sql ./
 COPY v26-knowledge.sql ./
 COPY v27-lifeless-core.sql ./
+COPY v28-files-interface.sql ./
