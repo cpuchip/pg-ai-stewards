@@ -91,6 +91,7 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 		registerModelTools(s, pool)      // list_models / list_connectors — read-only catalog views (90: list_models is in the harness hinge's ratified read set)
 		registerDocWriteTools(s, pool, session)
 		registerA2ANoteTools(s, pool) // a2a_note / a2a_note_clear ONLY — never a2a_submit/claim/receipt/etc.
+		registerSubstrateToolDispatch(s, pool, session) // dynamic sql_fn catalog (#346): read freely, writes per allowlist
 		return s
 	}
 	handler := mcp.NewStreamableHTTPHandler(getServer, nil)

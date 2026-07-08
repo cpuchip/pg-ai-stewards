@@ -159,6 +159,7 @@ func main() {
 	// queries; the pool is already context-aware and goroutine-safe.
 	registerDocTools(srv, pool)
 	registerDocWriteTools(srv, pool, "stdio-main") // doc_create/append/patch/read/finalize/current (90) — one stable draft namespace for this long-lived stdio process
+	registerSubstrateToolDispatch(srv, pool, "stdio-main") // dynamic sql_fn catalog (#346)
 	registerInspectionTools(srv, pool)
 	registerEscalationTools(srv, pool)
 	registerExpandTools(srv, pool)

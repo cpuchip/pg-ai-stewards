@@ -22,6 +22,7 @@ choice, gives an installed instance two things:
 
 ```bash
 docker compose exec -T pg psql -U stewards -d stewards < packs/companion/forge.sql
+docker compose exec -T pg psql -U stewards -d stewards < packs/companion/companion.sql  # reminders + bell + verbal approval
 docker compose exec -T pg psql -U stewards -d stewards < packs/companion/smoke.sql   # the oracle
 ```
 
@@ -44,6 +45,22 @@ SELECT stewards.work_item_dispatch_stage_safe(stewards.work_item_create(
 The plan lands on the bell (Stewdio → "Needs your answer") with the tool's purpose,
 risks, **the complete SQL**, its args schema, and the test call. Read the SQL.
 Approve → forged, verified, live. The receipt lives in `forge.forged_tools`.
+
+## Durable reminders + the dynamic tool surface
+
+`companion.sql` adds `companion.reminders` (rows — they survive every session) with
+`reminder_set/list/cancel`, the spoken-friendly `companion_bell`, and
+`companion_approve` (verbal approval of awaiting_review items — the seat must read
+the plan aloud and hear an explicit yes first). Delivery is the voice front's job:
+Spin's companion mode polls `companion.reminders_claim_due()` every 10s while a
+client is connected and speaks due reminders unprompted; reminders that come due
+with nobody connected are spoken on the next connect.
+
+Harness seats reach ALL of these — and every FORGED tool, the moment it exists —
+through `substrate_tool`/`substrate_tools` on the MCP surface (the dynamic sql_fn
+dispatcher): read-class tools dispatch freely; write-class only if named in the
+`arc_c_dynamic_write_allowlist` config row, which this pack seeds with exactly
+the three reminder/approval tools. `forge_register` is deliberately not on it.
 
 ## The trust model, honestly
 

@@ -66,6 +66,7 @@ DECLARE
     v_test   jsonb := coalesce(p_args->'test_args', '{}'::jsonb);
     v_plan   text := left(coalesce(p_args->>'plan_excerpt', '(no excerpt given)'), 2000);
     v_wi     uuid  := NULLIF(p_args->>'work_item_id','')::uuid;
+    v_effect text  := lower(btrim(coalesce(p_args->>'effect_class','write_local')));
     v_body_stripped text;
     v_result jsonb;
 BEGIN
@@ -75,6 +76,9 @@ BEGIN
     END IF;
     IF v_sql = '' THEN
         RETURN jsonb_build_object('ok', false, 'error', 'sql required (the approved CREATE FUNCTION)');
+    END IF;
+    IF v_effect NOT IN ('read','write_local') THEN
+        RETURN jsonb_build_object('ok', false, 'error', 'effect_class must be read or write_local');
     END IF;
 
     -- Structure seatbelt (the approval is the wall; this catches accidents):
@@ -105,7 +109,7 @@ BEGIN
     INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, effect_class, active)
     VALUES (v_name, v_desc, v_schema,
             jsonb_build_object('kind','sql_fn','schema','forge','name',v_name),
-            'write_local', true)
+            v_effect, true)
     ON CONFLICT (name) DO UPDATE SET
         description = EXCLUDED.description, args_schema = EXCLUDED.args_schema,
         execute_target = EXCLUDED.execute_target, active = true;
@@ -138,6 +142,7 @@ INSERT INTO stewards.tool_defs (name, description, args_schema, execute_target, 
     '"args_schema":{"type":"object","description":"JSON schema for the tool args, from the plan"},'
     '"test_args":{"type":"object","description":"the plan''s test call args"},'
     '"plan_excerpt":{"type":"string","description":"first lines of the approved plan (the receipt)"},'
+    '"effect_class":{"type":"string","enum":["read","write_local"],"description":"from the plan: read = pure lookup/computation (callable from harness seats freely), write_local = writes rows"},'
     '"work_item_id":{"type":"string"}'
   '}}'::jsonb,
   '{"kind":"sql_fn","schema":"forge","name":"forge_register"}'::jsonb, 'write_local', true )
@@ -188,7 +193,7 @@ VALUES (
         'input_template',
           'You are the FORGE REGISTRAR — deterministic. The plan below was APPROVED by a human exactly as written.' || E'\n\n' ||
           '{{stage_results.plan.output}}' || E'\n\n' ||
-          'Make ONE tool call: `forge_register`, copying the plan''s fields VERBATIM — sql (section 3, the complete statement), tool_name, description (section 1''s sentence), args_schema (section 4), test_args (section 5), plan_excerpt (section 1-2, condensed), and the work item id if you know it. Do NOT modify the SQL in any way; you are a courier, not an editor.' || E'\n\n' ||
+          'Make ONE tool call: `forge_register`, copying the plan''s fields VERBATIM — sql (section 3, the complete statement), tool_name, description (section 1''s sentence), effect_class (the effect declared in section 1: read or write_local), args_schema (section 4), test_args (section 5), plan_excerpt (section 1-2, condensed), and the work item id if you know it. Do NOT modify the SQL in any way; you are a courier, not an editor.' || E'\n\n' ||
           'Reply with EXACTLY one line: "FORGED <tool_name>" on success, or the tool''s error verbatim.')
   ),
   jsonb_build_object('pack','companion','provenance','Ada-SI (MIT) forge loop, rebuilt on substrate organs')
