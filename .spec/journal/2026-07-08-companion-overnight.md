@@ -80,3 +80,24 @@ phase windows can be the first VOICE-forge conversation.
 - D3C policy layer = the forge's growth path past everything-stops-at-the-bell.
 - Voice UX iteration by feel: barge-in vs 5s turns, earcon while the seat thinks,
   Kokoro voice choice — Michael's ears decide.
+
+## Addendum — the morning after (first-contact fixes)
+
+Michael's first real session surfaced three things; all fixed and live by late morning:
+
+1. **The timer that never rang** (transcript-diagnosed, not guessed): the seat had
+   called ScheduleWakeup AND CronCreate — real harness tools, correct cron for
+   10:02 CDT — but a shim seat is a per-turn container destroyed after each reply,
+   so both schedulers died with it. The durable answer: `companion.reminders` rows +
+   a Spin-side poller (`reminders_claim_due()`, atomic) that speaks due reminders
+   unprompted; due-while-away → spoken on next connect. Live-proven end to end.
+2. **#346 closed — `substrate_tool`/`substrate_tools`**: dynamic sql_fn dispatch on
+   both MCP surfaces with per-call session injection. Forged tools are voice-callable
+   the instant they register (moon_phase by voice, proven). The wall: read-class free,
+   write-class only via `arc_c_dynamic_write_allowlist`; forge_register deliberately
+   absent — the bell holds. Along the way the seat met a broken tool schema and
+   REFUSED to fake success aloud ("I'm not going to fake a result here") — the
+   honesty rule holding under real failure was the morning's best moment.
+3. **Verbal gating** (his ratified "gated here or verbally"): `companion_bell` +
+   `companion_approve` with the read-aloud-then-explicit-yes protocol; forge plans
+   now declare effect_class so pure-read tools are immediately seat-dispatchable.
