@@ -306,6 +306,23 @@ extension_sql_file!(
     requires = ["create_v30_workspaces"],
 );
 
+// v32-dispatch-honesty.sql — NEW: three dispatch-honesty re-authors.
+// (1) work_item_dispatch_stage + _safe (last full author v08/31-aliases,
+//     v27/107 for _safe): an item work_items.model_override that names an
+//     unusable CONCRETE model is now REFUSED (clear error naming the
+//     override) instead of being silently swapped by M.2 capability
+//     substitution — the "unstick pin" that never took. (2) enqueue_model_probe
+//     + trigger_resolve_model_probe (v06/M.4): the probe body declares
+//     stream:true so it exercises the SAME streaming path dispatch uses, and
+//     supports_streaming is recorded as an honest streaming signal (#359).
+// (3) reflect_guard_signals (v06): autonomous awaiting_review items no longer
+//     count toward in_flight — v31 parks failures there and parked = waiting
+//     on a human, so a park wave can no longer hold the autonomy pause open.
+extension_sql_file!(
+    "../v32-dispatch-honesty.sql",
+    name = "create_v32_dispatch_honesty",
+    requires = ["create_v31_steward_park"],
+
 // v33-wargame-w2.sql — NEW (war-game W2): make the war-game's forks[] and
 // assumptions[] outputs OPERATIONAL (aborts[] already shipped in v25 §103 +
 // wired into steward_tick by v31). Adds work_items.route_on_override (per-item
