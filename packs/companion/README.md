@@ -22,8 +22,11 @@ choice, gives an installed instance two things:
 
 ```bash
 docker compose exec -T pg psql -U stewards -d stewards < packs/companion/forge.sql
-docker compose exec -T pg psql -U stewards -d stewards < packs/companion/companion.sql  # reminders + bell + verbal approval
-docker compose exec -T pg psql -U stewards -d stewards < packs/companion/smoke.sql   # the oracle
+docker compose exec -T pg psql -U stewards -d stewards < packs/companion/companion.sql        # reminders + bell + verbal approval
+docker compose exec -T pg psql -U stewards -d stewards < packs/companion/steward-tools.sql    # forge_start, work_item_unstick, model_health(_check)
+docker compose exec -T pg psql -U stewards -d stewards < packs/companion/steward-tools-v2.sql # task_start, doc_brief
+docker compose exec -T pg psql -U stewards -d stewards < packs/companion/smoke.sql      # the oracle (forge)
+docker compose exec -T pg psql -U stewards -d stewards < packs/companion/smoke-v2.sql   # the oracle (task_start + doc_brief)
 ```
 
 Voice seat (host side): copy `scripts/loom-companion-home/CLAUDE.md` into
@@ -117,3 +120,26 @@ Field note that motivated the health pair: a model can pass its (non-streaming)
 probe while the provider rejects it on the STREAMING path that pipeline dispatches
 actually use — Console Go did exactly this. `model_capability.supports_streaming`
 records the evidence; a streaming-aware probe is the filed follow-up.
+
+## Jarvis wave — start real work and read docs aloud, by voice (2026-07-09)
+
+`steward-tools-v2.sql` (apply after `steward-tools.sql`) adds two more verbs, ratified
+from Michael's "Jarvis list":
+
+- **`task_start`** — the generalization of `forge_start` to ANY registered pipeline
+  family, not just `forge`. Refuses a `pipeline_family` that doesn't exist in
+  `stewards.pipelines` — and lists the real ones — and refuses a wish under 10 or over
+  4000 chars, or a `slug` already in use. Rate-limited 5/hour across every family (the
+  count keys off a marker this function stamps into `input`, since `work_items` carries
+  no created-via column). Allowlisted, but **not safe by construction the way `forge`
+  is** — most pipelines run straight through to completion with no further approval
+  bell (a `code-pr` item, say, ends at an opened draft PR). The safety net is
+  procedural: the tool description requires the calling seat to confirm the pipeline
+  family AND the wish wording aloud and hear an explicit yes before ever calling it.
+- **`doc_brief`** (read) — a doc's shape (title, kind, updated_at, word_count) plus its
+  body trimmed to ~1200 chars at a paragraph boundary, by slug or id. Sized for a
+  spoken summary, never a verbatim read of the whole doc. A miss returns the 3 nearest
+  slugs by `ILIKE` substring match (this codebase deliberately carries no pg_trgm — see
+  `extension/v02-governance.sql` and `v22-route-intake.sql` — so this is substring
+  containment, not a similarity score: a truncated or mis-heard slug guess will find
+  its target; a same-length typo may not).
