@@ -29,6 +29,31 @@ docker compose exec -T pg psql -U stewards -d stewards < packs/companion/smoke.s
 docker compose exec -T pg psql -U stewards -d stewards < packs/companion/smoke-v2.sql   # the oracle (task_start + doc_brief)
 ```
 
+## Install as an extension (D2A, #319)
+
+The same three files ship, unedited, as a real Postgres extension —
+`CREATE EXTENSION` instead of `psql -f`, with real versioning and a clean
+uninstall. This is the proof that packs can be extensions (`extension/`
+subdirectory; plan: `.spec/proposals/d2a-pack-extension-battle-plan.md`):
+
+```sql
+CREATE EXTENSION IF NOT EXISTS pg_ai_stewards CASCADE;   -- the core, first
+CREATE EXTENSION stewards_companion;                     -- fresh -> 0.2.0
+```
+
+`--0.1.0.sql` = forge + companion; `--0.1.0--0.2.0.sql` = + steward-tools;
+`--0.2.0.sql` lands a fresh install at 0.2.0 directly. The extension scripts
+are the pack SQL **verbatim** plus a delimited PACKAGING footer (config_dump
+so reminders survive dump/restore, and the uninstall helper). Details, the
+in-image ship recipe, and the full oracle: `packs/companion/extension/README.md`.
+
+**Uninstall (extension path), three lines:** `SELECT companion.companion_uninstall();`
+(shrinks the Arc-C write allowlist back, deactivates this pack's tool_defs —
+never deletes) → `DROP EXTENSION stewards_companion;` (**refuses while forged
+tools exist** — a feature) → `DROP EXTENSION stewards_companion CASCADE;` (the
+explicit choice to destroy forged functions too). Kept regardless: the forge
+pipeline row, the companion intent row, and the deactivated tool_defs.
+
 Voice seat (host side): copy `scripts/loom-companion-home/CLAUDE.md` into
 `~/.stewards/companion-claude-home/` next to a `stewards-mcp.json` (your Arc-C HTTP
 MCP endpoint + bearer), credentials, and `settings.json` with `"effortLevel": "low"`
