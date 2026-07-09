@@ -6145,4 +6145,165 @@ BEGIN
 END
 $vs111$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v31 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park) is sound =='
+-- =====================================================================
+-- v32 §1 — dispatch override-honesty (FIX 1: the unstick-pin bug)
+-- =====================================================================
+DO $vs112$
+DECLARE
+    v_intent     uuid;
+    v_wi_sub     uuid;
+    v_wi_ov_bad  uuid;
+    v_wi_ov_good uuid;
+    v_model      text;
+    v_status     text;
+    v_error      text;
+    v_raised     boolean;
+BEGIN
+    INSERT INTO stewards.intents (slug, purpose) VALUES ('default','virgin smoke')
+    ON CONFLICT (slug) DO NOTHING;
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug='default';
+
+    -- life: a provider with one usable + one unusable model, and a catalog
+    -- default (so M.2 substitution has somewhere to land for the control).
+    PERFORM stewards.config_set('default_provider', to_jsonb('vs112_prov'::text), NULL);
+    PERFORM stewards.config_set('default_model',    to_jsonb('vs112-good'::text), NULL);
+    INSERT INTO stewards.model_capability (provider, model, usable) VALUES
+        ('vs112_prov','vs112-good', true),
+        ('vs112_prov','vs112-bad',  false)
+    ON CONFLICT (provider, model) DO UPDATE SET usable=EXCLUDED.usable;
+
+    INSERT INTO stewards.pipelines (family, description, stages, sabbath_enabled, atonement_enabled,
+        file_destination_template, file_content_jsonpath, maturity_ladder, auto_materialize_on_verified, metadata)
+    VALUES ('vs112-pipe','virgin-smoke override-honesty fixture',
+      '[{"name":"work","next":null,"model":"vs112-bad","provider":"vs112_prov","agent_family":"smoke","auto_advance":false,"input_template":"{{input.binding_question}}"}]'::jsonb,
+      false,false,NULL,NULL,'["raw","verified"]'::jsonb,false,'{}'::jsonb)
+    ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages;
+
+    -- (A) CONTROL — stage names the unusable model, NO override → M.2 still
+    --     SUBSTITUTES exactly as v08 did (this behavior must be preserved).
+    v_wi_sub := stewards.work_item_create('vs112-pipe','{"binding_question":"hi"}'::jsonb,'vs112-sub','tester',NULL,v_intent);
+    PERFORM stewards.work_item_dispatch_stage(v_wi_sub);
+    SELECT payload->>'requested_model' INTO v_model FROM stewards.work_queue
+     WHERE kind='chat' AND payload->>'_work_item_id' = v_wi_sub::text;
+    ASSERT v_model = 'vs112-good',
+        format('112A: a STAGE-configured unusable model must still substitute (M.2 unchanged), got %s', v_model);
+    ASSERT EXISTS (SELECT 1 FROM stewards.model_substitutions
+                    WHERE pipeline_family='vs112-pipe' AND reason LIKE 'capability:%'),
+        '112A: the non-override substitution must still be logged with a reason';
+
+    -- (B) THE FIX — model_override PINS the unusable model → dispatch REFUSED,
+    --     not silently swapped. The unwrapped fn RAISES the override-honesty
+    --     error and enqueues NOTHING.
+    v_wi_ov_bad := stewards.work_item_create('vs112-pipe','{"binding_question":"hi"}'::jsonb,'vs112-ovbad','tester',NULL,v_intent);
+    UPDATE stewards.work_items SET model_override='vs112-bad', provider_override='vs112_prov' WHERE id=v_wi_ov_bad;
+    v_raised := false;
+    BEGIN
+        PERFORM stewards.work_item_dispatch_stage(v_wi_ov_bad);
+    EXCEPTION WHEN OTHERS THEN
+        v_raised := (SQLERRM LIKE '%override names an unusable model%');
+    END;
+    ASSERT v_raised,
+        '112B: a model_override naming an unusable model must RAISE the override-honesty error, not substitute';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.work_queue WHERE payload->>'_work_item_id'=v_wi_ov_bad::text),
+        '112B: the refused override must enqueue NO work_queue row (nothing dispatched under a lie)';
+
+    -- (B') the _safe wrapper PARKS the same refusal at awaiting_review (bell)
+    UPDATE stewards.work_items SET status='pending' WHERE id=v_wi_ov_bad;
+    PERFORM stewards.work_item_dispatch_stage_safe(v_wi_ov_bad);
+    SELECT status, error INTO v_status, v_error FROM stewards.work_items WHERE id=v_wi_ov_bad;
+    ASSERT v_status='awaiting_review',
+        format('112B'': _safe must PARK the unusable-override refusal at awaiting_review, got %s', v_status);
+    ASSERT v_error LIKE '%pinned model unusable%',
+        format('112B'': the parked error must name the pin, got %s', v_error);
+
+    -- (C) HONEST POSITIVE — a USABLE model_override is honored verbatim (no swap)
+    v_wi_ov_good := stewards.work_item_create('vs112-pipe','{"binding_question":"hi"}'::jsonb,'vs112-ovgood','tester',NULL,v_intent);
+    UPDATE stewards.work_items SET model_override='vs112-good', provider_override='vs112_prov' WHERE id=v_wi_ov_good;
+    PERFORM stewards.work_item_dispatch_stage(v_wi_ov_good);
+    SELECT payload->>'requested_model' INTO v_model FROM stewards.work_queue
+     WHERE kind='chat' AND payload->>'_work_item_id'=v_wi_ov_good::text;
+    ASSERT v_model='vs112-good',
+        format('112C: a USABLE model_override must be honored verbatim, got %s', v_model);
+
+    -- teardown: restore the lifeless install for later blocks
+    DELETE FROM stewards.work_queue WHERE payload->>'_work_item_id' IN (v_wi_sub::text, v_wi_ov_good::text);
+    DELETE FROM stewards.model_substitutions WHERE pipeline_family='vs112-pipe';
+    DELETE FROM stewards.work_items WHERE id IN (v_wi_sub, v_wi_ov_bad, v_wi_ov_good);
+    DELETE FROM stewards.pipelines WHERE family='vs112-pipe';
+    DELETE FROM stewards.model_capability WHERE provider='vs112_prov';
+    DELETE FROM stewards.config WHERE key IN ('default_provider','default_model');
+    ASSERT stewards.catalog_default_provider() IS NULL,
+        '112: teardown must restore the lifeless default';
+
+    RAISE NOTICE 'OK 112: dispatch override-honesty (v32 FIX 1) — a STAGE-configured unusable model still substitutes + logs (M.2 unchanged), but an item model_override that PINS an unusable concrete model is REFUSED with a clear error naming the override (unwrapped fn RAISES + enqueues nothing; _safe PARKS at awaiting_review), and a USABLE model_override is honored verbatim — the "unstick pin" is now real (silent substitution of a pinned model, found live 2026-07-08, cannot recur)';
+END
+$vs112$;
+
+-- =====================================================================
+-- v32 §2 — model probes exercise the streaming path they claim (FIX 2 / #359)
+-- =====================================================================
+DO $vs113$
+DECLARE
+    v_wq_body  jsonb;
+    v_wq_done  bigint;
+    v_wq_err   bigint;
+    v_sess     text;
+    v_usable   boolean;
+    v_stream   boolean;
+BEGIN
+    -- (A) the probe BODY now declares stream:true + stream_options — the SAME
+    --     shape a real dispatch body carries. #359: the probe used to run a
+    --     non-streaming completion (per any body-respecting executor), so a
+    --     model whose streaming path a provider rejects false-passed.
+    v_wq_err := stewards.enqueue_model_probe('vs113_prov','vs113-model');
+    SELECT payload->'body' INTO v_wq_body FROM stewards.work_queue WHERE id=v_wq_err;
+    ASSERT (v_wq_body->>'stream')::boolean IS TRUE,
+        '113A: the probe body must declare stream:true (exercise the streaming path dispatch uses)';
+    ASSERT (v_wq_body->'stream_options'->>'include_usage')::boolean IS TRUE,
+        '113A: the probe body must set stream_options.include_usage (matches dispatch)';
+    ASSERT (v_wq_body->>'max_tokens')::int <= 128,
+        format('113A: the probe must stay tiny (max_tokens small), got %s', v_wq_body->>'max_tokens');
+
+    -- (B) STREAMING REJECTED → unusable AND supports_streaming=false. Simulate
+    --     the provider streaming an error event (the "Console Go waves"
+    --     rejection): flip the probe row to error (the vs108-proven safe flip).
+    SELECT payload->>'session_id' INTO v_sess FROM stewards.work_queue WHERE id=v_wq_err;
+    UPDATE stewards.work_queue
+       SET status='error',
+           error='sse error event: model may not exist or you may not have access',
+           done_at=now()
+     WHERE id=v_wq_err;
+    SELECT usable, supports_streaming INTO v_usable, v_stream
+      FROM stewards.model_capability WHERE provider='vs113_prov' AND model='vs113-model';
+    ASSERT v_usable IS FALSE,
+        '113B: a probe whose STREAMING path errors must record usable=false';
+    ASSERT v_stream IS FALSE,
+        '113B: a streaming rejection must record supports_streaming=false (the honest signal)';
+
+    -- (C) STREAMING SUCCEEDS → usable AND supports_streaming=true. Insert the
+    --     streamed assistant reply, then flip to done (probe rows carry no
+    --     _work_item_id / _engram_extraction_target_msg_id, so only the resolve
+    --     trigger fires — the completion/advance/engram cascades all skip).
+    v_wq_done := stewards.enqueue_model_probe('vs113_prov2','vs113-ok');
+    SELECT payload->>'session_id' INTO v_sess FROM stewards.work_queue WHERE id=v_wq_done;
+    INSERT INTO stewards.messages (session_id, role, content, finish_reason)
+    VALUES (v_sess, 'assistant', 'I am vs113-ok, good at streaming smoke fixtures.', 'stop');
+    UPDATE stewards.work_queue SET status='done', done_at=now() WHERE id=v_wq_done;
+    SELECT usable, supports_streaming INTO v_usable, v_stream
+      FROM stewards.model_capability WHERE provider='vs113_prov2' AND model='vs113-ok';
+    ASSERT v_usable IS TRUE,
+        '113C: a probe that streams a usable reply must record usable=true';
+    ASSERT v_stream IS TRUE,
+        '113C: a successful streaming probe must record supports_streaming=true';
+
+    -- teardown
+    DELETE FROM stewards.messages WHERE session_id LIKE 'probe--vs113%';
+    DELETE FROM stewards.work_queue WHERE id IN (v_wq_err, v_wq_done);
+    DELETE FROM stewards.sessions WHERE id LIKE 'probe--vs113%';
+    DELETE FROM stewards.model_capability WHERE provider IN ('vs113_prov','vs113_prov2');
+
+    RAISE NOTICE 'OK 113: model-probe streaming honesty (v32 FIX 2 / #359) — the probe body declares stream:true + stream_options (the same streaming path dispatch uses) and stays tiny; a probe whose streaming path is REJECTED records usable=false + supports_streaming=false (the "Console Go waves" false-pass cannot recur), and a probe that streams a usable reply records usable=true + supports_streaming=true — supports_streaming is now an honestly-measured streaming signal, not a copy of a non-streaming verdict';
+END
+$vs113$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v32 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty) is sound =='
