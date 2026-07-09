@@ -144,13 +144,15 @@ DECLARE
     r   record;
 BEGIN
     FOR r IN
-        SELECT DISTINCT c.provider, c.model
+        SELECT c.provider, c.model
           FROM stewards.model_catalog c
          WHERE c.usable
             OR EXISTS (SELECT 1 FROM stewards.model_aliases a
                         WHERE a.provider=c.provider AND a.provider_model=c.model AND a.enabled)
             OR (p_args->>'include_disabled')::boolean IS TRUE
-         ORDER BY c.provider, c.model
+         -- least-recently-probed first, so repeated calls SWEEP the fleet
+         -- instead of re-probing the same alphabetical 25
+         ORDER BY c.last_probed_at ASC NULLS FIRST, c.provider, c.model
          LIMIT 25
     LOOP
         PERFORM stewards.enqueue_model_probe(r.provider, r.model);
