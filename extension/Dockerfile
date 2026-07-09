@@ -89,6 +89,7 @@ COPY v29-normalize.sql ./
 COPY v30-workspaces.sql ./
 COPY v31-steward-park.sql ./
 COPY v32-dispatch-honesty.sql ./
+COPY v33-wargame-w2.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
