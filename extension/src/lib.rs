@@ -314,13 +314,16 @@ extension_sql_file!(
 // call) to materialize on release, and re-authors work_item_advance (v09 body
 // +1 CASE) to read the per-item override before the shared pipeline's route_on.
 //
-// requires = create_v31_steward_park. A sibling branch (feat/dispatch-honesty)
-// owns v32; when both land, bump this to create_v32_* so the linear volume
-// chain stays linear. (v34+ is reserved for other workers — do not claim it.)
+// requires = create_v32_dispatch_honesty (stitched 2026-07-09 — bumped from
+// create_v31_steward_park now that the sibling feat/dispatch-honesty branch's
+// v32 landed on top of v31). This branch will NOT build standalone until
+// v32-dispatch-honesty.sql exists on disk (merge feat/dispatch-honesty first,
+// then this branch on top) — that keeps the volume chain linear:
+// v31 -> v32 -> v33. (v34+ is reserved for other workers — do not claim it.)
 extension_sql_file!(
     "../v33-wargame-w2.sql",
     name = "create_v33_wargame_w2",
-    requires = ["create_v31_steward_park"],
+    requires = ["create_v32_dispatch_honesty"],
 );
 
 // ---------------------------------------------------------------------------
