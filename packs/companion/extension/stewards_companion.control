@@ -1,0 +1,44 @@
+# packs/companion/extension/stewards_companion.control
+#
+# stewards_companion — the companion pack (forge.sql + companion.sql +
+# steward-tools.sql) packaged as a real Postgres extension. Proof subject
+# for D2A (#319): pure SQL, no pgrx, no native code. See the battle plan:
+# .spec/proposals/d2a-pack-extension-battle-plan.md
+#
+# Two schemas (forge, companion) are created BY THE SCRIPT itself — no
+# `schema =` line here on purpose (mechanic #2 of the battle plan: a
+# single-schema `schema =` directive can't express that).
+comment = 'stewards_companion: voice companion pack (forge, reminders, bell, steward-tools) for pg_ai_stewards'
+default_version = '0.2.0'
+relocatable = false
+requires = 'pg_ai_stewards'
+
+# ---------------------------------------------------------------------
+# DROP-survivors posture — TODO(window), battle plan mechanic #3.
+# ---------------------------------------------------------------------
+# -- TODO(window): objects created by CREATE EXTENSION belong to the
+#    extension and disappear on DROP EXTENSION, but several things this
+#    pack creates are DATA, not objects, and won't go with it unless the
+#    script pairs them with an explicit uninstall hook (which plain SQL
+#    extensions don't get automatically — there is no extension-relative
+#    equivalent of uninstall.sql). Decide, per row-kind, before shipping:
+#      - tool_defs rows (forge_register, reminder_set/list/cancel,
+#        companion_bell, companion_approve, forge_start,
+#        work_item_unstick, model_health, models_health_check) — these
+#        are INSERTs the script runs, not schema objects the extension
+#        owns. Leave-and-deactivate on DROP? Delete? Untouched today.
+#      - forge.forged_tools rows + the forge.<name> functions they
+#        describe — companion pack's uninstall.sql (loose-SQL path)
+#        deliberately KEEPS these as operator data. Does DROP EXTENSION
+#        need the same posture, and can it even express "keep this row
+#        but the schema it lives in is being dropped"?
+#      - the companion intent row and the forge pipelines row — leave
+#        (history/receipts reference them) or drop with the extension?
+#      - stewards.config 'arc_c_dynamic_write_allowlist' — DROP EXTENSION
+#        does not shrink it back; the widened allowlist is
+#        security-relevant and stays widened unless something acts.
+#        Candidates: an event trigger on sql_drop, or (uninstall.sql's
+#        existing precedent) a documented manual step + a
+#        `companion_uninstall()` helper the script installs. Not decided.
+#    Whatever is decided must become an executable assertion in
+#    test-extension.sh stage 6 (today a stub — see that file).
