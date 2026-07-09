@@ -95,3 +95,25 @@ The plan→approve→verify→register loop is the good idea in
 substrate's own organs: Ada's chat approval became the durable bell; Ada's
 throwaway-venv verify became a Postgres transaction; Ada's hot importlib reload
 became `tool_defs` rows, which were always hot.
+
+## Steward tools — converse with work, by voice (2026-07-08)
+
+`steward-tools.sql` (apply after `companion.sql`) adds the verbs the first real
+voice session was missing:
+
+- **`forge_start`** — speak a wish, get a plan on the bell. Allowlisted because it
+  is safe by construction: the forge registrar is bell-gated, so voice can only ever
+  produce a PLAN awaiting approval. Rate-limited 5/hour.
+- **`work_item_unstick`** — re-dispatch ONE failed/parked item's current stage,
+  optionally pinning a validated model (alias or provider/model). Refuses anything
+  not failed/awaiting_review. Verbal gate: error read aloud + explicit yes.
+- **`model_health`** (read) — per-model report: usable flag, last probe, alias
+  membership, recent failures naming it.
+- **`models_health_check`** — bounded (≤25) probes through the substrate's own
+  dispatch path; `include_disabled=true` re-tests operator-toggled-off models.
+  Reports only — it never re-enables anything.
+
+Field note that motivated the health pair: a model can pass its (non-streaming)
+probe while the provider rejects it on the STREAMING path that pipeline dispatches
+actually use — Console Go did exactly this. `model_capability.supports_streaming`
+records the evidence; a streaming-aware probe is the filed follow-up.
