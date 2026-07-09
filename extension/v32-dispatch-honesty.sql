@@ -546,9 +546,94 @@ COMMENT ON FUNCTION stewards.trigger_resolve_model_probe() IS
 
 
 -- =====================================================================
--- (§3 — FIX 3: reflect_guard_signals in_flight fix — appended in its own
---  commit; Michael's ratify pending. See the PR body.)
+-- §3 — FIX 3: parked failures don't hold the autonomy pause open.
 -- =====================================================================
+-- (Michael's ratify pending — shipped as its own commit; see the PR body.)
+-- v31 parks tick-errored failures INTO awaiting_review. reflect_guard_signals
+-- counted autonomous awaiting_review items toward in_flight, so a park wave
+-- could push in_flight past the runaway threshold and hold autonomy_paused
+-- open on work that is, by definition, waiting on a human. Re-author v06's
+-- function verbatim EXCEPT the in_flight count: only 'in_progress' now counts.
+-- reflect_watchman_tick + reflect_status both read this, so the fix is total.
+CREATE OR REPLACE FUNCTION stewards.reflect_guard_signals()
+RETURNS jsonb LANGUAGE plpgsql STABLE AS $$
+DECLARE
+    v_enabled    boolean := stewards.config_get_text('reflect_guard_enabled','true') = 'true';
+    v_max_inf    int     := COALESCE(NULLIF(stewards.config_get_text('reflect_guard_max_in_flight','8'),'')::int, 8);
+    v_max_prop   int     := COALESCE(NULLIF(stewards.config_get_text('reflect_guard_max_proposals_pending','50'),'')::int, 50);
+    v_max_fail   int     := COALESCE(NULLIF(stewards.config_get_text('reflect_guard_max_consecutive_failures','5'),'')::int, 5);
+    v_win_hours  int     := COALESCE(NULLIF(stewards.config_get_text('reflect_guard_spend_window_hours','24'),'')::int, 24);
+    v_cap_micro  bigint  := COALESCE(NULLIF(stewards.config_get_text('reflect_guard_spend_cap_micro','10000000'),'')::bigint, 10000000);
+    v_in_flight  int;
+    v_proposals  int;
+    v_consec     int;
+    v_spend      bigint;
+    v_breach     text := NULL;
+BEGIN
+    -- in flight: ACTIVELY-running autonomous work only. v32 FIX 3: awaiting_review
+    -- no longer counts — v31 parks tick-errored failures there, and a parked item
+    -- is by definition waiting on a HUMAN, not runaway work. Counting it inflated
+    -- in_flight and let a park wave hold the autonomy pause open (the runaway
+    -- brake is meant to catch work piling up ACTIVE, not stalled-for-review).
+    SELECT count(*) INTO v_in_flight FROM stewards.work_items
+     WHERE actor IN ('scheduler','reflect-steward','subagent','persona-request')
+       AND status = 'in_progress';
+
+    -- un-triaged proposals (mirrors reflect_status.proposals_pending).
+    SELECT count(*) INTO v_proposals FROM stewards.work_items w
+     WHERE w.origin='agent_planning' AND w.status='pending'
+       AND NOT EXISTS (SELECT 1 FROM stewards.reflect_approvals a WHERE a.work_item_id=w.id);
+
+    -- leading consecutive failures among recent autonomous terminal runs.
+    SELECT COALESCE(
+        (SELECT min(rn) - 1
+           FROM (SELECT status, row_number() OVER (ORDER BY updated_at DESC) rn
+                   FROM stewards.work_items
+                  WHERE actor IN ('scheduler','reflect-steward','subagent','persona-request')
+                    AND status IN ('completed','failed','cancelled')) t
+          WHERE status <> 'failed'),
+        (SELECT count(*) FROM stewards.work_items
+           WHERE actor IN ('scheduler','reflect-steward','subagent','persona-request')
+             AND status IN ('completed','failed','cancelled'))
+    ) INTO v_consec;
+
+    -- autonomous spend in the window (cost_events on autonomous work_items).
+    SELECT COALESCE(sum(ce.micro_dollars),0) INTO v_spend
+      FROM stewards.cost_events ce
+      JOIN stewards.work_items w ON w.id = ce.work_item_id
+     WHERE ce.at > now() - make_interval(hours => greatest(v_win_hours,1))
+       AND w.actor IN ('scheduler','reflect-steward','subagent','persona-request');
+
+    -- first breach wins (the reason handed to reflect_pause).
+    IF v_in_flight >= v_max_inf THEN
+        v_breach := format('in_flight %s >= %s (autonomous work piling up)', v_in_flight, v_max_inf);
+    ELSIF v_consec >= v_max_fail THEN
+        v_breach := format('%s consecutive autonomous failures >= %s (loop broken)', v_consec, v_max_fail);
+    ELSIF v_spend >= v_cap_micro THEN
+        v_breach := format('autonomous spend $%s in %sh >= cap $%s',
+            round(v_spend/1000000.0, 2), v_win_hours, round(v_cap_micro/1000000.0, 2));
+    ELSIF v_proposals >= v_max_prop THEN
+        v_breach := format('%s un-triaged proposals >= %s (proposing faster than triage)', v_proposals, v_max_prop);
+    END IF;
+
+    RETURN jsonb_build_object(
+        'enabled', v_enabled,
+        'checked_at', to_char(now(),'MM-DD HH24:MI'),
+        'in_flight',            jsonb_build_object('value', v_in_flight, 'max', v_max_inf),
+        'consecutive_failures', jsonb_build_object('value', v_consec,    'max', v_max_fail),
+        'spend_window',         jsonb_build_object('usd', round(v_spend/1000000.0, 2), 'cap_usd', round(v_cap_micro/1000000.0, 2), 'hours', v_win_hours),
+        'proposals_pending',    jsonb_build_object('value', v_proposals, 'max', v_max_prop),
+        'would_trip', v_breach IS NOT NULL,
+        'breach', v_breach
+    );
+END $$;
+COMMENT ON FUNCTION stewards.reflect_guard_signals() IS
+'reflect-watchman (v32 FIX 3): the current runaway signals (in_flight = ACTIVELY-running autonomous work only — awaiting_review no longer counts, since v31 parks failures there and a parked item waits on a human; consecutive failures; windowed autonomous spend; un-triaged proposals) vs their thresholds, plus would_trip/breach. Read-only — the same logic the tick acts on. Surfaced in reflect_status.';
+
+-- Refresh the threshold's config description to match the new semantics
+-- (in_progress only). config_set is idempotent (later description wins).
+SELECT stewards.config_set('reflect_guard_max_in_flight', '8'::jsonb,
+    'Guard trips when ACTIVELY-running autonomous work (actor scheduler/reflect-steward/subagent/persona-request at status=in_progress) reaches this. v32 FIX 3: awaiting_review no longer counts — v31 parks tick-errored failures there, and parked = waiting on a human, not runaway work. The drain caps reflect proposals at reflect_max_concurrent; this catches actively-piling-up autonomous work (schedules + spawned children).');
 
 -- =====================================================================
 -- End of v32-dispatch-honesty.sql

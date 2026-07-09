@@ -6306,4 +6306,68 @@ BEGIN
 END
 $vs113$;
 
+-- =====================================================================
+-- v32 §3 — parked failures don't hold the autonomy pause open (FIX 3)
+-- =====================================================================
+DO $vs114$
+DECLARE
+    v_intent   uuid;
+    v_inflight int;
+    v_trip     boolean;
+    i          int;
+BEGIN
+    INSERT INTO stewards.intents (slug, purpose) VALUES ('default','virgin smoke')
+    ON CONFLICT (slug) DO NOTHING;
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug='default';
+
+    INSERT INTO stewards.pipelines (family, description, stages, sabbath_enabled, atonement_enabled,
+        file_destination_template, file_content_jsonpath, maturity_ladder, auto_materialize_on_verified, metadata)
+    VALUES ('vs114-pipe','virgin-smoke guard fixture','[{"name":"work","next":null}]'::jsonb,
+      false,false,NULL,NULL,'["raw","verified"]'::jsonb,false,'{}'::jsonb)
+    ON CONFLICT (family) DO NOTHING;
+
+    -- a v31 park wave: 6 PARKED (awaiting_review) autonomous items ...
+    FOR i IN 1..6 LOOP
+        INSERT INTO stewards.work_items (pipeline_family, current_stage, status, actor, intent_id)
+        VALUES ('vs114-pipe','work','awaiting_review','scheduler', v_intent);
+    END LOOP;
+    -- ... plus 3 genuinely ACTIVE autonomous items.
+    FOR i IN 1..3 LOOP
+        INSERT INTO stewards.work_items (pipeline_family, current_stage, status, actor, intent_id)
+        VALUES ('vs114-pipe','work','in_progress','scheduler', v_intent);
+    END LOOP;
+
+    -- v32 FIX 3: in_flight counts in_progress ONLY (3), not 3+6=9.
+    v_inflight := (stewards.reflect_guard_signals()->'in_flight'->>'value')::int;
+    ASSERT v_inflight = 3,
+        format('114: in_flight must count in_progress only (3), not the 6 parked awaiting_review items (got %s)', v_inflight);
+
+    -- the pause-hold scenario: with max_in_flight=5, the 6-item park wave must
+    -- NOT trip the guard. Before FIX 3, 9 >= 5 tripped and held autonomy_paused
+    -- open on work that was waiting on a human.
+    PERFORM stewards.config_set('reflect_guard_max_in_flight','5'::jsonb, NULL);
+    v_trip := (stewards.reflect_guard_signals()->>'would_trip')::boolean;
+    ASSERT v_trip IS FALSE,
+        '114: a park wave (6 awaiting_review + 3 in_progress, max 5) must NOT trip the in_flight guard once parked items are excluded';
+
+    -- control: 5 more in_progress (8 active >= 5) DOES trip — the runaway brake
+    -- still catches genuinely-piling-up ACTIVE autonomous work.
+    FOR i IN 1..5 LOOP
+        INSERT INTO stewards.work_items (pipeline_family, current_stage, status, actor, intent_id)
+        VALUES ('vs114-pipe','work','in_progress','scheduler', v_intent);
+    END LOOP;
+    v_trip := (stewards.reflect_guard_signals()->>'would_trip')::boolean;
+    ASSERT v_trip IS TRUE,
+        '114: 8 in_progress >= max 5 must still trip the guard (the runaway brake is intact)';
+
+    -- teardown: drop the fixture, restore the v32-shipped guard threshold config.
+    DELETE FROM stewards.work_items WHERE pipeline_family='vs114-pipe';
+    DELETE FROM stewards.pipelines WHERE family='vs114-pipe';
+    PERFORM stewards.config_set('reflect_guard_max_in_flight', '8'::jsonb,
+        'Guard trips when ACTIVELY-running autonomous work (actor scheduler/reflect-steward/subagent/persona-request at status=in_progress) reaches this. v32 FIX 3: awaiting_review no longer counts — v31 parks tick-errored failures there, and parked = waiting on a human, not runaway work. The drain caps reflect proposals at reflect_max_concurrent; this catches actively-piling-up autonomous work (schedules + spawned children).');
+
+    RAISE NOTICE 'OK 114: reflect-guard park-exclusion (v32 FIX 3) — reflect_guard_signals counts only ACTIVELY-running (in_progress) autonomous work as in_flight; a v31 park wave (6 awaiting_review + 3 in_progress) reports in_flight=3 and does NOT trip the guard at max 5 (parked = waiting on a human, no longer holds the autonomy pause open), while 8 genuinely-active items still DO trip it — the runaway brake is intact but no longer conflated with the review backlog';
+END
+$vs114$;
+
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v32 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty) is sound =='
