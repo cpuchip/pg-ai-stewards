@@ -1,4 +1,4 @@
-\echo Use "CREATE EXTENSION stewards_companion" to load this file. \quit
+\echo Use "ALTER EXTENSION stewards_companion UPDATE" to load this file. \quit
 -- >>> from packs/companion/steward-tools.sql
 -- =====================================================================
 -- packs/companion/steward-tools.sql — converse with work, by voice
@@ -197,3 +197,57 @@ ON CONFLICT (name) DO UPDATE SET
 SELECT stewards.config_set('arc_c_dynamic_write_allowlist',
         '["reminder_set","reminder_cancel","companion_approve","forge_start","work_item_unstick","models_health_check"]'::jsonb,
         'companion pack: write-class sql_fn tools dispatchable via substrate_tool from harness seats (Arc-C). Widened 2026-07-08 (voice-ratified): forge_start (bell-gated by construction), work_item_unstick (failed/parked only, verbal gate), models_health_check (bounded probes). forge_register stays absent.');
+-- ===== PACKAGING (extension-only) =====
+-- These statements exist ONLY in the extension build, never in the loose-SQL
+-- pack sources (packs/companion/*.sql). verify-verbatim.sh strips everything
+-- between this marker and the END marker before its byte-for-byte compare.
+-- Rationale: .spec/proposals/d2a-pack-extension-battle-plan.md (mechanic #3)
+-- and stewards_companion.control's DROP-survivors posture block.
+
+-- companion.companion_uninstall() — THE documented uninstall step. Call it
+-- BEFORE `DROP EXTENSION stewards_companion`. It (1) SHRINKS the Arc-C
+-- dynamic-write allowlist back, removing only THIS pack's write-tool names
+-- (any operator/other-pack additions stay), and (2) DEACTIVATES this pack's
+-- own tool_defs rows (active=false, never deleted — a re-install's upsert
+-- reactivates them). It deliberately does NOT touch forged tools, the forge
+-- pipeline row, or the companion intent row. See the control-file posture.
+CREATE OR REPLACE FUNCTION companion.companion_uninstall() RETURNS jsonb
+LANGUAGE plpgsql AS $uninstall$
+DECLARE
+    v_write_names text[] := ARRAY['reminder_set','reminder_cancel','companion_approve','forge_start','work_item_unstick','models_health_check'];
+    v_tool_names  text[] := ARRAY['forge_register','reminder_set','reminder_list','reminder_cancel','companion_bell','companion_approve','forge_start','work_item_unstick','model_health','models_health_check'];
+    v_allow jsonb;
+    v_kept  jsonb;
+    v_deact int := 0;
+BEGIN
+    -- 1. shrink the allowlist, preserving the order of the names we keep.
+    v_allow := stewards.config_get('arc_c_dynamic_write_allowlist');
+    IF v_allow IS NOT NULL AND jsonb_typeof(v_allow) = 'array' THEN
+        SELECT coalesce(jsonb_agg(e ORDER BY ord), '[]'::jsonb) INTO v_kept
+          FROM jsonb_array_elements_text(v_allow) WITH ORDINALITY AS t(e, ord)
+         WHERE e <> ALL (v_write_names);
+        PERFORM stewards.config_set('arc_c_dynamic_write_allowlist', v_kept,
+            'companion pack uninstall: this pack''s write-tool names removed from the Arc-C allowlist.');
+    END IF;
+
+    -- 2. deactivate (never delete) this pack's own tool_defs rows. Forged
+    --    tools live in the forge schema too but are NOT in this list, so
+    --    they are untouched — that is the survivors posture.
+    UPDATE stewards.tool_defs SET active = false WHERE name = ANY (v_tool_names);
+    GET DIAGNOSTICS v_deact = ROW_COUNT;
+
+    RETURN jsonb_build_object('ok', true,
+        'allowlist_after', coalesce(v_kept, v_allow, '[]'::jsonb),
+        'tool_defs_deactivated', v_deact,
+        'kept', jsonb_build_object(
+            'forge_pipeline',   'kept (ledger history references it)',
+            'companion_intent', 'kept (work_items reference it)',
+            'forged_tools',     'kept (operator data — DROP EXTENSION refuses while they exist; CASCADE to destroy)'),
+        'note', 'companion uninstall step complete. Now: DROP EXTENSION stewards_companion; '
+             || 'it REFUSES while forged tools exist (that is the guard) — DROP EXTENSION ... CASCADE '
+             || 'is the explicit choice to destroy forged functions too.');
+END;
+$uninstall$;
+COMMENT ON FUNCTION companion.companion_uninstall() IS
+'companion pack (extension build only): THE documented uninstall step — call BEFORE DROP EXTENSION. Shrinks the Arc-C dynamic-write allowlist back (removes only this pack''s write-tool names) and deactivates this pack''s own tool_defs rows (active=false, never deleted; re-install reactivates). Leaves forged tools, the forge pipeline row, and the companion intent row untouched.';
+-- ===== END PACKAGING =====

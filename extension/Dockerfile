@@ -106,3 +106,24 @@ FROM pgvector/pgvector:pg18
 # directly at / (the .so under /usr/lib/postgresql/18/lib/, control +
 # generated SQL under /usr/share/postgresql/18/extension/).
 COPY --from=builder /out/ /
+
+# ---- D2A (#319): ship the companion pack as an installable extension ----
+# The pack's control + versioned SQL land in the extension sharedir so that
+# `CREATE EXTENSION stewards_companion` works out of the box. The pack files
+# live at packs/companion/extension/ — OUTSIDE this Dockerfile's build
+# context (extension/) — so the ship recipe STAGES them into the context
+# first (see packs/companion/extension/README.md → "Ship in the image").
+#
+# Guard: pg_ai_stewards.control is always present in the extension/ context,
+# so the COPY always has ≥1 source and never fails; the bracketed globs
+# (stewards_companion.contro[l], stewards_companion--*.sq[l]) match the pack
+# files only WHEN staged, and match nothing otherwise. The RUN then moves
+# only the pack files into place and discards the guard. Result: the normal
+# `docker build extension/` (CI, no staging) is a complete no-op here and
+# core builds are unaffected; a staged build ships the pack. Idiom verified
+# on this Docker (bracket-glob no-op + guard file) before landing.
+COPY pg_ai_stewards.control stewards_companion.contro[l] stewards_companion--*.sq[l] /tmp/companion-pack/
+RUN if ls /tmp/companion-pack/stewards_companion* >/dev/null 2>&1; then \
+        cp /tmp/companion-pack/stewards_companion* /usr/share/postgresql/18/extension/; \
+    fi; \
+    rm -rf /tmp/companion-pack

@@ -6,7 +6,11 @@
 # about HOW the shipped --X.sql files were built. For each one it:
 #   1. confirms the required psql-guard line is present, exactly,
 #      as line 1;
-#   2. strips that guard line and every allowed
+#   2. strips that guard line, the delimited PACKAGING footer (the
+#      extension-only pg_extension_config_dump + companion_uninstall block,
+#      between `-- ===== PACKAGING (extension-only) =====` and
+#      `-- ===== END PACKAGING =====` — the AMENDED verbatim principle,
+#      D2A constitution #3), and every allowed
 #      `-- >>> from packs/companion/<name>.sql` header line, wherever
 #      they occur;
 #   3. diffs what remains against a straight concatenation of the
@@ -40,20 +44,31 @@ import pathlib
 script_dir = pathlib.Path(sys.argv[1])
 pack_dir = pathlib.Path(sys.argv[2])
 
-GUARD = b'\\echo Use "CREATE EXTENSION stewards_companion" to load this file. \\quit\n'
+# The psql guard differs by script kind: full install scripts point at
+# CREATE EXTENSION, the update script at ALTER EXTENSION ... UPDATE (the
+# convention: the guard names the command that legitimately loads THIS file).
+CREATE_GUARD = b'\\echo Use "CREATE EXTENSION stewards_companion" to load this file. \\quit\n'
+ALTER_GUARD  = b'\\echo Use "ALTER EXTENSION stewards_companion UPDATE" to load this file. \\quit\n'
+
+# The PACKAGING footer (extension-only statements: pg_extension_config_dump
+# + companion_uninstall) is delimited by these markers and stripped whole
+# before the byte-compare — the AMENDED verbatim principle (D2A constitution
+# #3): extension scripts = verbatim pack SQL + a clearly-delimited footer.
+FOOTER_START = b"-- ===== PACKAGING (extension-only) ====="
+FOOTER_END   = b"-- ===== END PACKAGING ====="
 
 def header(name):
     return ("-- >>> from packs/companion/%s" % name).encode("utf-8")
 
 CHECKS = [
-    ("stewards_companion--0.1.0.sql", ["forge.sql", "companion.sql"]),
-    ("stewards_companion--0.1.0--0.2.0.sql", ["steward-tools.sql"]),
-    ("stewards_companion--0.2.0.sql", ["forge.sql", "companion.sql", "steward-tools.sql"]),
+    ("stewards_companion--0.1.0.sql", ["forge.sql", "companion.sql"], CREATE_GUARD),
+    ("stewards_companion--0.1.0--0.2.0.sql", ["steward-tools.sql"], ALTER_GUARD),
+    ("stewards_companion--0.2.0.sql", ["forge.sql", "companion.sql", "steward-tools.sql"], CREATE_GUARD),
 ]
 
 fail = False
 
-for target, sources in CHECKS:
+for target, sources, guard in CHECKS:
     actual_path = script_dir / target
     if not actual_path.exists():
         print("FAIL: %s does not exist" % target)
@@ -64,14 +79,30 @@ for target, sources in CHECKS:
     # 1. the guard line must be present, exactly, as line 1.
     first_nl = raw.find(b"\n")
     first_line = raw[: first_nl + 1] if first_nl != -1 else raw
-    if first_line != GUARD:
+    if first_line != guard:
         print("FAIL: %s -- line 1 is not the expected psql guard" % target)
         print("  got:      %r" % first_line)
-        print("  expected: %r" % GUARD)
+        print("  expected: %r" % guard)
         fail = True
         rest = raw[first_nl + 1 :] if first_nl != -1 else b""
     else:
-        rest = raw[len(GUARD):]
+        rest = raw[len(guard):]
+
+    # 1b. strip the PACKAGING footer whole (marker line through EOF). The
+    #     newline that PRECEDES the start marker belongs to the last source's
+    #     verbatim content, so keep it; drop everything from the marker on.
+    fidx = rest.find(b"\n" + FOOTER_START)
+    if fidx != -1:
+        footer_region = rest[fidx + 1:]
+        if FOOTER_END not in footer_region:
+            print("FAIL: %s -- PACKAGING footer has a start marker but no END marker" % target)
+            fail = True
+        rest = rest[: fidx + 1]
+    else:
+        # A footer is expected on every shipped script; its absence is a bug
+        # (constitution #3 requires the config_dump + companion_uninstall).
+        print("FAIL: %s -- missing the PACKAGING footer (expected %r)" % (target, FOOTER_START))
+        fail = True
 
     # 2. every declared source must have its header line present, literally.
     for src in sources:
@@ -113,7 +144,8 @@ if fail:
     sys.exit(1)
 else:
     print("VERBATIM OK: all extension SQL files are byte-identical concatenations")
-    print("of their pack sources (guard + header lines are the only additions).")
+    print("of their pack sources (guard + header lines + the delimited PACKAGING")
+    print("footer are the only additions).")
     sys.exit(0)
 PYEOF
 exit $?
