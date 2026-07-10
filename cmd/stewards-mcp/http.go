@@ -58,6 +58,9 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 	if token == "" {
 		log.Printf("WARNING: no STEWARDS_MCP_HTTP_TOKEN — the HTTP MCP surface is UNAUTHENTICATED (localhost only).")
 	}
+	proxySessions := newSessionCache()
+	defer proxySessions.closeAll()
+	callProxy := makeMCPProxyCaller(pool, proxySessions)
 
 	// Each MCP session gets a fresh server. getServer runs once per NEW MCP
 	// session (the go-sdk reuses the returned server for the rest of that
@@ -90,8 +93,8 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 		registerInspectionTools(s, pool) // read-only work-item / corpus inspection
 		registerModelTools(s, pool)      // list_models / list_connectors — read-only catalog views (90: list_models is in the harness hinge's ratified read set)
 		registerDocWriteTools(s, pool, session)
-		registerA2ANoteTools(s, pool) // a2a_note / a2a_note_clear ONLY — never a2a_submit/claim/receipt/etc.
-		registerSubstrateToolDispatch(s, pool, session) // dynamic sql_fn catalog (#346): read freely, writes per allowlist
+		registerA2ANoteTools(s, pool)                              // a2a_note / a2a_note_clear ONLY — never a2a_submit/claim/receipt/etc.
+		registerSubstrateToolDispatch(s, pool, session, callProxy) // dynamic sql_fn/mcp_proxy catalog (#346): read freely, writes per allowlist
 		return s
 	}
 	handler := mcp.NewStreamableHTTPHandler(getServer, nil)
