@@ -20,13 +20,19 @@ anything.
 
 ## Scenario 1 — you changed code on THIS machine
 ```bash
-docker compose -p pg-ai-stewards-oss build pg            # (or: build bridge / ui — whatever changed)
-docker compose -p pg-ai-stewards-oss up -d --no-deps pg  # recreate, KEEP the pgdata volume
+docker compose -p pg-ai-stewards-oss build pg                            # (or: build bridge / ui — whatever changed)
+docker compose -p pg-ai-stewards-oss up -d --no-deps --force-recreate pg # recreate, KEEP the pgdata volume
 STEWARDS_DSN=postgres://stewards:stewards@localhost:55434/stewards ./scripts/migrate.sh   # apply the SQL diff
 # verify:
 docker exec -i stewards-oss-pg psql -U stewards -d stewards -f /dev/stdin < tests/virgin-smoke.sql  # on a SCRATCH db (see note)
 ./tests/e2e-turn-loop.sh                                  # one real dispatch round-trips
 ```
+**`--force-recreate` is not optional** — a plain `up -d` after `build` does NOT restart the
+container just because the image the pg service's tag points at changed. Compose only recreates
+when the resolved *service config* changes, not when the tag's underlying image bytes do; a rebuild
+that reuses the same `image:` tag string looks config-identical to Compose. This bit the 2026-07-09
+full-foreman deploy for real — caught only by reading the container's uptime — and is the exact
+landmine `scripts/upgrade-dance.sh` (`docs/upgrade-dance.md`) encodes a hard `--force-recreate` for.
 For a **pure Rust** change you can skip `migrate.sh` (no SQL changed). When in doubt, run it — on a
 no-op change it just prints `=` for every file.
 
@@ -66,7 +72,11 @@ migrate **refreshes them from the repo**. Therefore:
 ## Verification gate (run after every upgrade)
 - `tests/virgin-smoke.sql` — the chain installs clean on a **virgin** DB (use a scratch container, not
   your live volume). This is the clean-install oracle CI runs on every PR.
-- `parity/*` + `scripts/.../run-verify-suite.ps1` — live-vs-repo parity + overlays-on-virgin-core.
+- `scripts/parity-check.sh` — live-vs-repo drift oracle (boots a scratch container from the SAME
+  image as live, diffs `stewards.*` function/view/column/trigger bodies). (This line used to point at
+  `parity/*` + `run-verify-suite.ps1` — neither exists in this repo; fixed 2026-07-10 while building
+  `scripts/upgrade-dance.sh`, whose `scratch-proof` phase is the closest thing to what that ghost
+  reference described: virgin-boot + smoke + a real `migrate.sh` round-trip on a throwaway container.)
 - `tests/e2e-turn-loop.sh` — a real dispatch round-trips end to end.
 
 ## What a backup actually is, when you do want one
