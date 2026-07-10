@@ -321,27 +321,9 @@ func dispatchOne(parentCtx context.Context, workerID int, pool *pgxpool.Pool,
 		}
 	}
 
-	session, err := cache.get(ctx, pool, payload.Server)
+	result, err := callMCPProxy(ctx, pool, cache, payload.Server, payload.Tool, args)
 	if err != nil {
-		writeError(ctx, pool, jobID, fmt.Errorf("session(%s): %w", payload.Server, err))
-		return
-	}
-
-	result, err := session.CallTool(ctx, &mcp.CallToolParams{
-		Name:      payload.Tool,
-		Arguments: args,
-	})
-	if err != nil {
-		// Phase 3e.2.e — session crash recovery. Any non-nil err
-		// from CallTool is a transport-level failure (broken pipe,
-		// JSON parse, server died). Tool-level errors come back as
-		// IsError=true with err=nil. Invalidate the session so the
-		// next call to this server lazy-reinits a fresh subprocess
-		// or HTTP session. We do NOT auto-retry the failing call —
-		// the parent's retry policy (or the agent loop) handles it.
-		cache.invalidate(payload.Server)
-		writeError(ctx, pool, jobID, fmt.Errorf("CallTool(%s/%s): %w (session invalidated)",
-			payload.Server, payload.Tool, err))
+		writeError(ctx, pool, jobID, err)
 		return
 	}
 
@@ -465,6 +447,34 @@ func reapStaleMcpProxyRows(ctx context.Context, pool *pgxpool.Pool) error {
 type sessionCache struct {
 	mu       sync.Mutex
 	sessions map[string]*mcp.ClientSession
+}
+
+type mcpProxyCallFunc func(context.Context, string, string, map[string]any) (*mcp.CallToolResult, error)
+
+func makeMCPProxyCaller(pool *pgxpool.Pool, cache *sessionCache) mcpProxyCallFunc {
+	return func(ctx context.Context, server, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+		return callMCPProxy(ctx, pool, cache, server, tool, args)
+	}
+}
+
+// callMCPProxy is the single outbound proxy boundary used by both queued
+// pipeline dispatch and synchronous substrate_tool calls. Keeping session
+// recovery here prevents the two entry points from drifting.
+func callMCPProxy(ctx context.Context, pool *pgxpool.Pool, cache *sessionCache,
+	server, tool string, args map[string]any) (*mcp.CallToolResult, error) {
+	session, err := cache.get(ctx, pool, server)
+	if err != nil {
+		return nil, fmt.Errorf("session(%s): %w", server, err)
+	}
+
+	result, err := session.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	if err != nil {
+		// Transport failures invalidate the cached session; tool-level errors
+		// are normal MCP results (IsError=true) and retain the session.
+		cache.invalidate(server)
+		return nil, fmt.Errorf("CallTool(%s/%s): %w (session invalidated)", server, tool, err)
+	}
+	return result, nil
 }
 
 func newSessionCache() *sessionCache {
