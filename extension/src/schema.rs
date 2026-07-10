@@ -2137,5 +2137,13 @@ extension_sql!(
     $func$;
     "#,
     name = "create_doc_show",
-    requires = ["create_similarity"],
+    // create_tool_wrappers is otherwise a dangling leaf (nothing requires it),
+    // so pgrx's toposort was free to place its plain `CREATE FUNCTION
+    // brain_search_text_tool` AFTER a volume's `CREATE OR REPLACE` re-author
+    // of the same function (v14/75-wire-brain-hybrid) — a non-deterministic
+    // "function already exists with same argument types" that flapped CI red.
+    // Pinning it before create_doc_show (the last base entity the volume chain
+    // hangs off) forces the base definition ahead of every volume, restoring
+    // the old 109-file linear chain's invariant (base tool wrappers, then 75).
+    requires = ["create_similarity", "create_tool_wrappers"],
 );
