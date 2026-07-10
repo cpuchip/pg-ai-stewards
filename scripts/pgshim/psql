@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# scripts/pgshim/psql — a host `psql` drop-in for machines with no native
+# postgres client, backed by `docker exec` into the running pg container.
+#
+# Why this exists: migrate.sh calls the real `psql "$DSN" ...` directly. A
+# loom seat working this repo from a Windows/Git-Bash dev box (the shape
+# this file was built for — see docs/upgrade-dance.md) usually has Docker
+# but not a host `psql` binary. Put this directory first on PATH and
+# migrate.sh (or any script following the same `pg() { psql "$DSN" ... }`
+# pattern) runs unmodified, transparently proxied into the container.
+#
+# Not a full psql reimplementation — it understands exactly the flag
+# surface migrate.sh uses:
+#   psql <DSN> -v NAME=VALUE [-v ...] [-tAc|-tAqc|-c CMD] [-f FILE]
+# Everything it doesn't specifically parse (-v, -c, -tAc, -tAqc, ...) is
+# forwarded byte-for-byte to the real psql running inside the container.
+#
+# ── THE MSYS FOOTGUN THIS FILE EXISTS TO DODGE ─────────────────────────
+# Git Bash (MSYS2) auto-rewrites any argv that LOOKS like a POSIX absolute
+# path (starts with a single `/` matching a known top-level mount such as
+# /tmp, /usr, /c) into a Windows path before exec'ing a *native* binary
+# like docker.exe. That's the right behavior for a HOST-side path (e.g.
+# docker cp's source argument) and dead wrong for a CONTAINER-side path
+# (docker exec's `-f /tmp/x` argument, which must reach the Linux
+# filesystem inside the container byte-for-byte). Verified empirically
+# 2026-07-10 against a throwaway alpine container on this machine:
+#   docker exec C cat /tmp/x        -> mangled to a Windows path -> ENOENT
+#   docker exec C cat //tmp/x       -> reaches the container correctly
+#   MSYS_NO_PATHCONV=1 docker exec C cat /tmp/x  -> also reaches correctly
+# Both defeats work. This file uses the FIRST one (a bare leading `//`,
+# which MSYS's single-leading-slash heuristic doesn't match, and which
+# Linux tresats identically to a single `/` for file access) because it is
+# the technique already proven and committed in this repo's scripts/db.sh
+# (same night, same deploy) — reuse, don't reinvent.
+#
+# A DISPUTE WORTH NAMING: the SHIPWRIGHT P1 brief (and the 2026-07-09
+# journal prose describing the by-hand deploy) both describe the shim as
+# "MSYS_NO_PATHCONV=1 on BOTH docker cp and docker exec (cygpath -m for
+# host paths)". Tested that exact recipe head-to-head against db.sh's
+# double-slash trick on this machine (2026-07-10) — BOTH work, but the
+# actually-committed db.sh does NOT use MSYS_NO_PATHCONV or cygpath at
+# all: its plain `docker cp src "$C:/tmp/x"` call landed the file
+# correctly with no protection needed (MSYS does not mangle docker cp's
+# container-side *destination* argument — only a later bare `-f /tmp/x`
+# read/exec argument gets mangled). So "db.sh's footgun #2, now solved in
+# a reusable shim" describes db.sh's actual double-slash mechanism, not
+# the MSYS_NO_PATHCONV+cygpath mechanism named in the same sentence — the
+# journal conflated two different valid techniques. This file follows the
+# proven db.sh code, not the journal's specific (also-correct, but
+# unvendored, and one step more complex) description. Flagged, not
+# silently deviated from — see the SHIPWRIGHT P1 PR body.
+#
+# Env:
+#   DB_CONTAINER  target container (default: stewards-oss-pg)
+#   DB_USER/DB_NAME  used only when the DSN carries no user/dbname
+set -euo pipefail
+
+CONTAINER="${DB_CONTAINER:-stewards-oss-pg}"
+DBUSER="${DB_USER:-stewards}"
+DBNAME="${DB_NAME:-stewards}"
+CLEANUP_PATHS=()
+
+parse_dsn() {
+  local dsn="$1" rest userinfo hostinfo dbpart
+  rest="${dsn#*://}"
+  case "$rest" in
+    *@*)
+      userinfo="${rest%%@*}"
+      hostinfo="${rest#*@}"
+      [ -n "${userinfo%%:*}" ] && DBUSER="${userinfo%%:*}"
+      ;;
+    *)
+      hostinfo="$rest"
+      ;;
+  esac
+  dbpart="${hostinfo#*/}"
+  if [ "$dbpart" != "$hostinfo" ] && [ -n "$dbpart" ]; then
+    dbpart="${dbpart%%\?*}"
+    [ -n "$dbpart" ] && DBNAME="$dbpart"
+  fi
+}
+
+# Sets the global STAGED_DEST as its "return value" — NOT a command
+# substitution. `psql_args+=(-f "$(stage_file ...)")` would fork stage_file
+# into a subshell, silently discarding the CLEANUP_PATHS append (this bit
+# a first draft of this file: files were staged and used correctly, but
+# never cleaned up, because the subshell's array mutation never reached
+# the parent shell). Call it as a plain statement, then read STAGED_DEST.
+STAGED_DEST=""
+stage_file() {
+  local hostfile="$1" base dest
+  [ -r "$hostfile" ] || { echo "pgshim/psql: cannot read $hostfile" >&2; exit 2; }
+  base="$(basename "$hostfile")"
+  dest="/tmp/pgshim-$$-$base"
+  docker cp "$hostfile" "$CONTAINER:$dest" >/dev/null || exit 2
+  CLEANUP_PATHS+=("$dest")
+  STAGED_DEST="//${dest#/}"
+}
+
+psql_args=()
+i=0
+argv=("$@")
+n=${#argv[@]}
+while [ "$i" -lt "$n" ]; do
+  a="${argv[$i]}"
+  case "$a" in
+    postgres://*|postgresql://*)
+      parse_dsn "$a"
+      ;;
+    -f)
+      i=$((i + 1))
+      stage_file "${argv[$i]}"
+      psql_args+=(-f "$STAGED_DEST")
+      ;;
+    -f?*)
+      stage_file "${a#-f}"
+      psql_args+=(-f "$STAGED_DEST")
+      ;;
+    *)
+      psql_args+=("$a")
+      ;;
+  esac
+  i=$((i + 1))
+done
+
+cleanup() {
+  local p
+  for p in "${CLEANUP_PATHS[@]:-}"; do
+    [ -n "$p" ] || continue
+    docker exec "$CONTAINER" rm -f "//${p#/}" >/dev/null 2>&1 || true
+  done
+}
+trap cleanup EXIT
+
+# -i so stdin (some callers pipe/redirect SQL instead of using -f) reaches
+# the in-container psql; harmless when stdin is empty or a tty.
+docker exec -i "$CONTAINER" psql -U "$DBUSER" -d "$DBNAME" "${psql_args[@]}"
