@@ -322,6 +322,7 @@ extension_sql_file!(
     "../v32-dispatch-honesty.sql",
     name = "create_v32_dispatch_honesty",
     requires = ["create_v31_steward_park"],
+);
 
 // v33-wargame-w2.sql — NEW (war-game W2): make the war-game's forks[] and
 // assumptions[] outputs OPERATIONAL (aborts[] already shipped in v25 §103 +
