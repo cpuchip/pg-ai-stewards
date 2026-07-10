@@ -1660,6 +1660,72 @@ mod embed_target_tests {
     }
 }
 
+#[cfg(test)]
+mod sse_tests {
+    // #361: a named `event: error` frame must terminate the parse with the
+    // upstream payload — never be dropped, never read as content.
+    use super::parse_chat_sse_reader;
+
+    #[test]
+    fn named_error_event_errors_with_payload_and_not_content() {
+        // content arrives first, then a named error frame mid-stream.
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"}}]}\n\
+\n\
+event: error\n\
+data: {\"message\":\"upstream overloaded\",\"code\":529}\n\
+\n";
+        let err = parse_chat_sse_reader(sse.as_bytes())
+            .expect_err("a named error event must terminate the parse");
+        // The error carries the payload …
+        assert!(
+            err.contains("upstream overloaded"),
+            "error must carry the payload, got: {err}"
+        );
+        assert!(err.starts_with("sse error event:"), "got: {err}");
+        // … and because it is an Err, the "hello" delta is NOT returned as
+        // content: there is no Ok value at all, so the payload cannot be
+        // mis-read as assistant content.
+    }
+
+    #[test]
+    fn error_event_without_space_is_handled() {
+        // Some servers emit `event:error` (no space).
+        let sse = "event:error\ndata: {\"detail\":\"model not available\"}\n\n";
+        let err = parse_chat_sse_reader(sse.as_bytes()).expect_err("must error");
+        assert!(err.contains("model not available"), "got: {err}");
+    }
+
+    #[test]
+    fn non_error_named_event_does_not_hijack_following_data() {
+        // A benign named event must NOT route its data to error handling.
+        let sse = "\
+event: message\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\
+data: [DONE]\n";
+        let v = parse_chat_sse_reader(sse.as_bytes()).expect("must parse");
+        assert_eq!(v["choices"][0]["message"]["content"], "ok");
+    }
+
+    #[test]
+    fn normal_stream_still_reassembles() {
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\
+data: {\"choices\":[{\"delta\":{\"content\":\" there\"}}]}\n\
+data: [DONE]\n";
+        let v = parse_chat_sse_reader(sse.as_bytes()).expect("must parse");
+        assert_eq!(v["choices"][0]["message"]["content"], "hi there");
+    }
+
+    #[test]
+    fn embedded_error_in_data_still_errors() {
+        // The pre-existing `data: {"error": {...}}` path is unchanged.
+        let sse = "data: {\"error\":{\"message\":\"boom\"}}\n";
+        let err = parse_chat_sse_reader(sse.as_bytes()).expect_err("must error");
+        assert!(err.contains("boom"), "got: {err}");
+    }
+}
+
 /// Resolve a provider at dispatch time: the 88 credential overlay first (a
 /// wizard-saved key must beat a stale env key), then the boot-time env
 /// registry. Dispatch runs OUTSIDE any transaction (phase 2), so the overlay
@@ -2223,9 +2289,15 @@ struct ToolCallAccum {
 /// the same shape they did before ES.6. `[DONE]` ends the stream;
 /// an `error` event aborts with Err.
 fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value, String> {
-    use std::io::BufRead;
+    parse_chat_sse_reader(std::io::BufReader::new(resp))
+}
 
-    let reader = std::io::BufReader::new(resp);
+/// Inner body of `parse_chat_sse`, generic over the byte source so the parse
+/// can be unit-tested against an in-memory SSE fixture (see `sse_tests`)
+/// without constructing a live `reqwest::blocking::Response`.
+fn parse_chat_sse_reader<R: std::io::BufRead>(
+    reader: R,
+) -> Result<serde_json::Value, String> {
     let mut content = String::new();
     let mut reasoning = String::new();
     let mut role = String::from("assistant");
@@ -2233,20 +2305,43 @@ fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value
     let mut model: Option<String> = None;
     let mut usage: Option<serde_json::Value> = None;
     let mut tool_calls: Vec<ToolCallAccum> = Vec::new();
+    // #361: the SSE event type of the frame currently being read. Per the SSE
+    // spec an `event:` field sets the type for the event dispatched at the
+    // next blank line (which resets it). A named `event: error` frame carries
+    // an upstream error in its `data:` payload; that payload must terminate
+    // the parse — not be dropped as an unknown-shaped chunk or read as content.
+    let mut current_event: Option<String> = None;
 
     for line in reader.lines() {
         let line = line.map_err(|e| format!("sse read: {}", e))?;
         let line = line.trim_end();
         if line.is_empty() {
+            // Dispatch boundary: the event type does not carry across frames.
+            current_event = None;
             continue;
         }
-        // SSE: only `data:` fields carry payload; ignore event:/id:/comments.
+        // Track named SSE event types. The payload rides `data:`; `id:` and
+        // comment lines are ignored — but a named `event:` (notably
+        // `event: error`) changes how the following `data:` is routed, so it
+        // must be captured, not skipped as "not a data line".
+        if let Some(ev) = line.strip_prefix("event:") {
+            current_event = Some(ev.trim().to_string());
+            continue;
+        }
+        // SSE: only `data:` fields carry payload; ignore id:/comments.
         let data = match line.strip_prefix("data:") {
             Some(d) => d.trim(),
             None => continue,
         };
         if data == "[DONE]" {
             break;
+        }
+        // #361: a named `event: error` frame routes its payload to error
+        // handling. Terminate the parse and surface the payload verbatim so an
+        // upstream mid-stream error can never be silently dropped (unknown
+        // shape → no `choices` → `continue`) or mis-read as assistant content.
+        if current_event.as_deref() == Some("error") {
+            return Err(format!("sse error event: {}", data));
         }
         let chunk: serde_json::Value = match serde_json::from_str(data) {
             Ok(v) => v,
