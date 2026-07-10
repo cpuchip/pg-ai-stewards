@@ -322,6 +322,7 @@ extension_sql_file!(
     "../v32-dispatch-honesty.sql",
     name = "create_v32_dispatch_honesty",
     requires = ["create_v31_steward_park"],
+);
 
 // v33-wargame-w2.sql — NEW (war-game W2): make the war-game's forks[] and
 // assumptions[] outputs OPERATIONAL (aborts[] already shipped in v25 §103 +
@@ -341,6 +342,24 @@ extension_sql_file!(
     "../v33-wargame-w2.sql",
     name = "create_v33_wargame_w2",
     requires = ["create_v32_dispatch_honesty"],
+);
+
+// v34-park-honesty.sql — NEW (#362 half 2): the bell quotes the CURRENT
+// failure, not a stale one. work_item_dispatch_stage (last full author v32 §1)
+// set status='in_progress' on (re)dispatch but never cleared work_items.error
+// — so a redispatch left a prior cycle's error on the row, and
+// needs_attention's review bucket (question = coalesce(error, …)) quoted it.
+// Live 2026-07-09: a July-5 qwen error was quoted for a July-9 deepseek park,
+// nearly causing a false verdict. Re-authors the v32 §1 body VERBATIM except
+// the terminal UPDATE now also sets error = NULL — the single redispatch
+// chokepoint every path routes through (escalation_resolve + the attention
+// answer API both call _safe -> this). A later re-park writes a fresh error;
+// a success leaves it NULL. Later-file-wins re-author, same discipline as
+// v31/v32/v33.
+extension_sql_file!(
+    "../v34-park-honesty.sql",
+    name = "create_v34_park_honesty",
+    requires = ["create_v33_wargame_w2"],
 );
 
 // ---------------------------------------------------------------------------

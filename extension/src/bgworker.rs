@@ -1660,6 +1660,169 @@ mod embed_target_tests {
     }
 }
 
+#[cfg(test)]
+mod sse_tests {
+    // #361: a named `event: error` frame must terminate the parse with the
+    // upstream payload — never be dropped, never read as content.
+    use super::parse_chat_sse_reader;
+
+    #[test]
+    fn named_error_event_errors_with_payload_and_not_content() {
+        // content arrives first, then a named error frame mid-stream.
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"role\":\"assistant\",\"content\":\"hello\"}}]}\n\
+\n\
+event: error\n\
+data: {\"message\":\"upstream overloaded\",\"code\":529}\n\
+\n";
+        let err = parse_chat_sse_reader(sse.as_bytes())
+            .expect_err("a named error event must terminate the parse");
+        // The error carries the payload …
+        assert!(
+            err.contains("upstream overloaded"),
+            "error must carry the payload, got: {err}"
+        );
+        assert!(err.starts_with("sse error event:"), "got: {err}");
+        // … and because it is an Err, the "hello" delta is NOT returned as
+        // content: there is no Ok value at all, so the payload cannot be
+        // mis-read as assistant content.
+    }
+
+    #[test]
+    fn error_event_without_space_is_handled() {
+        // Some servers emit `event:error` (no space).
+        let sse = "event:error\ndata: {\"detail\":\"model not available\"}\n\n";
+        let err = parse_chat_sse_reader(sse.as_bytes()).expect_err("must error");
+        assert!(err.contains("model not available"), "got: {err}");
+    }
+
+    #[test]
+    fn non_error_named_event_does_not_hijack_following_data() {
+        // A benign named event must NOT route its data to error handling.
+        let sse = "\
+event: message\n\
+data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\
+data: [DONE]\n";
+        let v = parse_chat_sse_reader(sse.as_bytes()).expect("must parse");
+        assert_eq!(v["choices"][0]["message"]["content"], "ok");
+    }
+
+    #[test]
+    fn normal_stream_still_reassembles() {
+        let sse = "\
+data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\
+data: {\"choices\":[{\"delta\":{\"content\":\" there\"}}]}\n\
+data: [DONE]\n";
+        let v = parse_chat_sse_reader(sse.as_bytes()).expect("must parse");
+        assert_eq!(v["choices"][0]["message"]["content"], "hi there");
+    }
+
+    #[test]
+    fn embedded_error_in_data_still_errors() {
+        // The pre-existing `data: {"error": {...}}` path is unchanged.
+        let sse = "data: {\"error\":{\"message\":\"boom\"}}\n";
+        let err = parse_chat_sse_reader(sse.as_bytes()).expect_err("must error");
+        assert!(err.contains("boom"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod dsml_tests {
+    // #362: DeepSeek V4 DSML tool-call markup leaking as assistant text.
+    use super::translate_dsml_tool_calls;
+
+    // ｜ is U+FF5C (fullwidth vertical bar). The token DeepSeek emits is
+    // `｜DSML｜`; build fixtures from it so the bytes are exactly right.
+    const TOK: &str = "\u{ff5c}DSML\u{ff5c}";
+
+    #[test]
+    fn translates_a_clean_single_tool_call() {
+        let f = format!(
+            "<{t}tool_calls>\n<{t}invoke name=\"get_current_weather\">\n\
+             <{t}parameter name=\"location\" string=\"true\">Tokyo</{t}parameter>\n\
+             </{t}invoke>\n</{t}tool_calls>",
+            t = TOK
+        );
+        let (calls, cleaned) =
+            translate_dsml_tool_calls(&f).expect("clean block must translate");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0]["function"]["name"], "get_current_weather");
+        let args: serde_json::Value = serde_json::from_str(
+            calls[0]["function"]["arguments"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(args["location"], "Tokyo");
+        assert!(cleaned.is_empty(), "cleaned content should be empty: {cleaned:?}");
+    }
+
+    #[test]
+    fn non_string_parameter_is_a_json_literal() {
+        let f = format!(
+            "<{t}tool_calls><{t}invoke name=\"set\">\
+             <{t}parameter name=\"count\" string=\"false\">3</{t}parameter>\
+             <{t}parameter name=\"on\" string=\"false\">true</{t}parameter>\
+             </{t}invoke></{t}tool_calls>",
+            t = TOK
+        );
+        let (calls, _) = translate_dsml_tool_calls(&f).expect("must translate");
+        let args: serde_json::Value = serde_json::from_str(
+            calls[0]["function"]["arguments"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(args["count"], 3);
+        assert_eq!(args["on"], true);
+    }
+
+    #[test]
+    fn translates_multiple_invokes() {
+        let f = format!(
+            "prelude <{t}tool_calls>\
+             <{t}invoke name=\"a\"><{t}parameter name=\"x\" string=\"true\">1</{t}parameter></{t}invoke>\
+             <{t}invoke name=\"b\"></{t}invoke>\
+             </{t}tool_calls>",
+            t = TOK
+        );
+        let (calls, cleaned) = translate_dsml_tool_calls(&f).expect("must translate");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["function"]["name"], "a");
+        assert_eq!(calls[1]["function"]["name"], "b");
+        // an invoke with no parameters yields an empty args object
+        assert_eq!(calls[1]["function"]["arguments"], "{}");
+        assert_eq!(cleaned, "prelude");
+    }
+
+    #[test]
+    fn passthrough_on_unclosed_block() {
+        let f = format!(
+            "<{t}tool_calls><{t}invoke name=\"x\">(never closed)",
+            t = TOK
+        );
+        assert!(
+            translate_dsml_tool_calls(&f).is_none(),
+            "an unclosed block must pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn passthrough_on_bare_word_in_prose() {
+        // The word "DSML" in ordinary prose is not a tool_calls block.
+        assert!(translate_dsml_tool_calls("I read about the DSML spec today.").is_none());
+        assert!(translate_dsml_tool_calls("no markup here at all").is_none());
+    }
+
+    #[test]
+    fn passthrough_on_non_json_literal_value() {
+        // string="false" with a value that is not valid JSON => refuse.
+        let f = format!(
+            "<{t}tool_calls><{t}invoke name=\"x\">\
+             <{t}parameter name=\"p\" string=\"false\">not-json</{t}parameter>\
+             </{t}invoke></{t}tool_calls>",
+            t = TOK
+        );
+        assert!(translate_dsml_tool_calls(&f).is_none());
+    }
+}
+
 /// Resolve a provider at dispatch time: the 88 credential overlay first (a
 /// wizard-saved key must beat a stale env key), then the boot-time env
 /// registry. Dispatch runs OUTSIDE any transaction (phase 2), so the overlay
@@ -2079,7 +2242,7 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
     // stream and reassemble it into the standard non-streaming response
     // shape, so every downstream extraction below — and the SQL apply
     // handlers that re-parse result.response — are unchanged.
-    let parsed: serde_json::Value = if is_anthropic {
+    let mut parsed: serde_json::Value = if is_anthropic {
         parse_anthropic_sse(resp).map_err(|e| format!("decode anthropic SSE stream: {}", e))?
     } else {
         parse_chat_sse(resp).map_err(|e| format!("decode chat SSE stream: {}", e))?
@@ -2100,12 +2263,12 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
     // OpenAI returns content as either a string OR null (when only
     // tool_calls are present). NOT NULL on messages.content with
     // default '' handles both — we coerce to "".
-    let assistant_content = message
+    let mut assistant_content = message
         .get("content")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let assistant_tool_calls = message.get("tool_calls").cloned();
+    let mut assistant_tool_calls = message.get("tool_calls").cloned();
     // Reasoning capture. Field names vary by gateway:
     //   OpenRouter / OpenCode Go: `reasoning` (string), `reasoning_details` (array)
     //   Moonshot direct:          `reasoning_content` (string)
@@ -2179,6 +2342,52 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
         .and_then(|v| v.as_f64())
         .map(|c| (c * 1_000_000.0).round() as i64);
 
+    // #362: DSML tool-call leak recovery. When the gateway gave us NO
+    // structured tool_calls but the assistant text carries DeepSeek's native
+    // DSML tool_calls block, translate it into the normal structure so the
+    // tool loop fires. Conservative: only when the block parses cleanly.
+    let has_structured_calls = assistant_tool_calls
+        .as_ref()
+        .and_then(|v| v.as_array())
+        .map(|a| !a.is_empty())
+        .unwrap_or(false);
+    if !has_structured_calls && !assistant_content.is_empty() {
+        match translate_dsml_tool_calls(&assistant_content) {
+            Some((calls, cleaned)) => {
+                pgrx::log!(
+                    "stewards: recovered {} DSML tool_call(s) that leaked as assistant text (deepseek native markup via openai-compat gateway) — executing instead of passing through as content",
+                    calls.len()
+                );
+                let calls_val = serde_json::Value::Array(calls);
+                // Keep the stored response object consistent so trace/telemetry
+                // and any re-parse of result.response see structured tool_calls
+                // and cleaned content, not the raw markup.
+                if let Some(msg) = parsed.pointer_mut("/choices/0/message") {
+                    msg["content"] = if cleaned.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::Value::String(cleaned.clone())
+                    };
+                    msg["tool_calls"] = calls_val.clone();
+                }
+                assistant_content = cleaned;
+                assistant_tool_calls = Some(calls_val);
+            }
+            None => {
+                // Not a clean DSML block — leave the text intact. Only note it
+                // when the tell-tale token is present, so a normal text turn
+                // stays silent.
+                if assistant_content.contains("DSML")
+                    || assistant_content.contains("\u{2581}tool\u{2581}calls")
+                {
+                    pgrx::log!(
+                        "stewards: assistant text contains DSML-like markers but did not parse cleanly as a tool_calls block — left as text (no translation)"
+                    );
+                }
+            }
+        }
+    }
+
     Ok(WorkOutcome::Chatted {
         response: parsed,
         session_id,
@@ -2223,9 +2432,15 @@ struct ToolCallAccum {
 /// the same shape they did before ES.6. `[DONE]` ends the stream;
 /// an `error` event aborts with Err.
 fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value, String> {
-    use std::io::BufRead;
+    parse_chat_sse_reader(std::io::BufReader::new(resp))
+}
 
-    let reader = std::io::BufReader::new(resp);
+/// Inner body of `parse_chat_sse`, generic over the byte source so the parse
+/// can be unit-tested against an in-memory SSE fixture (see `sse_tests`)
+/// without constructing a live `reqwest::blocking::Response`.
+fn parse_chat_sse_reader<R: std::io::BufRead>(
+    reader: R,
+) -> Result<serde_json::Value, String> {
     let mut content = String::new();
     let mut reasoning = String::new();
     let mut role = String::from("assistant");
@@ -2233,20 +2448,43 @@ fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value
     let mut model: Option<String> = None;
     let mut usage: Option<serde_json::Value> = None;
     let mut tool_calls: Vec<ToolCallAccum> = Vec::new();
+    // #361: the SSE event type of the frame currently being read. Per the SSE
+    // spec an `event:` field sets the type for the event dispatched at the
+    // next blank line (which resets it). A named `event: error` frame carries
+    // an upstream error in its `data:` payload; that payload must terminate
+    // the parse — not be dropped as an unknown-shaped chunk or read as content.
+    let mut current_event: Option<String> = None;
 
     for line in reader.lines() {
         let line = line.map_err(|e| format!("sse read: {}", e))?;
         let line = line.trim_end();
         if line.is_empty() {
+            // Dispatch boundary: the event type does not carry across frames.
+            current_event = None;
             continue;
         }
-        // SSE: only `data:` fields carry payload; ignore event:/id:/comments.
+        // Track named SSE event types. The payload rides `data:`; `id:` and
+        // comment lines are ignored — but a named `event:` (notably
+        // `event: error`) changes how the following `data:` is routed, so it
+        // must be captured, not skipped as "not a data line".
+        if let Some(ev) = line.strip_prefix("event:") {
+            current_event = Some(ev.trim().to_string());
+            continue;
+        }
+        // SSE: only `data:` fields carry payload; ignore id:/comments.
         let data = match line.strip_prefix("data:") {
             Some(d) => d.trim(),
             None => continue,
         };
         if data == "[DONE]" {
             break;
+        }
+        // #361: a named `event: error` frame routes its payload to error
+        // handling. Terminate the parse and surface the payload verbatim so an
+        // upstream mid-stream error can never be silently dropped (unknown
+        // shape → no `choices` → `continue`) or mis-read as assistant content.
+        if current_event.as_deref() == Some("error") {
+            return Err(format!("sse error event: {}", data));
         }
         let chunk: serde_json::Value = match serde_json::from_str(data) {
             Ok(v) => v,
@@ -2428,6 +2666,166 @@ fn parse_chat_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value
         resp_obj["usage"] = u;
     }
     Ok(resp_obj)
+}
+
+/// #362: recover DeepSeek's native "DSML" tool-call markup that leaks as
+/// assistant TEXT through some OpenAI-compat gateways (opencode_go / Console
+/// Go) when tools+stream are combined — the gateway forwards the model's
+/// native serialization verbatim instead of parsing it into a `tool_calls`
+/// array, so the substrate's tool loop never fires and the turn ends
+/// verdict-less (live evidence: queue rows 43904/43906, 2026-07-09).
+///
+/// The V4 block is Anthropic-tool-use-shaped (verified against
+/// deepseek-ai/DeepSeek-V4-Pro `encoding/encoding_dsv4.py`):
+///
+/// ```text
+/// <｜DSML｜tool_calls>
+/// <｜DSML｜invoke name="TOOL_NAME">
+/// <｜DSML｜parameter name="P" string="true">VALUE</｜DSML｜parameter>
+/// ...
+/// </｜DSML｜invoke>
+/// </｜DSML｜tool_calls>
+/// ```
+///
+/// where `｜` is U+FF5C (a FULLWIDTH vertical bar, not an ASCII pipe) and the
+/// `DSML` token may be wrapped in one or more of them. We derive the exact
+/// token from the opening marker and match it on every inner tag, so the
+/// parser is robust to the wrap count.
+///
+/// Conservative by contract: returns `None` (caller leaves the text intact and
+/// logs) unless the block parses CLEANLY into ≥1 tool call. Never emits a
+/// partial translation. On success returns the OpenAI-shaped `tool_calls`
+/// array plus the assistant content with the block removed.
+fn translate_dsml_tool_calls(
+    content: &str,
+) -> Option<(Vec<serde_json::Value>, String)> {
+    // Locate the "DSML" token and the run of fullwidth (or, defensively,
+    // ASCII) vertical bars around it. Require ≥1 bar on each side so the bare
+    // word "DSML" in prose does not match.
+    let is_bar = |c: char| c == '\u{ff5c}' || c == '|';
+    let dsml_at = content.find("DSML")?;
+    // left bar run
+    let mut left = dsml_at;
+    for (idx, ch) in content[..dsml_at].char_indices().rev() {
+        if is_bar(ch) {
+            left = idx;
+        } else {
+            break;
+        }
+    }
+    if left == dsml_at {
+        return None; // no leading bar
+    }
+    // right bar run
+    let after_dsml = dsml_at + "DSML".len();
+    let mut right = after_dsml;
+    for (idx, ch) in content[after_dsml..].char_indices() {
+        if is_bar(ch) {
+            right = after_dsml + idx + ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if right == after_dsml {
+        return None; // no trailing bar
+    }
+    // token = "｜DSML｜" (whatever wrap count was found). The tag prefixes are
+    // built from it so open/close markers use the identical token.
+    let token = &content[left..right];
+    let open_tc = format!("<{token}tool_calls>");
+    let close_tc = format!("</{token}tool_calls>");
+    let open_invoke = format!("<{token}invoke");
+    let close_invoke = format!("</{token}invoke>");
+    let open_param = format!("<{token}parameter");
+    let close_param = format!("</{token}parameter>");
+
+    // The block must have both a well-formed open and close.
+    let block_start = content.find(&open_tc)?;
+    let tc_open_end = block_start + open_tc.len();
+    let close_rel = content[tc_open_end..].find(&close_tc)?;
+    let block_end = tc_open_end + close_rel; // start of close_tc
+    let block_body = &content[tc_open_end..block_end];
+
+    // Read an attribute value: `name="..."` starting from a tag slice.
+    let attr = |tag: &str, key: &str| -> Option<String> {
+        let needle = format!("{key}=\"");
+        let s = tag.find(&needle)? + needle.len();
+        let e = tag[s..].find('"')? + s;
+        Some(tag[s..e].to_string())
+    };
+
+    let mut calls: Vec<serde_json::Value> = Vec::new();
+    let mut cursor = 0usize;
+    while let Some(inv_rel) = block_body[cursor..].find(&open_invoke) {
+        let inv_start = cursor + inv_rel;
+        // tag runs from `<..invoke` to the next '>'
+        let tag_gt_rel = block_body[inv_start..].find('>')?;
+        let tag_end = inv_start + tag_gt_rel; // index of '>'
+        let inv_tag = &block_body[inv_start..tag_end];
+        let name = attr(inv_tag, "name")?;
+        if name.is_empty() {
+            return None;
+        }
+        let body_start = tag_end + 1; // past '>'
+        let inv_close_rel = block_body[body_start..].find(&close_invoke)?;
+        let inv_body_end = body_start + inv_close_rel;
+        let inv_body = &block_body[body_start..inv_body_end];
+
+        // Parameters -> an arguments object.
+        let mut args = serde_json::Map::new();
+        let mut pcur = 0usize;
+        while let Some(p_rel) = inv_body[pcur..].find(&open_param) {
+            let p_start = pcur + p_rel;
+            let p_gt_rel = inv_body[p_start..].find('>')?;
+            let p_tag_end = p_start + p_gt_rel;
+            let p_tag = &inv_body[p_start..p_tag_end];
+            let p_name = attr(p_tag, "name")?;
+            if p_name.is_empty() {
+                return None;
+            }
+            // `string="true"` => the value is a literal string; `false` => the
+            // value is a raw JSON literal (number/bool/object/array/null).
+            // Default (attribute absent) to string, the safe interpretation.
+            let is_string = attr(p_tag, "string")
+                .map(|s| s != "false")
+                .unwrap_or(true);
+            let p_body_start = p_tag_end + 1;
+            let p_close_rel = inv_body[p_body_start..].find(&close_param)?;
+            let raw = &inv_body[p_body_start..p_body_start + p_close_rel];
+            let value = if is_string {
+                serde_json::Value::String(raw.to_string())
+            } else {
+                // Clean-parse contract: a non-string value that isn't valid
+                // JSON means the block is malformed — refuse the whole
+                // translation rather than guess.
+                serde_json::from_str::<serde_json::Value>(raw.trim()).ok()?
+            };
+            args.insert(p_name, value);
+            pcur = p_body_start + p_close_rel + close_param.len();
+        }
+
+        let arguments = serde_json::to_string(&serde_json::Value::Object(args))
+            .ok()?;
+        calls.push(serde_json::json!({
+            "id": format!("dsml_call_{}", calls.len()),
+            "type": "function",
+            "function": { "name": name, "arguments": arguments },
+        }));
+
+        cursor = inv_body_end + close_invoke.len();
+    }
+
+    if calls.is_empty() {
+        return None;
+    }
+
+    // Cleaned content: everything outside the block (prose the model emitted
+    // before/after the markup), trimmed. Usually empty for a tool-call turn.
+    let mut cleaned = String::with_capacity(content.len());
+    // the block spans from the '<' of open_tc to the end of close_tc
+    cleaned.push_str(&content[..block_start]);
+    cleaned.push_str(&content[block_end + close_tc.len()..]);
+    Some((calls, cleaned.trim().to_string()))
 }
 
 /// Strip phantom tool history from an OpenAI-shaped body before sending:
