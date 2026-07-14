@@ -175,3 +175,22 @@ sync of anything: every crossing is an explicit, gated envelope.
 primitive), the multi-tenancy notes (fail-closed, identity-at-transport). Transport
 facts (NetBird mesh live; loom mTLS ratified, build not green-lit) noted as
 dependencies, not assumptions.
+
+
+## Ruling (2026-07-14, Michael — council question 1 answered)
+
+**Personal↔work substrate federation: NO.** "Work pg-ai-stewards shouldn't
+connect to personal pg-ai-stewards." The former P3 is struck. The standing
+boundary: **work content stays off the personal box entirely** — the maximum
+work-coordination channel is a **loom bridge** (harness-level coordination of
+work-vs-OSS tasks), never substrate-to-substrate links, never corpus rows.
+
+**What proceeds (practice scope):** federation development continues against
+**multiple local instances on the same box** (the loopback P1 and a
+second-local-instance P2) — the protocol, the wall gates, the cert-pinned
+peer identity all get built and proven locally. The eventual real second peer
+is a **second personal machine** (planned), not the work instance.
+
+Remaining council questions (2-4: wall-gate failure semantics, cert-pin vs
+mTLS timing, receipt granularity) apply to the practice/personal scope and
+stay open.
