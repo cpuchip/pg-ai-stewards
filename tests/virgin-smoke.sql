@@ -6468,4 +6468,81 @@ BEGIN
 END
 $vs115$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v35 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint) is sound =='
+-- =====================================================================
+-- v36 — the Knowledge-Keeper constitution (S3). Asserts the three rules are
+-- (a) present in the canonical text, (b) present in the RIGHT constitution rows
+-- (the digester build stages + the doc_create tool description) and ABSENT from
+-- an unrelated pipeline (precision, not a blanket splice), and (c) that the
+-- living-vs-record boundary rule 3 must not cross is encoded explicitly and
+-- correctly — living kinds supersedable, record kinds (journal / dated autogen
+-- snapshots) and watchman-exempt docs immutable. No fixture teardown needed: this
+-- reads the authored constitution + a pure predicate, it does not mutate state.
+-- =====================================================================
+DO $vs116$
+DECLARE
+    v_text     text;
+    v_summary  text;
+    v_write    text;
+    v_doccreate text;
+    v_marks    int;
+BEGIN
+    -- ---- (a) the canonical text carries all three rules AND names its oracles ----
+    v_text := stewards.keeper_constitution();
+    ASSERT v_text LIKE '%ENRICH OVER CREATE%',   '116 text: rule 1 (ENRICH OVER CREATE) present in keeper_constitution()';
+    ASSERT v_text LIKE '%LINK BOTH WAYS%',        '116 text: rule 2 (LINK BOTH WAYS) present';
+    ASSERT v_text LIKE '%SUPERSEDE COMPLETELY%',  '116 text: rule 3 (SUPERSEDE COMPLETELY) present';
+    ASSERT v_text LIKE '%graph_orphans%',         '116 text: rule 2 NAMES its deterministic detector (graph_orphans, v35) — constitution and oracle reference each other';
+    ASSERT v_text LIKE '%keeper_doc_is_record%',  '116 text: rule 3 NAMES the living-vs-record boundary predicate';
+    ASSERT v_text LIKE '%living docs only%',      '116 text: rule 3 is scoped to living docs (memory side only), on its face';
+
+    -- ---- (b) wired into the RIGHT rows: the two core digester build stages ----
+    SELECT s->>'input_template' INTO v_summary
+      FROM stewards.pipelines p, LATERAL jsonb_array_elements(p.stages) s
+     WHERE p.family = 'research-summary' AND s->>'name' = 'build';
+    SELECT s->>'input_template' INTO v_write
+      FROM stewards.pipelines p, LATERAL jsonb_array_elements(p.stages) s
+     WHERE p.family = 'research-write' AND s->>'name' = 'build';
+    ASSERT v_summary LIKE '%ENRICH OVER CREATE%',
+        '116 wire: the full constitution is spliced into the research-summary build stage';
+    ASSERT v_write LIKE '%SUPERSEDE COMPLETELY%',
+        '116 wire: the full constitution is spliced into the research-write build stage';
+    -- extend-don't-reshape: the ORIGINAL build-stage body survives beside the append.
+    ASSERT v_summary LIKE '%doc_append_section%' AND v_write LIKE '%doc_append_section%',
+        '116 wire: the original build-stage prompt (doc_append_section instructions) is preserved, not replaced';
+    -- idempotent: the marker appears exactly once (the guard blocked a double append).
+    v_marks := (length(v_summary) - length(replace(v_summary, 'ENRICH OVER CREATE', ''))) / length('ENRICH OVER CREATE');
+    ASSERT v_marks = 1,
+        format('116 idempotent: the keeper block appears exactly once in the build stage (found %s)', v_marks);
+
+    -- ---- (b') the universal-fallback channel: the doc_create tool description ----
+    SELECT description INTO v_doccreate FROM stewards.tool_defs WHERE name = 'doc_create';
+    ASSERT v_doccreate LIKE '%KEEPER RULES%',
+        '116 wire: the concise keeper directive is appended to the doc_create tool description (the channel every doc-construction agent reads)';
+
+    -- ---- (b'') PRECISION: an unrelated pipeline did NOT get the constitution ----
+    ASSERT NOT EXISTS (
+        SELECT 1 FROM stewards.pipelines p, LATERAL jsonb_array_elements(p.stages) s
+         WHERE p.family = 'code-pr' AND (s->>'input_template') LIKE '%ENRICH OVER CREATE%'),
+        '116 precision: a non-doc-construction pipeline (code-pr) must NOT carry the keeper constitution';
+
+    -- ---- (c) the living-vs-record boundary rule 3 must not cross ----
+    -- living / current-state docs — supersession permitted (predicate false):
+    ASSERT stewards.keeper_doc_is_record('doc',       '{}'::jsonb) = false, '116 boundary: kind=doc is LIVING';
+    ASSERT stewards.keeper_doc_is_record('study',     '{}'::jsonb) = false, '116 boundary: kind=study is LIVING';
+    ASSERT stewards.keeper_doc_is_record('proposal',  '{}'::jsonb) = false, '116 boundary: kind=proposal is LIVING';
+    ASSERT stewards.keeper_doc_is_record('phase-doc', '{}'::jsonb) = false, '116 boundary: kind=phase-doc is LIVING';
+    -- record docs — immutable history (predicate true):
+    ASSERT stewards.keeper_doc_is_record('journal',    '{}'::jsonb) = true, '116 boundary: kind=journal is a RECORD (never rewritten)';
+    ASSERT stewards.keeper_doc_is_record('video',      '{}'::jsonb) = true, '116 boundary: a dated autogen snapshot (video) is a RECORD';
+    ASSERT stewards.keeper_doc_is_record('digest',     '{}'::jsonb) = true, '116 boundary: a dated digest is a RECORD';
+    ASSERT stewards.keeper_doc_is_record('crawl-page', '{}'::jsonb) = true, '116 boundary: a crawl-page is a RECORD';
+    -- the Watchman frontmatter-exempt gate is honoured identically:
+    ASSERT stewards.keeper_doc_is_record('doc', '{"watchman":"skip"}'::jsonb)   = true,  '116 boundary: a watchman:skip doc is fenced off (record) — the same gate the Watchman uses';
+    ASSERT stewards.keeper_doc_is_record('doc', '{"watchman":"exempt"}'::jsonb) = true,  '116 boundary: a watchman:exempt doc is fenced off (record)';
+    ASSERT stewards.keeper_doc_is_record('doc', '{"watchman":"active"}'::jsonb) = false, '116 boundary: an ordinary frontmatter value does NOT fence a living doc';
+
+    RAISE NOTICE 'OK 116: keeper constitution (v36/S3) — the three memory-write rules (ENRICH OVER CREATE / LINK BOTH WAYS / SUPERSEDE COMPLETELY) are in the canonical keeper_constitution() text (naming graph_orphans + keeper_doc_is_record as their oracles), spliced exactly once into the research-summary + research-write build stages (original body preserved) and the doc_create tool description, and ABSENT from an unrelated pipeline (code-pr); and the living-vs-record boundary rule 3 must not cross is explicit and correct — doc/study/proposal/phase-doc LIVING (supersession ok), journal + dated autogen snapshots + watchman:skip|exempt RECORD (immutable)';
+END
+$vs116$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v36 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution) is sound =='

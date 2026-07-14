@@ -379,6 +379,26 @@ extension_sql_file!(
     requires = ["create_v34_park_honesty"],
 );
 
+// v36-keeper-constitution.sql — NEW (S3): the Knowledge-Keeper constitution. The
+// three memory-write rules ported (prose IP) from Understory's Knowledge Keeper —
+// ENRICH OVER CREATE, LINK BOTH WAYS, SUPERSEDE COMPLETELY (living-docs-only) —
+// landed as DATA, not code. A keeper.record_kinds config seed + a
+// keeper_doc_is_record(kind, frontmatter) predicate (the living-vs-record boundary
+// rule 3 must not cross — reuses the Watchman's own frontmatter-exempt gate), a
+// keeper_constitution() canonical-text function, and the rules spliced through
+// BOTH channels S1 proved reach a client: a concise directive appended to the
+// doc_create tool description (the universal fallback, reaching core + overlay
+// digesters) and the full constitution appended to the research-summary/
+// research-write build-stage prompts (the standards channel). Rule 2 names
+// v35's graph_orphans as its detector, so constitution and oracle reference each
+// other. Purely additive: one config seed, two functions, and two idempotent
+// later-file-wins column/stage patches. requires = create_v35_graph_lint.
+extension_sql_file!(
+    "../v36-keeper-constitution.sql",
+    name = "create_v36_keeper_constitution",
+    requires = ["create_v35_graph_lint"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
