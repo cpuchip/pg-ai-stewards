@@ -6370,4 +6370,102 @@ BEGIN
 END
 $vs114$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v32 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty) is sound =='
+-- =====================================================================
+-- v35 — graph-health lint (S2): the detect → fix → re-detect → green oracle.
+-- Seeds a controlled scratch subgraph (all slugs vs115-*), asserts the lint
+-- FLAGS a known orphan + a known dangling edge (and that an auto-generated
+-- source does NOT rescue an orphan — the ported Understory subtlety), then
+-- WIRES the orphans + repairs the dangling and asserts the flags clear and
+-- healthy returns to baseline. Deterministic regardless of any residue from
+-- earlier blocks: it asserts scoped membership plus a baseline-relative health
+-- flip, never a bare global count.
+-- =====================================================================
+DO $vs115$
+DECLARE
+    v_before_healthy boolean;   -- graph health BEFORE the fixture (baseline)
+    v_seed_healthy   boolean;   -- WITH the fixture's orphan + dangling present
+    v_after_healthy  boolean;   -- AFTER wiring + repair
+    v_json           jsonb;
+    v_scoped_orphans int;
+    v_scoped_dang    int;
+BEGIN
+    v_before_healthy := (SELECT healthy FROM stewards.graph_health());
+
+    -- ---- seed the scratch subgraph ----
+    PERFORM stewards.import_doc('vs115-a',      'vs115/a.md',      'vs115 A',      '');
+    PERFORM stewards.import_doc('vs115-b',      'vs115/b.md',      'vs115 B',      '');
+    PERFORM stewards.import_doc('vs115-orphan', 'vs115/orphan.md', 'vs115 Orphan', '');
+    PERFORM stewards.import_doc('vs115-orphan2','vs115/orphan2.md','vs115 Orphan2','');
+    -- an AUTO-GENERATED aggregation source (kind='video', in the default
+    -- graph_lint.autogen_source_kinds). Its outbound link must NOT rescue.
+    PERFORM stewards.import_doc('vs115-video',  'vs115/video.md',  'vs115 Video',  '', '{}'::jsonb, 'video');
+
+    -- a/b form a mutual pair (directed BUILDS_ON both ways) -> neither orphan.
+    PERFORM stewards.graph_link('doc','vs115-a','doc','vs115-b','BUILDS_ON','vs115');
+    PERFORM stewards.graph_link('doc','vs115-b','doc','vs115-a','BUILDS_ON','vs115');
+    -- give the video an inbound so IT is not an orphan (keep the scope clean).
+    PERFORM stewards.graph_link('doc','vs115-a','doc','vs115-video','BUILDS_ON','vs115');
+    -- the DANGLING edge: a relationship asserted to a doc that was never imported.
+    PERFORM stewards.graph_link('doc','vs115-a','doc','vs115-ghost','BUILDS_ON','vs115');
+    -- orphan2's ONLY inbound is from the auto-generated video -> still orphaned.
+    PERFORM stewards.graph_link('doc','vs115-video','doc','vs115-orphan2','BUILDS_ON','vs115');
+    -- vs115-orphan gets NO inbound at all -> the plain orphan.
+
+    -- ---- DETECT ----
+    ASSERT EXISTS (SELECT 1 FROM stewards.graph_orphans WHERE slug='vs115-orphan'),
+        '115 detect: a doc with zero inbound curated edges must be flagged as an orphan';
+    ASSERT EXISTS (SELECT 1 FROM stewards.graph_orphans WHERE slug='vs115-orphan2'),
+        '115 detect: an auto-generated (video) source must NOT rescue an orphan — orphan2 must still be flagged';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.graph_orphans WHERE slug IN ('vs115-a','vs115-b','vs115-video')),
+        '115 detect: mutually/really linked docs must NOT be flagged as orphans (the lint is not flagging everything)';
+    ASSERT EXISTS (SELECT 1 FROM stewards.graph_missing_doc_nodes WHERE slug='vs115-ghost'),
+        '115 detect: a doc-node referenced by a non-CITES edge but with no backing row is a missing corpus doc';
+    ASSERT EXISTS (SELECT 1 FROM stewards.graph_dangling_edges WHERE missing_slug='vs115-ghost' AND missing_end='dst'),
+        '115 detect: the edge asserted to the missing doc must be flagged as dangling';
+
+    v_seed_healthy := (SELECT healthy FROM stewards.graph_health());
+    ASSERT v_seed_healthy = false,
+        '115 detect: a graph carrying a known orphan + dangling edge is not healthy';
+
+    -- the tool surface: valid jsonb, honest counts, capped worklist present.
+    v_json := stewards.graph_health_tool('{}'::jsonb)::jsonb;
+    ASSERT (v_json->>'healthy')::boolean = false,        '115 tool: healthy=false surfaced';
+    ASSERT (v_json->>'orphan_count')::int >= 2,          '115 tool: >=2 orphans counted';
+    ASSERT (v_json->>'dangling_edge_count')::int >= 1,   '115 tool: >=1 dangling edge counted';
+    ASSERT jsonb_array_length(v_json->'orphans') >= 1,   '115 tool: worklist sample non-empty';
+
+    -- ---- FIX: wire the orphans (real, non-autogen source) + repair the dangling ----
+    PERFORM stewards.graph_link('doc','vs115-b','doc','vs115-orphan','BUILDS_ON','vs115 wire');
+    PERFORM stewards.graph_link('doc','vs115-b','doc','vs115-orphan2','BUILDS_ON','vs115 wire non-autogen');
+    PERFORM stewards.import_doc('vs115-ghost', 'vs115/ghost.md', 'vs115 Ghost', '');  -- the missing doc now exists
+
+    -- ---- RE-DETECT (green) ----
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.graph_orphans WHERE slug='vs115-orphan'),
+        '115 re-detect: the wired orphan must clear (an inbound curated link from a live non-autogen doc)';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.graph_orphans WHERE slug='vs115-orphan2'),
+        '115 re-detect: a non-autogen inbound link DOES rescue — orphan2 must clear (proves the exclusion is source-specific)';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.graph_dangling_edges WHERE missing_slug='vs115-ghost'),
+        '115 re-detect: importing the missing doc must clear the dangling edge';
+
+    SELECT count(*) INTO v_scoped_orphans FROM stewards.graph_orphans WHERE slug LIKE 'vs115-%';
+    SELECT count(*) INTO v_scoped_dang    FROM stewards.graph_dangling_edges WHERE missing_slug LIKE 'vs115-%';
+    ASSERT v_scoped_orphans = 0 AND v_scoped_dang = 0,
+        format('115 re-detect: the fixture must contribute no orphans/dangling after the fix (got %s/%s)', v_scoped_orphans, v_scoped_dang);
+
+    -- the healthy oracle flips back to its baseline; if the graph was clean to
+    -- begin with, that is a full green (the detect→fix→green cycle end to end).
+    v_after_healthy := (SELECT healthy FROM stewards.graph_health());
+    ASSERT v_after_healthy = v_before_healthy,
+        '115 green: repairing the fixture restores graph health to its baseline';
+    ASSERT (NOT v_before_healthy) OR v_after_healthy,
+        '115 green: on an otherwise-clean graph, health flips true after the fix';
+
+    -- ---- teardown (deleting the doc nodes cascades the fixture edges) ----
+    DELETE FROM stewards.nodes WHERE kind = 'doc' AND ref LIKE 'vs115-%';
+    DELETE FROM stewards.docs  WHERE slug LIKE 'vs115-%';
+
+    RAISE NOTICE 'OK 115: graph-health lint (v35/S2) — orphans (inbound-degree zero over curated relationship edges) and dangling edges (asserted to deleted/missing corpus docs) are flagged deterministically; an auto-generated (video) source does NOT rescue an orphan while a live non-autogen link does (the ported Understory exclusion, source-specific); the graph_health tool ships counts + healthy + a capped worklist; and wiring the orphans + re-importing the missing doc clears every flag and restores healthy to baseline (detect → fix → re-detect → green)';
+END
+$vs115$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v35 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint) is sound =='

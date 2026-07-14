@@ -362,6 +362,23 @@ extension_sql_file!(
     requires = ["create_v33_wargame_w2"],
 );
 
+// v35-graph-lint.sql — NEW (S2): the graph-health lint. A deterministic oracle
+// over the doc relationship graph (v00 nodes/edges + docs) that feeds
+// memory-tend (41) a WORKLIST instead of vibes. Two views (graph_orphans =
+// docs with inbound-degree zero over curated relationship edges; excluding
+// auto-generated aggregation docs as sources so a generated catalog can't drown
+// the signal — graph_dangling_edges = edges asserted to deleted/missing corpus
+// docs), a graph_health() summary with a `healthy` boolean, a graph_health tool
+// wired into the memory-tend tool group, and a later-file-wins re-author of the
+// memory-tend pipeline template to read health first and report before→after.
+// Purely additive tables/views/functions + two ON CONFLICT re-authors of v09's
+// memory-tend tool_group and pipeline. requires = create_v34_park_honesty.
+extension_sql_file!(
+    "../v35-graph-lint.sql",
+    name = "create_v35_graph_lint",
+    requires = ["create_v34_park_honesty"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
