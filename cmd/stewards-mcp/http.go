@@ -72,10 +72,18 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 	// per-dispatch draft namespace with zero cross-dispatch bleed, no new
 	// plumbing required.
 	getServer := func(r *http.Request) *mcp.Server {
+		// Seed memory (S1): this server is rebuilt per MCP session, so we
+		// re-derive the corpus overview on every connection — freshness with
+		// zero invalidation logic (the property understory gets from stateless
+		// HTTP). Injected through both channels below: the initialize
+		// `instructions` field here and the doc_search description via
+		// registerDocTools. Best-effort — buildSeed returns "" on disable or a
+		// fetch error, no-oping both.
+		seed := buildSeed(r.Context(), pool)
 		s := mcp.NewServer(&mcp.Implementation{
 			Name:    "pg-ai-stewards (remote, read-mostly)",
 			Version: version,
-		}, nil)
+		}, &mcp.ServerOptions{Instructions: seedInstructions(seed)})
 		// #333 session propagation: a loom-dispatched stage's claude session
 		// may DECLARE its substrate dispatch session via X-Stewards-Session
 		// (bgworker → OpenAI `user` field → loom injects the header into the
@@ -89,7 +97,7 @@ func runHTTP(ctx context.Context, pool *pgxpool.Pool, addr string) error {
 		if h := strings.TrimSpace(r.Header.Get("X-Stewards-Session")); wiSessionRe.MatchString(h) {
 			session = h
 		}
-		registerDocTools(s, pool)        // doc_search / doc_get / doc_similar / doc_citations
+		registerDocTools(s, pool, seed)  // doc_search / doc_get / doc_similar / doc_citations
 		registerInspectionTools(s, pool) // read-only work-item / corpus inspection
 		registerModelTools(s, pool)      // list_models / list_connectors — read-only catalog views (90: list_models is in the harness hinge's ratified read set)
 		registerDocWriteTools(s, pool, session)

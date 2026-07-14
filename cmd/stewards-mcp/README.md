@@ -13,6 +13,21 @@ Two read-only tools over the substrate's studies corpus:
 
 Future phases (3e.2-3e.5) add stewards_brain, stewards_work_item, gospel_passthrough, and outbound MCP-client capability for consuming external MCP servers like gospel-engine-v2.
 
+## Seed memory (S1)
+
+A client that sees tool *names* only has no signal that the corpus might already hold an answer, so it answers from its own head and never calls `doc_search` — "an amnesia it didn't know it had." The seed kills that: at startup the server derives a compact overview of what the corpus holds (doc counts by kind, knowledge pools with their most-recent doc titles as semantic hooks, active intents, recent activity) and injects it through **both** channels that reach the client LLM:
+
+1. the MCP `instructions` field (returned at `initialize` — lands in the client's system prompt), and
+2. the `doc_search` tool description (`CURRENT MEMORY OVERVIEW: …` — the universal fallback, since every tool-calling client loads tool descriptions even when it ignores server instructions).
+
+The overview lists concept **descriptions**, not filenames — a pool with a description shows it (`ai — AI research + experiments to try`), because a semantic hook ignites the "memory might know this" instinct where a bare slug does not. The body is capped at 3000 chars with a "use doc_search to explore further" tail.
+
+Freshness: the long-lived stdio server builds the seed once at startup (the `instructions` channel freezes per session by protocol regardless). The HTTP surface (`--http-addr`) rebuilds its server per MCP session, so it re-derives the seed on every connection — freshness with zero invalidation logic.
+
+**Config:** on by default. Set `STEWARDS_SEED_MEMORY=false` (or `0`/`no`/`off`) to disable — both channels no-op, restoring the pre-seed behavior (a clean A/B toggle). A seed fetch failure degrades to the same no-overview behavior rather than blocking the `initialize` handshake.
+
+Ported (pattern, not code) from understory's `packages/server/src/mcp/seed.ts`; design source `.spec/proposals/understory-steals.md` §S1.
+
 ## Build
 
 The module is registered in the workspace `go.work` at the repo root. Build with:
@@ -33,7 +48,8 @@ Add to `.mcp.json` at the repo root (gitignored — local config only):
       "type": "stdio",
       "command": "C:/path/to/workspace/projects/pg-ai-stewards/bin/stewards-mcp.exe",
       "env": {
-        "STEWARDS_DSN": "postgres://stewards:stewards@localhost:55433/stewards?sslmode=disable"
+        "STEWARDS_DSN": "postgres://stewards:stewards@localhost:55433/stewards?sslmode=disable",
+        "STEWARDS_SEED_MEMORY": "true"
       }
     }
   }
