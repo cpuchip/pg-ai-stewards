@@ -41,3 +41,4 @@ COPY v32-dispatch-honesty.sql ./
 COPY v33-wargame-w2.sql ./
 COPY v34-park-honesty.sql ./
 COPY v35-graph-lint.sql ./
+COPY v36-keeper-constitution.sql ./
