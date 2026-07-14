@@ -167,3 +167,19 @@ pointed at a different target.
    seats (`loom race` ran ~$0.19/contender on a trivial task; real multi-file fixes
    cost more). The aborts table enforces whatever number he picks. **Needs a
    number — no lean; his call.**
+
+
+## Ratifications (2026-07-14, Michael)
+
+1. **Gate placement — RATIFIED:** one blocking gate, immediately before ship.
+2. **Spend cap — RATIFIED as config:** `incident_spend_cap` is instance
+   configuration, fillable by whoever installs an OSS pg-ai-stewards (no
+   hardcoded number). This instance sets **$10/incident** for pay-per-use
+   seats; Claude Code seats are exempt (subscription-based — bounded by the
+   sub, not dollars).
+3. **Incident sources — pending final word.** Clarified reading: v1 sources =
+   Michael's word (dispatch) + A2A-filed by ALREADY-GRANTED seats; only
+   Michael closes an incident to prod (the ship gate). Narrow ON PURPOSE:
+   anything watching-and-auto-filing (health probes, deploy oracles) is a
+   standing autonomous loop = the parked capability class; the named widening
+   path is v2 after fleet-glass (#367) exists, back through council.
