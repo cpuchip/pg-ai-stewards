@@ -25,3 +25,4 @@ scripts/hinge-review/hinge/*-body.txt
 # runtime data, never repo content; knowledge/ may be its own git repo.
 /drop/
 /knowledge/
+/.claude/
