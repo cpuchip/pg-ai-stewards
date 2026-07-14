@@ -177,7 +177,7 @@ pointed at a different target.
    hardcoded number). This instance sets **$10/incident** for pay-per-use
    seats; Claude Code seats are exempt (subscription-based — bounded by the
    sub, not dollars).
-3. **Incident sources — pending final word.** Clarified reading: v1 sources =
+3. **Incident sources — ★ RATIFIED 2026-07-14** ("yes incident sources yes, it makes sense now"): Clarified reading: v1 sources =
    Michael's word (dispatch) + A2A-filed by ALREADY-GRANTED seats; only
    Michael closes an incident to prod (the ship gate). Narrow ON PURPOSE:
    anything watching-and-auto-filing (health probes, deploy oracles) is a

@@ -122,3 +122,13 @@ stands alone (glass on existing data); Stage 2 is inert recording; Stage 3 needs
 Atonement: recording is telemetry (never fails a run); the glass is read-only (nothing
 to roll back). Consecration: the visibility surface that later widening arcs (e.g.
 incident sources, the warm-resident seat) are gated on.
+
+
+## Ratification (2026-07-14, Michael)
+
+All six leans RATIFIED as v1 ("we'll try that then modify if we need
+more/different"): adaptive poll · tokens live with $ on hover/rollup ·
+per-work-item path-touch subgraph for S4 replay · first-class Fleet pane ·
+wake the dormant tool_calls table (+seq/paths/write) · seats = active
+dispatches grouped by agent/model. The arc is fully unblocked for the build
+session.
