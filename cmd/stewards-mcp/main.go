@@ -148,19 +148,28 @@ func main() {
 		return
 	}
 
+	// Seed memory (S1): derive a corpus overview from live substrate state and
+	// inject it through BOTH client-reaching channels — the initialize
+	// `instructions` field (set here) and the doc_search description (passed to
+	// registerDocTools below). Built once at startup; on this long-lived stdio
+	// process the overview reflects startup state (the instructions channel
+	// freezes per session by protocol regardless). Best-effort: buildSeed
+	// returns "" when disabled or on a fetch error, which no-ops both channels.
+	seed := buildSeed(ctx, pool)
+
 	// Build the MCP server. Capabilities are auto-declared by the SDK
 	// based on what tools/resources/prompts we register.
 	srv := mcp.NewServer(&mcp.Implementation{
 		Name:    "pg-ai-stewards",
 		Version: version,
-	}, nil)
+	}, &mcp.ServerOptions{Instructions: seedInstructions(seed)})
 	proxySessions := newSessionCache()
 	defer proxySessions.closeAll()
 	callProxy := makeMCPProxyCaller(pool, proxySessions)
 
 	// Register tools. Each handler closes over the pool so it can run
 	// queries; the pool is already context-aware and goroutine-safe.
-	registerDocTools(srv, pool)
+	registerDocTools(srv, pool, seed)
 	registerDocWriteTools(srv, pool, "stdio-main")                    // doc_create/append/patch/read/finalize/current (90) — one stable draft namespace for this long-lived stdio process
 	registerSubstrateToolDispatch(srv, pool, "stdio-main", callProxy) // dynamic sql_fn/mcp_proxy catalog (#346)
 	registerInspectionTools(srv, pool)

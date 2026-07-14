@@ -36,14 +36,16 @@ func toolError(format string, args ...any) *mcp.CallToolResult {
 
 // registerDocTools wires up the v1+v1.1 (Phase 3e.1, 3e.1.1) tool surface:
 // doc_search, doc_get, doc_similar, doc_citations.
-func registerDocTools(srv *mcp.Server, pool *pgxpool.Pool) {
+//
+// seed is the S1 corpus overview (see seed.go). When non-empty it is appended
+// to doc_search's description ("CURRENT MEMORY OVERVIEW: …") — the second of
+// the two seed-memory channels, so even a client that ignores the server's
+// initialize `instructions` still learns what the corpus holds. Empty seed
+// (STEWARDS_SEED_MEMORY=false, or a fetch failure) → base description only.
+func registerDocTools(srv *mcp.Server, pool *pgxpool.Pool, seed string) {
 	mcp.AddTool(srv, &mcp.Tool{
-		Name: "doc_search",
-		Description: "Full-text search the substrate's studies corpus. " +
-			"Returns matching slugs, titles, kinds, snippets, and ranks. " +
-			"Filter by kinds (e.g. ['study','journal','proposal']) to narrow " +
-			"to a specific document type. Use doc_get afterward to read a " +
-			"matched document by slug.",
+		Name:        "doc_search",
+		Description: docSearchDescription(seed),
 	}, makeDocSearch(pool))
 
 	mcp.AddTool(srv, &mcp.Tool{
