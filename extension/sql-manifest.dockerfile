@@ -43,3 +43,5 @@ COPY v34-park-honesty.sql ./
 COPY v35-graph-lint.sql ./
 COPY v36-keeper-constitution.sql ./
 COPY v37-verdict-regex-markdown.sql ./
+COPY v38-crawl-continue-regex-markdown.sql ./
+COPY v39-pr-url-gate.sql ./
