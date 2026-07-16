@@ -11,7 +11,9 @@
 #            bell; approve guard) + ASSERT steward-tools ABSENT at 0.1.0
 #   stage 3  ALTER EXTENSION UPDATE TO '0.2.0' + steward-tools smoke
 #            (present; model_health shape; unstick refusal; forge rate guard)
-#   stage 4  fresh 2nd DB straight to 0.2.0 (default_version) + same smoke
+#   stage 3b ALTER EXTENSION UPDATE TO '0.3.0' + unstick-reset smoke (a parked
+#            item's loop counters — revise_count/failure_count/_route_hops — clear)
+#   stage 4  fresh 2nd DB straight to 0.3.0 (default_version) + same smoke
 #   stage 5  pg_dump/restore -> a reminders row AND a forged_tools row survive
 #   stage 6  uninstall posture: forged tool present -> DROP refuses ->
 #            companion_uninstall() (allowlist shrinks, tool_defs deactivate)
@@ -92,7 +94,8 @@ done
 [ "$ready" -eq 1 ] || { die "scratch postgres never became ready (30x2s)"; abort; }
 
 for f in stewards_companion.control stewards_companion--0.1.0.sql \
-         stewards_companion--0.1.0--0.2.0.sql stewards_companion--0.2.0.sql; do
+         stewards_companion--0.1.0--0.2.0.sql stewards_companion--0.2.0.sql \
+         stewards_companion--0.2.0--0.3.0.sql stewards_companion--0.3.0.sql; do
   docker cp "$SCRIPT_DIR/$f" "$SCRATCH:$EXTDIR/$f" >/dev/null || die "docker cp $f"
 done
 [ "$fail" -eq 0 ] || abort
@@ -186,16 +189,55 @@ SQL
 smoke_020 stewards 3
 
 # =====================================================================
-# stage 4: fresh 2nd DB straight to 0.2.0 (default_version)
+# stage 3b: ALTER EXTENSION UPDATE TO '0.3.0' + unstick-reset smoke (defect 3)
 # =====================================================================
-echo "== stage 4: fresh DB straight to 0.2.0 =="
+echo "== stage 3b: upgrade 0.2.0 -> 0.3.0 (unstick resets the loop counters) =="
+docker exec "$SCRATCH" psql -U stewards -d stewards -v ON_ERROR_STOP=1 -q \
+  -c "ALTER EXTENSION stewards_companion UPDATE TO '0.3.0';" >/dev/null \
+  || die "stage 3b — ALTER EXTENSION UPDATE TO 0.3.0"
+v=$(scalar stewards "SELECT extversion FROM pg_extension WHERE extname='stewards_companion';")
+[ "$v" = "0.3.0" ] && echo "OK: stage 3b — extversion now 0.3.0" || die "stage 3b — extversion '$v' != 0.3.0"
+
+sql_assert stewards "stage 3b — work_item_unstick RESETS the loop counters (defect 3)" <<'SQL'
+DO $s3b$
+DECLARE i uuid; res jsonb; inp jsonb; fc int; sr jsonb;
+BEGIN
+  INSERT INTO stewards.intents (slug, purpose) VALUES ('d2a-unstick','unstick reset fixture')
+    ON CONFLICT (slug) DO UPDATE SET purpose = EXCLUDED.purpose;
+  i := stewards.work_item_create('code-pr',
+        jsonb_build_object('binding_question','x','repo','https://github.com/o/r','base_branch','main'),
+        NULL, 'd2a', NULL, (SELECT id FROM stewards.intents WHERE slug='d2a-unstick'));
+  -- park it with the loop machinery maxed: caps hit, failures logged, hops set
+  UPDATE stewards.work_items
+     SET status='awaiting_review',
+         input = input || jsonb_build_object('revise_count',2,'plan_revise_count',2),
+         failure_count = 3,
+         stage_results = jsonb_build_object('_route_hops', jsonb_build_object('review',7))
+   WHERE id=i;
+  res := companion.work_item_unstick(jsonb_build_object('work_item_id', i::text));
+  ASSERT (res->>'ok')::boolean, format('unstick must succeed: %s', res);
+  SELECT input, failure_count, stage_results INTO inp, fc, sr FROM stewards.work_items WHERE id=i;
+  -- BEFORE 0.3.0 these stayed maxed and the item re-parked instantly (defect 3)
+  ASSERT inp->>'revise_count' IS NULL,      format('revise_count cleared: %s', inp->>'revise_count');
+  ASSERT inp->>'plan_revise_count' IS NULL, format('plan_revise_count cleared: %s', inp->>'plan_revise_count');
+  ASSERT fc = 0,                            format('failure_count zeroed: %s', fc);
+  ASSERT NOT (sr ? '_route_hops'),          format('_route_hops dropped: %s', sr);
+  ASSERT inp->>'binding_question' = 'x',    'real input preserved (only the loop keys reset)';
+  RAISE NOTICE 'stage 3b passed — unstick reset the loop counters, kept the real input';
+END $s3b$;
+SQL
+
+# =====================================================================
+# stage 4: fresh 2nd DB straight to 0.3.0 (default_version)
+# =====================================================================
+echo "== stage 4: fresh DB straight to 0.3.0 =="
 docker exec "$SCRATCH" psql -U stewards -d stewards -q -c "CREATE DATABASE stewards2;" >/dev/null 2>&1 || die "stage 4 — CREATE DATABASE stewards2"
 docker exec "$SCRATCH" psql -U stewards -d stewards2 -v ON_ERROR_STOP=1 -q \
   -c "CREATE EXTENSION IF NOT EXISTS pg_ai_stewards CASCADE;" \
   -c "CREATE EXTENSION stewards_companion;" >/dev/null \
   || die "stage 4 — CREATE EXTENSION stewards_companion (no version)"
 v=$(scalar stewards2 "SELECT extversion FROM pg_extension WHERE extname='stewards_companion';")
-[ "$v" = "0.2.0" ] && echo "OK: stage 4 — fresh install lands at default_version 0.2.0" || die "stage 4 — extversion '$v' != 0.2.0"
+[ "$v" = "0.3.0" ] && echo "OK: stage 4 — fresh install lands at default_version 0.3.0" || die "stage 4 — extversion '$v' != 0.3.0"
 smoke_020 stewards2 4
 
 # =====================================================================
@@ -221,7 +263,7 @@ docker exec "$SCRATCH" bash -c "pg_restore -U stewards -d stewards_restore //tmp
 sql_assert stewards_restore "stage 5 — reminders + forged_tools rows survived dump/restore" <<'SQL'
 DO $s5b$
 BEGIN
-  ASSERT (SELECT extversion FROM pg_extension WHERE extname='stewards_companion')='0.2.0', 'ext restored at 0.2.0';
+  ASSERT (SELECT extversion FROM pg_extension WHERE extname='stewards_companion')='0.3.0', 'ext restored at 0.3.0';
   ASSERT (SELECT count(*) FROM companion.reminders WHERE message='survive the dump')=1, 'reminders row survived (config_dump)';
   ASSERT (SELECT count(*) FROM forge.forged_tools WHERE tool_name='d2a_survivor')=1, 'forged_tools row survived (config_dump)';
   RAISE NOTICE 'stage 5 passed';
@@ -281,7 +323,7 @@ echo "== stage 7: catalog parity (loose SQL vs extension) =="
 docker exec "$SCRATCH" psql -U stewards -d stewards -q -c "CREATE DATABASE loose;" >/dev/null 2>&1 || die "stage 7 — CREATE DATABASE loose"
 docker exec "$SCRATCH" psql -U stewards -d loose -v ON_ERROR_STOP=1 -q \
   -c "CREATE EXTENSION IF NOT EXISTS pg_ai_stewards CASCADE;" >/dev/null || die "stage 7 — core ext on loose"
-for f in forge.sql companion.sql steward-tools.sql; do
+for f in forge.sql companion.sql steward-tools.sql steward-unstick-reset.sql; do
   docker exec -i "$SCRATCH" psql -U stewards -d loose -v ON_ERROR_STOP=1 -q < "$PACK_DIR/$f" >/dev/null 2>&1 \
     || die "stage 7 — loose apply $f"
 done
@@ -340,9 +382,9 @@ RUN if ls /tmp/companion-pack/stewards_companion* >/dev/null 2>&1; then \
 DOCKER
 if docker build -t d2a-shippath-test "$SHIPCTX" >/dev/null 2>&1; then
   landed=$(docker run --rm --entrypoint sh d2a-shippath-test -c "ls /usr/share/postgresql/18/extension/stewards_companion* 2>/dev/null | wc -l" | tr -d '\r ')
-  [ "$landed" = "4" ] \
-    && echo "OK: stage 8 — staged build ships all 4 pack files into the image sharedir" \
-    || die "stage 8 — expected 4 pack files in image sharedir, found $landed"
+  [ "$landed" = "6" ] \
+    && echo "OK: stage 8 — staged build ships all 6 pack files into the image sharedir" \
+    || die "stage 8 — expected 6 pack files in image sharedir, found $landed"
 else
   die "stage 8 — ship-path proof image build failed"
 fi
