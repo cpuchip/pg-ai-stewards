@@ -239,17 +239,87 @@ func makeSandboxStart(mgr *sandbox.Manager, pool *pgxpool.Pool) func(context.Con
 			}
 			return nil, startOutput{Sandbox: in.Sandbox, Network: string(net), Repo: in.Repo}, nil
 		}
-		// No repo passed. If a worktree already exists for this sandbox (e.g. an
-		// earlier clone stage cloned it, then the container was reaped or the
-		// bridge restarted mid-pipeline), re-mount it so implement/verify/pr keep
-		// operating on the cloned repo — never silently fall back to an ephemeral
-		// /work that drops the clone. A fresh sandbox with no worktree stays
-		// ephemeral (v1 code-write behavior).
-		if err := mgr.Provision(ctx, in.Sandbox, net, mgr.HasWorktree(in.Sandbox)); err != nil {
+		// No repo passed. Re-mount an existing worktree if present (e.g. an earlier
+		// clone stage created it and only the container was reaped — the clone
+		// survives on the shared worktrees volume). If the worktree is GONE but
+		// this sandbox belongs to a repo-mode pipeline that SHOULD have one (a
+		// clone stage created it), FAIL LOUD instead of silently handing back an
+		// empty /work: otherwise a review stage "reviews" emptiness and a later
+		// push dies with `cannot change to '/worktrees/<id>'` (defect 2, observed
+		// on the real path). A genuinely ephemeral code-write sandbox (no worktree
+		// ever expected — no clone stage) stays ephemeral: v1 code-write behavior.
+		hasWt := mgr.HasWorktree(in.Sandbox)
+		if decideWorktree(hasWt, sandboxExpectsWorktree(ctx, pool, in.Sandbox)) == failWorktreeGone {
+			return errResult("worktree %s is gone — it was reaped or never created; "+
+				"re-run from the clone stage or pass repo= to re-provision", in.Sandbox), startOutput{}, nil
+		}
+		if err := mgr.Provision(ctx, in.Sandbox, net, hasWt); err != nil {
 			return errResult("%v", err), startOutput{}, nil
 		}
 		return nil, startOutput{Sandbox: in.Sandbox, Network: string(net)}, nil
 	}
+}
+
+// worktreeDecision is the no-repo/no-attachment branch's provisioning choice.
+type worktreeDecision int
+
+const (
+	// provisionEphemeral: a fresh sandbox with no worktree and none expected —
+	// v1 code-write behavior, /work is empty by design.
+	provisionEphemeral worktreeDecision = iota
+	// remountWorktree: a worktree is present on the shared volume — re-mount it
+	// (the container was reaped but the clone survived).
+	remountWorktree
+	// failWorktreeGone: this sandbox belongs to a repo-mode pipeline (a clone
+	// stage created a worktree) but the worktree is gone — fail loud rather than
+	// hand back an empty /work.
+	failWorktreeGone
+)
+
+// decideWorktree is the pure decision for coder_sandbox_start's no-repo branch,
+// separated from the docker-touching orchestration so the whole matrix is unit
+// testable (tools_test.go), the same way cloneMode is.
+func decideWorktree(hasWorktree, expectsWorktree bool) worktreeDecision {
+	switch {
+	case hasWorktree:
+		return remountWorktree
+	case expectsWorktree:
+		return failWorktreeGone
+	default:
+		return provisionEphemeral
+	}
+}
+
+// sandboxExpectsWorktree reports whether the given sandbox id belongs to a
+// work_item whose pipeline has a `clone` stage — i.e. a repo-mode pipeline
+// (code-pr) that creates a /work worktree. Such a sandbox SHOULD have a
+// worktree; if it doesn't, something reaped or never created it and the caller
+// must fail loud rather than review/push an empty /work.
+//
+// A code-write sandbox (no clone stage) legitimately has no worktree — it shares
+// the `wi-<uuid8>` id form (both families are stamped by the same trigger), so
+// the id alone can't tell them apart; only the pipeline can. This matches the
+// sandbox id EXACTLY against work_items.input->>'sandbox' (how the stamp trigger
+// keys it), so a code-write, custom, or ad-hoc sandbox id finds no clone-stage
+// row -> false and stays ephemeral (v1 behavior). A nil pool or any query error
+// also yields false: without the DB we cannot ASSERT a worktree should exist, so
+// we preserve the pre-existing behavior rather than wrongly erroring a run.
+func sandboxExpectsWorktree(ctx context.Context, pool *pgxpool.Pool, sandboxID string) bool {
+	if pool == nil {
+		return false
+	}
+	var expects bool
+	if err := pool.QueryRow(ctx, `
+		SELECT EXISTS (
+		  SELECT 1
+		    FROM stewards.work_items w
+		    JOIN stewards.pipeline_stage_maturity m
+		      ON m.pipeline_family = w.pipeline_family AND m.stage_name = 'clone'
+		   WHERE w.input->>'sandbox' = $1
+		)`, sandboxID).Scan(&expects); err != nil {
+		return false
+	}
+	return expects
 }
 
 type stopInput struct {
