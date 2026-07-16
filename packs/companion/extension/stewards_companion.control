@@ -9,7 +9,7 @@
 # `schema =` line here on purpose (mechanic #2 of the battle plan: a
 # single-schema `schema =` directive can't express that).
 comment = 'stewards_companion: voice companion pack (forge, reminders, bell, steward-tools) for pg_ai_stewards'
-default_version = '0.2.0'
+default_version = '0.3.0'
 relocatable = false
 requires = 'pg_ai_stewards'
 

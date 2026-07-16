@@ -64,6 +64,8 @@ CHECKS = [
     ("stewards_companion--0.1.0.sql", ["forge.sql", "companion.sql"], CREATE_GUARD),
     ("stewards_companion--0.1.0--0.2.0.sql", ["steward-tools.sql"], ALTER_GUARD),
     ("stewards_companion--0.2.0.sql", ["forge.sql", "companion.sql", "steward-tools.sql"], CREATE_GUARD),
+    ("stewards_companion--0.2.0--0.3.0.sql", ["steward-unstick-reset.sql"], ALTER_GUARD),
+    ("stewards_companion--0.3.0.sql", ["forge.sql", "companion.sql", "steward-tools.sql", "steward-unstick-reset.sql"], CREATE_GUARD),
 ]
 
 fail = False
