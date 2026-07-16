@@ -413,6 +413,34 @@ extension_sql_file!(
     requires = ["create_v36_keeper_constitution"],
 );
 
+// v38-crawl-continue-regex-markdown.sql — the crawl pipeline's step-loop
+// "CRAWL: continue" route_on rule (v21) anchored the verdict with `\s*`, which
+// a markdown-bold line ("**CRAWL: continue**") defeats — so a continue would be
+// misread and, since step.next is NULL, the crawl STOPS prematurely. Same
+// markdown-vulnerability class as v37, sibling pipeline; no failure observed
+// yet (preventive). Data-only, idempotent: widens the leading class of the one
+// regex, leaving the sibling empty-output rule untouched.
+// requires = create_v37_verdict_regex_markdown.
+extension_sql_file!(
+    "../v38-crawl-continue-regex-markdown.sql",
+    name = "create_v38_crawl_continue_regex_markdown",
+    requires = ["create_v37_verdict_regex_markdown"],
+);
+
+// v39-pr-url-gate.sql — the code-pr `pr` stage (v06) has next=null and NO
+// route_on, so it always falls through to a normal advance: it marked work
+// `completed` with no PR (minimax-m2.5 dangling tool_calls; glm-5.2 pushed but
+// never opened a PR). Data-only, idempotent: adds a route_on rule requiring a
+// github PR URL in the stage output — loop back to `pr` (cap 2) then PARK
+// awaiting_review honestly when absent. The honest-parking half only; no
+// gate-continuation (architecture, human's call).
+// requires = create_v38_crawl_continue_regex_markdown.
+extension_sql_file!(
+    "../v39-pr-url-gate.sql",
+    name = "create_v39_pr_url_gate",
+    requires = ["create_v38_crawl_continue_regex_markdown"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
