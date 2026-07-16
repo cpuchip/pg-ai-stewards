@@ -399,6 +399,20 @@ extension_sql_file!(
     requires = ["create_v35_graph_lint"],
 );
 
+// v37-verdict-regex-markdown.sql — the code-pr review/plan_review route_on
+// verdict regexes (v09/42-route-on) anchored the verdict with `\s*`, which a
+// markdown-bold verdict line ("**REVIEW: passes**") defeats — so a PASSING
+// review was misread as revise and looped a correct change to the revise cap
+// (work_item coder-proof-4, 2026-06-13). Data-only, idempotent: widens the
+// leading class of both regexes to tolerate markdown emphasis/list/heading/
+// quote/backtick markers while still line-anchoring the exact verdict token.
+// requires = create_v36_keeper_constitution.
+extension_sql_file!(
+    "../v37-verdict-regex-markdown.sql",
+    name = "create_v37_verdict_regex_markdown",
+    requires = ["create_v36_keeper_constitution"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
