@@ -93,6 +93,7 @@ COPY v33-wargame-w2.sql ./
 COPY v34-park-honesty.sql ./
 COPY v35-graph-lint.sql ./
 COPY v36-keeper-constitution.sql ./
+COPY v37-verdict-regex-markdown.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
