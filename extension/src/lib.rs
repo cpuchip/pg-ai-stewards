@@ -456,6 +456,24 @@ extension_sql_file!(
     requires = ["create_v39_pr_url_gate"],
 );
 
+// v41-graph-lint-exemptions.sql — the v35 graph-health lint counted two classes
+// of NON-knowledge docs as orphans, drowning the real signal (live 2026-07-18:
+// 214 of 267 orphans were storage/bookkeeping artifacts). Exempts them from the
+// graph_orphans CANDIDATE set: (1) multi-part PDF ingestion chunks — a numbered
+// slice (frontmatter.part) of a named parent (corpus) backed by an attachment or
+// cut by doc-extract, a permanent false orphan (210); (2) fan-out/aggregation
+// index docs (frontmatter.source_type ∈ config graph_lint.aggregate_index_source_types,
+// default ["aggregate-children"]) (4). The v35 autogen-source SOURCE rule and raw
+// video docs are DELIBERATELY untouched (a reserved design call). Data-only,
+// idempotent (CREATE OR REPLACE + config ON CONFLICT DO NOTHING). Validated live
+// in a rolled-back txn: orphans 267 → 53, dangling 0, missing 0, healthy false.
+// requires = create_v40_probe_budget.
+extension_sql_file!(
+    "../v41-graph-lint-exemptions.sql",
+    name = "create_v41_graph_lint_exemptions",
+    requires = ["create_v40_probe_budget"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
