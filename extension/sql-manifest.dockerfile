@@ -46,3 +46,4 @@ COPY v37-verdict-regex-markdown.sql ./
 COPY v38-crawl-continue-regex-markdown.sql ./
 COPY v39-pr-url-gate.sql ./
 COPY v40-probe-budget.sql ./
+COPY v41-graph-lint-exemptions.sql ./
