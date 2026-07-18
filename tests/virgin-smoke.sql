@@ -6261,8 +6261,13 @@ BEGIN
         '113A: the probe body must declare stream:true (exercise the streaming path dispatch uses)';
     ASSERT (v_wq_body->'stream_options'->>'include_usage')::boolean IS TRUE,
         '113A: the probe body must set stream_options.include_usage (matches dispatch)';
-    ASSERT (v_wq_body->>'max_tokens')::int <= 128,
-        format('113A: the probe must stay tiny (max_tokens small), got %s', v_wq_body->>'max_tokens');
+    -- v40 re-authored this invariant: the v32 "stay tiny (<=128)" budget falsely
+    -- failed always-reasoning models (thinking consumed the whole budget → 0
+    -- content chars → usable=false on healthy models, live-proven 2026-07-18).
+    -- The probe budget must now be big enough for a reasoner to finish thinking
+    -- AND land prose; OK 117 asserts the exact v40 value.
+    ASSERT (v_wq_body->>'max_tokens')::int >= 2500,
+        format('113A: the probe budget must clear the reasoning floor (>=2500; v40), got %s', v_wq_body->>'max_tokens');
 
     -- (B) STREAMING REJECTED → unusable AND supports_streaming=false. Simulate
     --     the provider streaming an error event (the "Console Go waves"
@@ -6545,4 +6550,43 @@ BEGIN
 END
 $vs116$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v36 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 117 — probe budget (v40): the auto-probe gives reasoning models room.
+-- Enqueues a real probe row and asserts (a) the v40 budget (32768 — the v32-era
+-- 128 guaranteed 0 content chars on always-reasoning models → false unusable,
+-- live-proven 2026-07-18), and (b) the v40 re-author preserved every v32 §2
+-- invariant of the probe body: streaming + include_usage + the deliberately
+-- irrelevant tool + tool_choice=auto + temperature 0 (the drift a
+-- verbatim-except re-author can silently introduce). Cleans up after itself.
+-- ---------------------------------------------------------------------
+DO $vs117$
+DECLARE
+    v_work_id bigint;
+    v_body    jsonb;
+BEGIN
+    v_work_id := stewards.enqueue_model_probe('vs117-probe-provider', 'vs117-probe-model');
+    SELECT payload->'body' INTO v_body FROM stewards.work_queue WHERE id = v_work_id;
+
+    ASSERT (v_body->>'max_tokens')::int = 32768,
+        format('117 budget: probe max_tokens must be 32768 (v40), got %s — a small ceiling falsely fails always-reasoning models (thinking eats the budget, 0 content chars, finish=length → usable=false)', v_body->>'max_tokens');
+    ASSERT (v_body->>'max_tokens')::int >= 2500,
+        '117 floor: probe budget must stay >= the reasoning floor (~2500) the operator overlay has documented since June';
+    ASSERT (v_body->>'stream')::boolean = true,
+        '117 v32-shape: probe must still declare stream:true (the streaming-honesty invariant)';
+    ASSERT (v_body->'stream_options'->>'include_usage')::boolean = true,
+        '117 v32-shape: probe must still declare stream_options.include_usage';
+    ASSERT jsonb_array_length(v_body->'tools') = 1,
+        '117 v32-shape: probe must still ship exactly one (irrelevant) tool';
+    ASSERT v_body->>'tool_choice' = 'auto',
+        '117 v32-shape: probe must still declare tool_choice=auto';
+    ASSERT (v_body->>'temperature')::numeric = 0,
+        '117 v32-shape: probe must still run at temperature 0';
+
+    DELETE FROM stewards.work_queue WHERE id = v_work_id;
+    DELETE FROM stewards.sessions WHERE id LIKE 'probe--vs117-probe-provider--%';
+
+    RAISE NOTICE 'OK 117: probe budget (v40) — enqueue_model_probe carries max_tokens=32768 (a ceiling, not a spend; the 128-token v32 budget falsely failed always-reasoning models) and the re-author preserved the full v32 §2 probe shape (stream:true + include_usage + one irrelevant tool + tool_choice=auto + temperature 0)';
+END
+$vs117$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v40 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget) is sound =='

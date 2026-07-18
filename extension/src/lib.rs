@@ -441,6 +441,21 @@ extension_sql_file!(
     requires = ["create_v38_crawl_continue_regex_markdown"],
 );
 
+// v40-probe-budget.sql — the auto-probe's max_tokens=128 (v32 dropped it
+// 400 → 128) guarantees 0 content chars on always-reasoning models (thinking
+// consumes the whole budget, finish=length), so trigger_resolve_model_probe
+// falsely flips healthy local models unusable and routing silently reverts to
+// cloud (live-proven 2026-07-18: thinkingcap-qwen3.6-27b failed the real probe
+// minutes after passing real completions on the same router). Idempotent:
+// re-authors enqueue_model_probe verbatim except max_tokens → 32768 (a
+// ceiling, not a spend — terse models still stop after a sentence).
+// requires = create_v39_pr_url_gate.
+extension_sql_file!(
+    "../v40-probe-budget.sql",
+    name = "create_v40_probe_budget",
+    requires = ["create_v39_pr_url_gate"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
