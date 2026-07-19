@@ -474,6 +474,26 @@ extension_sql_file!(
     requires = ["create_v40_probe_budget"],
 );
 
+// v42-unmined-sources.sql — the v35 lint counted auto-generated SOURCE docs
+// (video/digest/crawl-page) that are cross-linked but whose only inbound links
+// come from other autogen sources as ORPHANS — v35's autogen-source SOURCE
+// exclusion working as designed, but the operator's ruling (2026-07-18) is that
+// these are UNMINED, not orphaned: watched/filed/cross-linked, not yet drawn on
+// by an authored study. Adds view graph_unmined_sources (autogen-source v35
+// orphans with a discounted autogen inbound edge — a truly-edgeless video stays
+// a plain orphan), removes that subset from graph_orphans, and adds unmined_count
+// to graph_health()/graph_health_tool() (healthy formula unchanged — unmined does
+// NOT block healthy). The v41-reserved design call. Data-only, idempotent
+// (CREATE OR REPLACE views + DROP FUNCTION IF EXISTS/CREATE + tool_defs ON
+// CONFLICT). Validated live in a rolled-back txn: v41 orphans 51 → v42 orphans 40
+// + unmined 11, dangling 0, missing 0, healthy false.
+// requires = create_v41_graph_lint_exemptions.
+extension_sql_file!(
+    "../v42-unmined-sources.sql",
+    name = "create_v42_unmined_sources",
+    requires = ["create_v41_graph_lint_exemptions"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

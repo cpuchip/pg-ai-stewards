@@ -98,6 +98,7 @@ COPY v38-crawl-continue-regex-markdown.sql ./
 COPY v39-pr-url-gate.sql ./
 COPY v40-probe-budget.sql ./
 COPY v41-graph-lint-exemptions.sql ./
+COPY v42-unmined-sources.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
