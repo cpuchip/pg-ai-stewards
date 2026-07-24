@@ -21,7 +21,13 @@ INSERT INTO stewards.model_capability (provider, model, usable, supports_streami
   ('opencode_zen', 'deepseek-v4-flash-free', true, true, 'openai'),  -- FREE
   ('opencode_zen', 'claude-haiku-4-5',       true, true, 'openai'),
   ('opencode_zen', 'claude-sonnet-4-6',      true, true, 'openai'),
-  ('opencode_zen', 'claude-opus-4-8',        true, true, 'openai')
+  -- Probed 2026-07-24: opencode_zen answers HTTP 400 for the Opus tier and for
+  -- the 5-series. Seeded usable=false so a fresh install does not dispatch into
+  -- a wall; re-probe (enqueue_model_probe) if the provider's lineup changes.
+  -- Listing lies, the probe is truth — see docs/wiring-up-models.md.
+  ('opencode_zen', 'claude-opus-4-8',        false, true, 'openai'),
+  ('opencode_zen', 'claude-opus-5',          false, true, 'openai'),
+  ('opencode_zen', 'claude-sonnet-5',        false, true, 'openai')
 ON CONFLICT (provider, model) DO NOTHING;
 
 INSERT INTO stewards.model_pricing (provider, model, input_micro_per_mtok, output_micro_per_mtok, effective_at, notes) VALUES

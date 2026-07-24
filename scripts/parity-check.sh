@@ -27,6 +27,35 @@ set -u
 LIVE=${1:-stewards-oss-pg}
 IMAGE=${2:-stewards-oss-pg:pg18}
 SCRATCH=stewards-parity-scratch
+
+# --- oracle freshness guard (added 2026-07-24) -------------------------------
+# "Repo-truth" here is the IMAGE's baked chain, NOT the working tree. A stale
+# image silently turns this oracle into a liar: on 2026-07-24 the default
+# :pg18 tag predated the v42 commit by 5h, so it reported drift on
+# graph_health/graph_health_tool/graph_orphans that was really image-lag — and
+# stayed red after a CORRECT fix was applied to live. Refuse to run against a
+# reference older than the chain it claims to represent.
+_img_created=$(docker image inspect "$IMAGE" --format '{{.Created}}' 2>/dev/null || true)
+if [ -n "${_img_created:-}" ]; then
+  _img_epoch=$(date -d "$_img_created" +%s 2>/dev/null || echo 0)
+  _sql_epoch=$(git -C "$(cd "$(dirname "$0")/.." && pwd)" log -1 --format=%ct -- extension 2>/dev/null || echo 0)
+  if [ "${_img_epoch:-0}" -gt 0 ] && [ "${_sql_epoch:-0}" -gt "${_img_epoch:-0}" ]; then
+    echo "############################################################"
+    echo "# WARNING: possibly STALE reference image"
+    echo "#   image  $IMAGE built $_img_created"
+    echo "#   extension/ has commits newer than that build."
+    echo "# This oracle diffs live against the IMAGE's baked chain, so a stale"
+    echo "# image yields FALSE drift and stays RED after a correct fix."
+    echo "# (Seen 2026-07-24: :pg18 predated v42 by 5h and did exactly that.)"
+    echo "# A newer commit alone is NOT proof of staleness — building from the"
+    echo "# working tree and committing after is normal. Treat a RED result"
+    echo "# here as unconfirmed until re-run against a freshly built image."
+    echo "#   set PARITY_STRICT=1 to make this a hard failure instead."
+    echo "############################################################"
+    [ "${PARITY_STRICT:-0}" = "1" ] && exit 2
+  fi
+fi
+# ---------------------------------------------------------------------------
 HELD_FILE=$(mktemp)
 cat > "$HELD_FILE" <<'HELDEOF'
 doc_citations_resolved(text)
