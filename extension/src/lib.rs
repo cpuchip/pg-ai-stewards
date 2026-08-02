@@ -524,6 +524,24 @@ extension_sql_file!(
     requires = ["create_v42_unmined_sources"],
 );
 
+// v44-fact-edges-dedup-hash.sql — v43's dedup index could not hold real data.
+// It indexed the raw fact_norm text, and a real `fact` is a whole line of
+// prose: the FIRST real corpus (the P1 memory import, hours later) hit
+// "index row size 3216 exceeds btree version 4 maximum 2704". v43's own
+// fixture used a short toy string, which was semantically right and
+// dimensionally unreal. v44 indexes md5(fact_norm) instead — same exact-dedup
+// meaning, 32-byte payload. md5 because it is IMMUTABLE and takes text;
+// sha256 is IMMUTABLE but needs convert_to(), which is only STABLE and so
+// cannot be indexed. ⚠ Callers must now write
+// ON CONFLICT (src, dst, md5(fact_norm)) WHERE expired_at IS NULL.
+// Oracle: verify-44-fact-edges-dedup-hash.sql (pins the SIZE case).
+// requires = create_v43_fact_edges.
+extension_sql_file!(
+    "../v44-fact-edges-dedup-hash.sql",
+    name = "create_v44_fact_edges_dedup_hash",
+    requires = ["create_v43_fact_edges"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
