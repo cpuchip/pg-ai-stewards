@@ -494,6 +494,36 @@ extension_sql_file!(
     requires = ["create_v41_graph_lint_exemptions"],
 );
 
+// v43-fact-edges.sql — brain v5 P0 (the schema). Adds stewards.fact_edges, the
+// bi-temporal ASSERTION store the substrate has never had: stewards.edges is a
+// current-state slot (UNIQUE (src,dst,kind) + DO UPDATE), so it physically
+// cannot say "X was true, then stopped" — the second assertion destroys the
+// first. fact_edges gives every assertion its own identity, ingest-time
+// (created_at/expired_at) AND event-time (valid_at/invalid_at), a GENERATED
+// validity tstzrange + GiST for as-of queries, a partial unique on
+// (src,dst,fact_norm) WHERE expired_at IS NULL for exact dedup, invalidated_by
+// (which episode refuted this — graphiti has no such link), and fidelity
+// verbatim/paraphrase/inferred. Plus junction fact_edge_episodes with the
+// supports/invalidates role discriminator, entity columns on nodes
+// (labels/summary/name_norm/embedding), and messages.source_valid_at.
+// stewards.edges is untouched and stays the current-state adjacency.
+// Companion fixes ruled by ticket 003: graph_recall gains a structural path
+// guard (signature + defaults restated verbatim — the extension-function lock
+// forbids dropping or re-parameterizing it), and import_doc stops blanket-
+// DELETEing CITES edges on re-import (now deletes only what is no longer
+// cited). ⚠ import_doc is ALSO overlay-re-authored in live
+// (overlays/held-live-finals/gospel-core-reauthors.sql, allowlisted in
+// parity-check.sh) — the same fix is applied there or live would clobber this.
+// Additive and idempotent; no backfill, nothing reads fact_edges until P1.
+// Oracle: verify-43-fact-edges.sql (6 checks; negative-tested — it FAILS
+// against the pre-v43 chain and against a restored old import_doc).
+// requires = create_v42_unmined_sources.
+extension_sql_file!(
+    "../v43-fact-edges.sql",
+    name = "create_v43_fact_edges",
+    requires = ["create_v42_unmined_sources"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

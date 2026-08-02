@@ -31,9 +31,22 @@ AS $function$
                                'file_path', p_file_path,
                                'doc_kind',  p_kind));
 
-        -- Drop existing CITES edges so re-imports stay in sync with body.
-        DELETE FROM stewards.edges
-         WHERE src = v_node AND kind = 'CITES';
+        -- v43 (brain v5 P0, companion fix 2): delete ONLY the CITES edges
+        -- whose target is no longer cited. The old blanket DELETE destroyed
+        -- every citation edge's identity and created_at on EVERY re-import,
+        -- including unchanged ones. NOTE this overlay calls parse_gospel_links
+        -- (pre-2026-06-13 core); core v43 calls the renamed parse_doc_links.
+        -- The rename is NOT applied here on purpose — the two functions have
+        -- different bodies, so swapping them is a behaviour change and a
+        -- separate decision, not a drive-by.
+        DELETE FROM stewards.edges e
+         USING stewards.nodes n
+         WHERE e.src = v_node
+           AND e.kind = 'CITES'
+           AND n.id = e.dst
+           AND NOT EXISTS (
+               SELECT 1 FROM stewards.parse_gospel_links(p_body) l
+                WHERE l.kind = n.kind AND l.uri = n.ref);
 
         -- For each unique cited URI, upsert the cited node + CITES edge.
         FOR v_link IN
