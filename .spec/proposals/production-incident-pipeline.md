@@ -7,9 +7,9 @@ named yet."* We have every piece — Race, the Hinge, the coder sandbox, A2A
 dispatch, the aborts table, per-app deploy oracles — but nothing wires them for
 the specific shape *"prod is broken, right now."*
 
-**Status: DRAFT — awaiting Michael's ratification (his ruling, 2026-07-14:
-draft-first, ratify-before-build).** Nothing here is built. The pipeline is a new
-standing capability; §Open questions is the council moment.
+**Status: ★ RATIFIED 2026-07-14 (gate placement · spend cap · incident sources —
+see §Ratifications) — UNBUILT.** Nothing here is built; the BUILD is the carry.
+The pipeline is a new standing capability; the council moment has passed.
 
 ## The binding problem
 

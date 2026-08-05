@@ -13,10 +13,11 @@ never as local rows. The editorial wall — never work/client content in persona
 public spaces — stops being only a publishing rule and becomes a **federation
 boundary property** of the peer link.
 
-**Status: DRAFT — awaiting Michael's ratification (draft-first, council-gated).**
+**Status: PARTIALLY RULED — Q1 ANSWERED 2026-07-14 (personal↔work federation:
+NO, the former P3 is struck — see §Ruling at the end); Q2–Q4 remain open;
+practice scope (multiple local instances) may proceed. UNBUILT.**
 Federation is a new standing capability class, and a data boundary is a one-way
-door (once a link leaks, it has leaked). Nothing here is built. §7 is the council
-moment.
+door (once a link leaks, it has leaked). Nothing here is built.
 
 ---
 

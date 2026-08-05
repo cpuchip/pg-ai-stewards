@@ -1,6 +1,6 @@
 # Proposal: FLEET-GLASS (#367) + S4 trace-replay
 
-**Status:** DRAFT (executes in a coming session) · **Date:** 2026-07-14 · headline arc
+**Status:** ★ RATIFIED 2026-07-14 (all six leans, §Ratification) — UNBUILT; executes in a coming session · **Date:** 2026-07-14 · headline arc
 **Pairs with:** the Activity endpoint (`/api/activity`), the Stewdio cockpit
 (`cmd/stewards-ui`), the A2A engine (v13), the World/Cosmos graph views.
 
