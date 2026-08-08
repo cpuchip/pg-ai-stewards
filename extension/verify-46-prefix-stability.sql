@@ -24,18 +24,22 @@ DECLARE
     v_model text;
     v_rep   jsonb;
 BEGIN
-    SELECT m.session_id, s.agent_family
+    -- Family lives in the chat dispatch payload (sessions.agent_family is
+    -- often NULL); pick the most recent chat-dispatched session with a
+    -- real conversation.
+    SELECT wq.payload ->> 'session_id', wq.payload ->> 'agent_family'
       INTO v_sess, v_fam
-      FROM stewards.messages m
-      JOIN stewards.sessions s ON s.id = m.session_id
-     WHERE s.agent_family IS NOT NULL
-     GROUP BY m.session_id, s.agent_family
-    HAVING count(*) >= 4
-     ORDER BY max(m.created_at) DESC
+      FROM stewards.work_queue wq
+     WHERE wq.kind = 'chat'
+       AND wq.payload ? 'session_id'
+       AND wq.payload ? 'agent_family'
+       AND (SELECT count(*) FROM stewards.messages m
+             WHERE m.session_id = wq.payload ->> 'session_id') >= 4
+     ORDER BY wq.id DESC
      LIMIT 1;
 
     IF v_sess IS NULL THEN
-        RAISE NOTICE 'prefix-stability: SKIP — no session with >= 4 messages and an agent_family';
+        RAISE NOTICE 'prefix-stability: SKIP — no chat session with >= 4 messages';
         RETURN;
     END IF;
 
