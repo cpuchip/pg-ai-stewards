@@ -542,6 +542,50 @@ extension_sql_file!(
     requires = ["create_v43_fact_edges"],
 );
 
+// v45-fact-recall.sql — brain v5 P2: bi-temporal associative recall over
+// fact_edges (as_of belief-set reconstruction, sqrt-degree normalization,
+// evidence closure). Registered late: v45–v48 were tracked but absent from
+// this registry, so migrate.sh silently stopped at v44 on any clean clone —
+// found by threadchip's test bench 2026-08-09 (the drift the live DB masked,
+// because fermion had them applied by hand).
+extension_sql_file!(
+    "../v45-fact-recall.sql",
+    name = "create_v45_fact_recall",
+    requires = ["create_v44_fact_edges_dedup_hash"],
+);
+
+// v46-cache-discipline.sql — byte-stable prompt prefixes (the stable-first
+// law) + the prefix_stability_check oracle. 30 days of cost_events showed 0
+// cache_read_tokens on every provider; the §5 pressure line's live token
+// count in the system prompt invalidated llama-server and cloud prompt
+// caches on every tools-on dispatch (~78% of input spend avoidable).
+// Oracle: verify-46-prefix-stability.sql (red pre-v46, green post).
+extension_sql_file!(
+    "../v46-cache-discipline.sql",
+    name = "create_v46_cache_discipline",
+    requires = ["create_v45_fact_recall"],
+);
+
+// v47-judge-resume-fix.sql — restores the es7.4 resume tail the v27
+// re-author silently dropped ("byte-identical except extracted_by" was not):
+// judge-gated parent turns wedged in_progress forever once a brief landed.
+extension_sql_file!(
+    "../v47-judge-resume-fix.sql",
+    name = "create_v47_judge_resume_fix",
+    requires = ["create_v46_cache_discipline"],
+);
+
+// v48-window-clamp.sql — every budget layer bounded by the model's real
+// context window (LEAST(value, floor(window * 0.70))); three local runs
+// composed past n_ctx and 400d because stage/agent budgets returned early
+// and local seats had NULL context_window.
+// Oracle: verify-48-window-clamp.sql.
+extension_sql_file!(
+    "../v48-window-clamp.sql",
+    name = "create_v48_window_clamp",
+    requires = ["create_v47_judge_resume_fix"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

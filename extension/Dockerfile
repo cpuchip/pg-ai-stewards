@@ -99,6 +99,12 @@ COPY v39-pr-url-gate.sql ./
 COPY v40-probe-budget.sql ./
 COPY v41-graph-lint-exemptions.sql ./
 COPY v42-unmined-sources.sql ./
+COPY v43-fact-edges.sql ./
+COPY v44-fact-edges-dedup-hash.sql ./
+COPY v45-fact-recall.sql ./
+COPY v46-cache-discipline.sql ./
+COPY v47-judge-resume-fix.sql ./
+COPY v48-window-clamp.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
