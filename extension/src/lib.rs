@@ -586,6 +586,19 @@ extension_sql_file!(
     requires = ["create_v47_judge_resume_fix"],
 );
 
+// v49-memory-lanes.sql — brain v5: three independent mountains. origin_box on
+// nodes and fact_edges, FORCED by trigger (a caller cannot claim another
+// seat's lane), plus fact_recall_laned — same walk, same sqrt(deg)
+// normalization, own lane ordered first at equal relevance, nothing filtered.
+// Ruled mandatory after both remote boxes independently asked for attribution.
+// Oracle: verify-49-memory-lanes.sql — lane_check() plus the two properties a
+// static check cannot prove (unforgeability, per-caller reordering).
+extension_sql_file!(
+    "../v49-memory-lanes.sql",
+    name = "create_v49_memory_lanes",
+    requires = ["create_v48_window_clamp"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

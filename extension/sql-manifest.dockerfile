@@ -54,3 +54,4 @@ COPY v45-fact-recall.sql ./
 COPY v46-cache-discipline.sql ./
 COPY v47-judge-resume-fix.sql ./
 COPY v48-window-clamp.sql ./
+COPY v49-memory-lanes.sql ./
