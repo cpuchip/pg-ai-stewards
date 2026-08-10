@@ -599,6 +599,19 @@ extension_sql_file!(
     requires = ["create_v48_window_clamp"],
 );
 
+// v50-lane-write-path.sql — brain_add / brain_amend, guarded. From the seats'
+// spec: lane-first read is only safe because correction is inline, so the
+// write path refuses sibling-correction (subject-collision detector, override
+// with p_force) and refuses amending another box's lane (surface-first).
+// Fermion's lane stays file-backed; this is for the record-native remote
+// lanes. Oracle: verify-50 (collision refusal, force override, cross-lane
+// amend refusal, strike-in-place).
+extension_sql_file!(
+    "../v50-lane-write-path.sql",
+    name = "create_v50_lane_write_path",
+    requires = ["create_v49_memory_lanes"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

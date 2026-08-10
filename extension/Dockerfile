@@ -106,6 +106,7 @@ COPY v46-cache-discipline.sql ./
 COPY v47-judge-resume-fix.sql ./
 COPY v48-window-clamp.sql ./
 COPY v49-memory-lanes.sql ./
+COPY v50-lane-write-path.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
