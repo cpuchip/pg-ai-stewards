@@ -127,9 +127,39 @@ $fn$;
 COMMENT ON FUNCTION stewards.brain_amend(text,text,text) IS
 'v50: inline correction to a memory in the caller''s OWN lane, strike-don''t-delete. Refuses another box''s lane (surface-first) — the sibling-correction failure lane-first recall would otherwise surface stale.';
 
+-- Selftest reap (added same-day, threadchip's finding): box roles have
+-- INSERT-via-function but no DELETE on nodes, so the client selftest's
+-- cleanup failed SILENTLY on every remote box and left a permanent probe in
+-- that box's own lane — exactly where lane-first recall serves it first, from
+-- inside the gate that was supposed to bless its own fix. SECURITY DEFINER,
+-- scoped hard: only selftest-prefixed refs, only the CALLER'S lane
+-- (box_for_role(session_user) — session_user survives SECURITY DEFINER;
+-- current_user inside a definer body is the owner, the v49 lesson).
+CREATE OR REPLACE FUNCTION stewards.brain_selftest_reap()
+RETURNS int LANGUAGE plpgsql SECURITY DEFINER
+SET search_path TO 'stewards', 'house', 'pg_temp' AS $fn$
+DECLARE
+    v_box text := stewards.box_for_role(session_user::text);
+    v_n int;
+BEGIN
+    IF v_box IS NULL THEN
+        v_box := stewards.current_box();   -- host path (stewards itself)
+    END IF;
+    DELETE FROM stewards.nodes
+     WHERE kind = 'memory'
+       AND ref LIKE 'brainwrite-selftest-%'
+       AND origin_box = v_box;
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    RETURN v_n;
+END;
+$fn$;
+COMMENT ON FUNCTION stewards.brain_selftest_reap() IS
+'v50: delete selftest probes from the CALLER''s own lane only (selftest-prefixed refs only). Exists because box roles cannot DELETE on nodes and a silently-failing cleanup left probes in the lane recall trusts most.';
+
 GRANT EXECUTE ON FUNCTION stewards.brain_add(text,text,text,text,text,boolean),
                           stewards.brain_amend(text,text,text),
-                          stewards.memory_subject_collision(text,text)
+                          stewards.memory_subject_collision(text,text),
+                          stewards.brain_selftest_reap()
      TO brain_absorb;
 
 -- THE ORACLE — the two refusals a static check cannot prove.

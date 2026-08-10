@@ -57,4 +57,32 @@ BEGIN
     RAISE NOTICE 'lane write path: OK (cross-lane refused; own-lane struck-and-corrected)';
 END $$;
 
+\echo === selftest reap: own lane only, count returned ===
+DO $$
+DECLARE v_n int; v_left int;
+BEGIN
+    -- probes in the caller's lane (stamped by the trigger)
+    PERFORM stewards.brain_add('brainwrite-selftest-vfy1','Reap Probe One','h','b');
+    PERFORM stewards.brain_add('brainwrite-selftest-vfy2','Reap Probe Two','h','b');
+    -- a probe parked in a FOREIGN lane (planted by the owner post-insert;
+    -- SET ROLE cannot exercise the remote path — session_user survives it —
+    -- so scope is proven by what reap REFUSES to touch)
+    UPDATE stewards.nodes SET origin_box = 'not-a-real-box'
+     WHERE ref = 'brainwrite-selftest-vfy2';
+
+    SELECT stewards.brain_selftest_reap() INTO v_n;
+    SELECT count(*) INTO v_left FROM stewards.nodes
+     WHERE ref LIKE 'brainwrite-selftest-vfy%';
+
+    IF v_n < 1 THEN
+        RAISE EXCEPTION 'REAP DELETED NOTHING (returned %)', v_n;
+    END IF;
+    IF v_left <> 1 THEN
+        RAISE EXCEPTION 'REAP SCOPE WRONG: % probe(s) left, expected exactly the foreign-lane one', v_left;
+    END IF;
+    -- owner cleans the planted foreign probe
+    DELETE FROM stewards.nodes WHERE ref = 'brainwrite-selftest-vfy2';
+    RAISE NOTICE 'selftest reap: OK (own-lane reaped, foreign lane untouched, count=%)', v_n;
+END $$;
+
 ROLLBACK;
