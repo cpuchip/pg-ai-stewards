@@ -58,6 +58,14 @@ BEGIN
 END $$;
 
 \echo === selftest reap: own lane only, count returned ===
+-- TESTABILITY LIMIT (measured 2026-08-10, fermion+threadchip): the reap's
+-- foreign-lane EXCLUSION is only ever observable with TWO LIVE BOXES and a
+-- standing probe — SET ROLE leaves session_user unchanged, so a single-host
+-- test can plant and roll back but never exercise the refusal from a real
+-- remote identity. Closed live: threadchip's reap returned 1 (its own probe)
+-- and left fermion's standing; box_for_role('stewards') IS NULL is the
+-- discriminating control proving the definer body cannot scope by
+-- current_user. Re-run that pair test if reap's scoping ever changes.
 DO $$
 DECLARE v_n int; v_left int;
 BEGIN
