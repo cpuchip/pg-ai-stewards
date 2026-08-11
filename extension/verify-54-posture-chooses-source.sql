@@ -13,7 +13,7 @@ BEGIN;
 
 \echo === the declared posture and its source agree ===
 DO $$
-DECLARE v_mode text; v_role text; v_enrolled text; v_got text;
+DECLARE v_mode text; v_role text; v_enrolled text; v_got text; v_caught boolean;
 BEGIN
     v_mode := stewards.config_get_text('lane_identity_mode', NULL);
     IF v_mode IS NULL OR v_mode NOT IN ('role_name', 'roster_required') THEN
@@ -36,8 +36,15 @@ BEGIN
         IF to_regclass('house.roster') IS NULL THEN
             RAISE EXCEPTION 'V54 FAIL-CLOSED STATE: roster_required with house.roster missing';
         END IF;
-        IF stewards.box_for_role('verify54_definitely_unenrolled') IS NOT NULL THEN
-            RAISE EXCEPTION 'V54: an unenrolled role resolved to a lane';
+        -- v55 (added 2026-08-11 live reconciliation): an unenrolled role no
+        -- longer resolves to NULL under roster_required — it FAILS CLOSED.
+        v_caught := false;
+        BEGIN
+            PERFORM stewards.box_for_role('verify54_definitely_unenrolled');
+        EXCEPTION WHEN insufficient_privilege THEN v_caught := true;
+        END;
+        IF NOT v_caught THEN
+            RAISE EXCEPTION 'V54: an unenrolled role did not fail closed under roster_required';
         END IF;
         SELECT r.pg_role, r.name INTO v_role, v_enrolled FROM house.roster r
          WHERE r.pg_role IS NOT NULL AND r.revoked_at IS NULL LIMIT 1;

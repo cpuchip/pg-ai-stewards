@@ -104,34 +104,50 @@ BEGIN
     RAISE NOTICE 'function ACLs: OK (reap + laned explicit and PUBLIC-free; mine granted)';
 END $$;
 
-\echo === box_for_role: three-branch lane derivation ===
+\echo === box_for_role: lane derivation, POSTURE-AWARE (v54/v55) ===
+-- Updated 2026-08-11 (live reconciliation): the original assumed "roster
+-- present + unenrolled -> NULL", true through v53. v54 made posture (not
+-- roster presence) the discriminator, and v55 made an unenrolled role
+-- FAIL CLOSED under roster_required — so the branch must key on the posture.
 DO $$
-DECLARE v_role text; v_enrolled text; v_got text;
+DECLARE v_role text; v_enrolled text; v_got text; v_mode text; v_caught boolean;
 BEGIN
-    IF to_regclass('house.roster') IS NULL THEN
-        -- branch 1 (structural fallback) — the public-install posture
-        IF stewards.box_for_role('any_role_at_all') IS NOT NULL THEN
-            RAISE EXCEPTION 'BOX_FOR_ROLE: returned a lane name with NO roster present';
+    v_mode := stewards.config_get_text('lane_identity_mode', NULL);
+    IF v_mode = 'role_name' THEN
+        -- v54: role_name -> NULL for ANY role; a present roster is inert.
+        IF stewards.box_for_role('verify51_any_role') IS NOT NULL THEN
+            RAISE EXCEPTION 'BOX_FOR_ROLE: returned a lane under role_name posture (roster must be inert)';
         END IF;
-        RAISE NOTICE 'box_for_role: OK branch 1 (no roster -> NULL -> role-name lanes)';
-    ELSE
-        -- branch 2: roster present, unenrolled role -> NULL (v49 unchanged)
-        IF stewards.box_for_role('verify51_definitely_unenrolled') IS NOT NULL THEN
-            RAISE EXCEPTION 'BOX_FOR_ROLE: an unenrolled role resolved to a lane';
+        RAISE NOTICE 'box_for_role: OK (role_name -> NULL, roster inert)';
+    ELSIF v_mode = 'roster_required' THEN
+        -- v55: unenrolled -> fail closed; host -> fermion; enrolled -> name.
+        v_caught := false;
+        BEGIN
+            PERFORM stewards.box_for_role('verify51_definitely_unenrolled');
+        EXCEPTION WHEN insufficient_privilege THEN v_caught := true;
+        END;
+        IF NOT v_caught THEN
+            RAISE EXCEPTION 'BOX_FOR_ROLE: an unenrolled role did not fail closed under roster_required';
         END IF;
-        -- branch 3: roster present, enrolled role -> its roster name
         SELECT r.pg_role, r.name INTO v_role, v_enrolled FROM house.roster r
          WHERE r.pg_role IS NOT NULL AND r.revoked_at IS NULL LIMIT 1;
         IF v_role IS NULL THEN
-            RAISE NOTICE 'box_for_role: roster present but no enrolled pg_role rows — branch 3 vacuous here';
+            RAISE NOTICE 'box_for_role: OK (roster_required: unenrolled fail-closed; no enrolled pg_role rows to check)';
         ELSE
             v_got := stewards.box_for_role(v_role);
             IF v_got IS DISTINCT FROM v_enrolled THEN
                 RAISE EXCEPTION 'BOX_FOR_ROLE: enrolled role % resolved to %, roster says %',
                     v_role, coalesce(v_got, '<null>'), v_enrolled;
             END IF;
-            RAISE NOTICE 'box_for_role: OK branches 2+3 (unenrolled -> NULL; enrolled % -> %)', v_role, v_enrolled;
+            RAISE NOTICE 'box_for_role: OK (roster_required: unenrolled fail-closed; enrolled % -> %)', v_role, v_enrolled;
         END IF;
+    ELSE
+        -- pre-v52 install (no posture row): the original structural fallback.
+        IF to_regclass('house.roster') IS NULL
+           AND stewards.box_for_role('verify51_any_role') IS NOT NULL THEN
+            RAISE EXCEPTION 'BOX_FOR_ROLE: returned a lane with no roster and no posture row';
+        END IF;
+        RAISE NOTICE 'box_for_role: OK (no posture row — pre-v52 structural fallback)';
     END IF;
 END $$;
 
