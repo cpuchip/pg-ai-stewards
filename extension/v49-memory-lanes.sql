@@ -31,6 +31,28 @@
 --   6. lane_check()       — the oracle, including threadchip's falsifier rule
 -- =====================================================================
 
+-- 0. PREFLIGHT (added in the sol-p0-release-batch, 2026-08-11). This volume
+--    GRANTs to the operator-provisioned group roles; without them the GRANT
+--    aborts the whole CREATE EXTENSION with a bare "role does not exist"
+--    55,000 lines into the script (red-run evidence:
+--    .spec/reviews/sol-p0-release-batch-redrun-2026-08-11.md). Refuse HERE,
+--    with the remediation in the message. The extension must not own
+--    cluster-global roles (they outlive DROP EXTENSION and cross databases),
+--    so it checks and points, never creates.
+DO $preflight$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_read')
+       OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_absorb') THEN
+        RAISE EXCEPTION USING
+            MESSAGE = 'pg_ai_stewards v49+ requires the operator-provisioned group roles '
+                      'brain_read and brain_absorb (NOLOGIN). Run '
+                      'extension/init/00-bootstrap-roles.sql as a superuser before '
+                      'CREATE EXTENSION (docker compose runs it automatically on first boot).',
+            ERRCODE = 'undefined_object';
+    END IF;
+END
+$preflight$;
+
 -- 1. Who is writing. A box authenticates as its own role (box_threadchip);
 --    the host authenticates as `stewards` and is fermion. Unknown roles get
 --    their own name rather than silently inheriting anyone's lane.

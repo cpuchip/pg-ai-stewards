@@ -60,8 +60,15 @@ BEGIN
     INSERT INTO stewards.fact_edges (src, dst, kind, fact)
     VALUES (v_seed, v_theirs, 'RELATES', 'verify49 equal-weight edge a'),
            (v_seed, v_mine,   'RELATES', 'verify49 equal-weight edge b');
+    -- v51: origin_box is immutable (reject trigger). This SETUP plants two
+    -- different lanes to test recall ordering, so it steps around the wall
+    -- the way an accounted administrative migration would — replica mode,
+    -- inside this rolled-back transaction only. The wall itself is verified
+    -- in verify-51 (change rejected) and CI smoke.
+    SET LOCAL session_replication_role = 'replica';
     UPDATE stewards.nodes SET origin_box = 'otherbox' WHERE id = v_theirs;
     UPDATE stewards.nodes SET origin_box = 'fermion'  WHERE id = v_mine;
+    SET LOCAL session_replication_role = 'origin';
 
     SELECT ref INTO v_first FROM stewards.fact_recall_laned(
         '[{"kind":"memory","ref":"verify49-seed"}]'::jsonb, 'fermion', 1, 5) LIMIT 1;

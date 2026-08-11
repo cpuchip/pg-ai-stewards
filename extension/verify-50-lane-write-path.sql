@@ -74,9 +74,13 @@ BEGIN
     PERFORM stewards.brain_add('brainwrite-selftest-vfy2','Reap Probe Two','h','b');
     -- a probe parked in a FOREIGN lane (planted by the owner post-insert;
     -- SET ROLE cannot exercise the remote path — session_user survives it —
-    -- so scope is proven by what reap REFUSES to touch)
+    -- so scope is proven by what reap REFUSES to touch).
+    -- v51: the plant steps around the origin_box immutability wall (replica
+    -- mode, rolled-back transaction only); the wall is verify-51's check.
+    SET LOCAL session_replication_role = 'replica';
     UPDATE stewards.nodes SET origin_box = 'not-a-real-box'
      WHERE ref = 'brainwrite-selftest-vfy2';
+    SET LOCAL session_replication_role = 'origin';
 
     SELECT stewards.brain_selftest_reap() INTO v_n;
     SELECT count(*) INTO v_left FROM stewards.nodes

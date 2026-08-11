@@ -119,7 +119,11 @@ Early but real. It has run real workloads daily inside a private workspace —
 research councils, a coding pipeline that lands PRs, chat personas with durable
 minds, an autonomous research loop, and a full D&D holodeck — and this repo is the
 public, generalized substrate. The interfaces still move; the engine is solid. One
-`docker compose up` boots it on a clean machine.
+`docker compose up` boots it on a clean machine. (Installing outside compose? Run
+[`extension/init/00-bootstrap-roles.sql`](extension/init/00-bootstrap-roles.sql) as a
+superuser first — the extension GRANTs to two operator-provisioned group roles and
+deliberately refuses to own cluster-global roles itself; compose runs that file
+automatically on first boot.)
 
 ## Documentation
 

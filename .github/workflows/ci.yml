@@ -45,8 +45,41 @@ jobs:
           done
           if [ -z "$ok" ]; then echo "::error::Postgres did not become ready"; docker logs pg; exit 1; fi
 
+      # The v49 preflight must REFUSE a cluster with no operator roles, with
+      # the remediation in the message — the red path of the sol-p0 batch
+      # (pre-v51, this was a bare "role does not exist" 55k lines into the
+      # extension script). The failed CREATE EXTENSION is atomic, so the
+      # cluster stays virgin for the green run below.
+      - name: Preflight refuses without the operator roles (red path)
+        run: |
+          set +e
+          out=$(docker exec -i pg psql -U stewards -d stewards -v ON_ERROR_STOP=1 \
+                -c "CREATE EXTENSION pg_ai_stewards CASCADE;" 2>&1)
+          rc=$?
+          echo "$out"
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::CREATE EXTENSION succeeded on a cluster with no operator roles"
+            exit 1
+          fi
+          if ! echo "$out" | grep -q "operator-provisioned group roles"; then
+            echo "::error::preflight refusal fired without its remediation message"
+            exit 1
+          fi
+
+      # The operator bootstrap fixture — the same file compose runs on first
+      # boot and the docs point manual installs at. CI exercising the real
+      # fixture, not a parallel test-only one, is deliberate.
+      - name: Provision the operator roles (bootstrap fixture)
+        run: docker exec -i pg psql -U stewards -d stewards -v ON_ERROR_STOP=1 < extension/init/00-bootstrap-roles.sql
+
       - name: Run the virgin-boot smoke (CREATE EXTENSION + clean-room asserts)
         run: docker exec -i pg psql -U stewards -d stewards -v ON_ERROR_STOP=1 < tests/virgin-smoke.sql
+
+      # Two-session write races (concurrent add, concurrent amend). Runs
+      # AFTER the smoke: it installs dblink, which the smoke's OK 1
+      # dependency-surface assert must never see.
+      - name: Concurrency regression (two-session add + amend)
+        run: docker exec -i pg psql -U stewards -d stewards -v ON_ERROR_STOP=1 < tests/concurrency-write-path.sql
 
       - name: Teardown
         if: always()

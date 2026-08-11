@@ -612,6 +612,26 @@ extension_sql_file!(
     requires = ["create_v49_memory_lanes"],
 );
 
+// v51-write-path-hardening.sql — the sol-p0-release-batch (2026-08-11), every
+// defect first reproduced live on a virgin cluster at HEAD (red-run evidence
+// in .spec/reviews/). brain_add serializes its collision domain (advisory
+// xact locks on ref + normalized title, recheck under the lock); brain_amend
+// locks the identity row FOR UPDATE before reading (concurrent corrections
+// both survive); p_force operator-only; origin_box immutable (BEFORE UPDATE
+// rejection trigger — the enrollment grant includes UPDATE, so INSERT-only
+// forcing was rewritable history); brain_selftest_reap + fact_recall_laned
+// revoked from PUBLIC; fact_recall_mine derives the caller's lane from
+// session_user (no lane parameter to abuse); box_for_role/lane_check treat a
+// missing house.roster structurally (to_regclass) as the public-install
+// posture — the roster is host-private by ruling and never ships, and v49
+// reading it unguarded broke every fresh install at its first write.
+// Oracles: verify-51 + tests/concurrency-write-path.sql (both red-first).
+extension_sql_file!(
+    "../v51-write-path-hardening.sql",
+    name = "create_v51_write_path_hardening",
+    requires = ["create_v50_lane_write_path"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

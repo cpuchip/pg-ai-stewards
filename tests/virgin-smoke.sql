@@ -18,6 +18,17 @@
 \set ON_ERROR_STOP on
 
 \echo '== install (virgin, CASCADE pulls in vector) =='
+-- v49+ preflight: the extension GRANTs to two operator-provisioned group
+-- roles and refuses to install without them (it must not own cluster-global
+-- roles). CI provisions them in its own step; a hand-run needs:
+--   psql ... -f extension/init/00-bootstrap-roles.sql
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_read')
+       OR NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'brain_absorb') THEN
+        RAISE EXCEPTION 'virgin-smoke precondition: operator roles missing — run extension/init/00-bootstrap-roles.sql first (CI does this as its own step; the refusal path itself is CI''s "preflight refuses" step)';
+    END IF;
+END $$;
 CREATE EXTENSION pg_ai_stewards CASCADE;
 
 -- ---------------------------------------------------------------------
@@ -6589,4 +6600,288 @@ BEGIN
 END
 $vs117$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v40 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 118 — every registered volume v41→v51 left its representative object.
+-- The CI oracle used to stop at v40 while the shipped chain ran to v50 —
+-- a v41+ regression shipped green (Sol audit 2026-08-11, P1). One assert
+-- per volume, by the object that volume exists to create.
+-- ---------------------------------------------------------------------
+DO $vs118$
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='graph_lint_is_ingestion_chunk'),
+        '118 v41: graph_lint_is_ingestion_chunk missing';
+    ASSERT EXISTS (SELECT 1 FROM information_schema.views
+                    WHERE table_schema='stewards' AND table_name='graph_unmined_sources'),
+        '118 v42: graph_unmined_sources view missing';
+    ASSERT to_regclass('stewards.fact_edges') IS NOT NULL
+       AND to_regclass('stewards.fact_edge_episodes') IS NOT NULL,
+        '118 v43: fact_edges / fact_edge_episodes missing';
+    ASSERT EXISTS (SELECT 1 FROM pg_indexes
+                    WHERE schemaname='stewards' AND tablename='fact_edges'
+                      AND indexdef ILIKE '%md5%'),
+        '118 v44: md5 dedup index missing from fact_edges';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='fact_recall'),
+        '118 v45: fact_recall missing';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='prefix_stability_check'),
+        '118 v46: prefix_stability_check missing';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='apply_judge_brief'),
+        '118 v47: apply_judge_brief missing';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='effective_budget'),
+        '118 v48: effective_budget missing';
+    ASSERT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='stewards' AND table_name='nodes' AND column_name='origin_box')
+       AND EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='stewards' AND table_name='fact_edges' AND column_name='origin_box')
+       AND (SELECT count(*) FROM pg_trigger WHERE tgname='stamp_origin_box' AND NOT tgisinternal) = 2
+       AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='fact_recall_laned')
+       AND EXISTS (SELECT 1 FROM information_schema.views
+                    WHERE table_schema='stewards' AND table_name='memory_lane'),
+        '118 v49: lanes surface incomplete (origin_box cols / stamp triggers / fact_recall_laned / memory_lane)';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='brain_add')
+       AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='brain_amend')
+       AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='brain_selftest_reap')
+       AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='brain_write_check'),
+        '118 v50: lane write path incomplete (brain_add / brain_amend / reap / write_check)';
+    ASSERT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='memory_title_norm')
+       AND EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                    WHERE n.nspname='stewards' AND p.proname='fact_recall_mine')
+       AND (SELECT count(*) FROM pg_trigger WHERE tgname='reject_origin_box_change' AND NOT tgisinternal) = 2,
+        '118 v51: hardening incomplete (memory_title_norm / fact_recall_mine / reject triggers)';
+    RAISE NOTICE 'OK 118: every registered volume v41→v51 present (one representative object each) — the oracle now reaches the end of the shipped chain';
+END
+$vs118$;
+
+-- ---------------------------------------------------------------------
+-- OK 119 — the roster-less install works end to end (v51 branch 1), and a
+-- box seat is properly walled. A virgin public install has NO house.roster
+-- BY RULING (host-private, never ships) — v49 unguarded broke every fresh
+-- install at its first nodes INSERT (red-run 2026-08-11). The grants below
+-- mirror the enrollment step (brain-client GROUPS_SQL); box_smoke stands in
+-- for an enrolled box, exercised via SET ROLE.
+-- ---------------------------------------------------------------------
+CREATE ROLE box_smoke NOLOGIN IN ROLE brain_absorb;
+GRANT USAGE ON SCHEMA stewards TO brain_read;
+GRANT SELECT ON ALL TABLES IN SCHEMA stewards TO brain_read;
+GRANT INSERT, UPDATE ON stewards.nodes, stewards.fact_edges TO brain_absorb;
+
+DO $vs119$
+DECLARE v_lane text; v_body text; v_caught boolean;
+BEGIN
+    ASSERT to_regclass('house.roster') IS NULL,
+        '119 precondition: a virgin cluster must have NO house.roster (host-private, never ships)';
+
+    -- host writes stamp fermion (current_box host fallback)
+    INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs119-host','host probe');
+    SELECT origin_box INTO v_lane FROM stewards.nodes WHERE ref='vs119-host';
+    ASSERT v_lane = 'fermion', format('119 host lane: expected fermion, got %s', v_lane);
+
+    SET LOCAL ROLE box_smoke;
+
+    -- box writes stamp the ROLE NAME on a roster-less install (branch 1)
+    PERFORM stewards.brain_add('vs119-box', 'VS119 Box Probe', 'h', 'box body');
+    SELECT origin_box INTO v_lane FROM stewards.nodes WHERE ref='vs119-box';
+    ASSERT v_lane = 'box_smoke', format('119 box lane: expected box_smoke (role-name fallback), got %s', v_lane);
+
+    -- own-lane amend strikes in place
+    PERFORM stewards.brain_amend('vs119-box', 'the value only holds under load', 'box body');
+    SELECT props->>'body' INTO v_body FROM stewards.nodes WHERE ref='vs119-box';
+    ASSERT v_body LIKE '%~~box body~~%' AND v_body LIKE '%CORRECTED%',
+        format('119 amend: strike-in-place missing from body: %s', v_body);
+
+    -- cross-lane amend refused
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.brain_amend('vs119-host', 'sneaky');
+    EXCEPTION WHEN insufficient_privilege THEN v_caught := true;
+    END;
+    ASSERT v_caught, '119 cross-lane: a box amended the host''s memory';
+
+    -- p_force refused for a box (v51: operator-only)
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.brain_add('vs119-forced', 'VS119 Box Probe', 'h', 'b', 'reference', true);
+    EXCEPTION WHEN insufficient_privilege THEN v_caught := true;
+    END;
+    ASSERT v_caught, '119 p_force: a box role forced past the collision guard';
+
+    -- post-insert lane rewrite rejected even though the box HAS table UPDATE
+    v_caught := false;
+    BEGIN
+        UPDATE stewards.nodes SET origin_box = 'fermion' WHERE ref = 'vs119-box';
+    EXCEPTION WHEN integrity_constraint_violation THEN v_caught := true;
+    END;
+    ASSERT v_caught, '119 immutability: a box rewrote origin_box post-insert';
+
+    -- choose-your-own-lane recall is locked away; the derived one executes
+    v_caught := false;
+    BEGIN
+        PERFORM * FROM stewards.fact_recall_laned('[]'::jsonb, 'fermion', 1, 1);
+    EXCEPTION WHEN insufficient_privilege THEN v_caught := true;
+    END;
+    ASSERT v_caught, '119 laned ACL: a box called fact_recall_laned with an arbitrary lane';
+    PERFORM * FROM stewards.fact_recall_mine('[]'::jsonb, 1, 1);
+
+    RESET ROLE;
+    RAISE NOTICE 'OK 119: roster-less install fully live (host=fermion, box=role-name lane) and the box seat is walled (cross-lane amend, p_force, lane rewrite, arbitrary-lane recall all refused)';
+END
+$vs119$;
+
+-- ---------------------------------------------------------------------
+-- OK 120 — the roster branches (v51 branches 2+3): present+unenrolled is
+-- v49's unchanged NULL, present+enrolled stamps the roster name; and
+-- lane_check's resolution check actually detects an orphan lane. Roster
+-- shape mirrors brain-client roster.py DDL.
+-- ---------------------------------------------------------------------
+CREATE SCHEMA house;
+CREATE TABLE house.roster (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    kind text NOT NULL CHECK (kind IN ('box', 'seat')),
+    name text NOT NULL UNIQUE,
+    box  text,
+    pg_role text,
+    scopes text[] NOT NULL DEFAULT '{}',
+    chillacks_token text,
+    notes text,
+    approved_by text NOT NULL DEFAULT 'michael',
+    approved_at timestamptz NOT NULL DEFAULT now(),
+    revoked_at timestamptz
+);
+INSERT INTO house.roster (kind, name, box, pg_role, scopes, notes)
+VALUES ('box', 'smokebox', 'smokebox', 'box_smoke', ARRAY['brain-absorb'], 'vs120 enrollment');
+
+DO $vs120$
+DECLARE v_lane text; v_bad boolean;
+BEGIN
+    -- branch 2: unenrolled role -> NULL (semantic unchanged from v49)
+    ASSERT stewards.box_for_role('vs120_definitely_unenrolled') IS NULL,
+        '120 branch 2: an unenrolled role resolved to a lane';
+    -- branch 3: enrolled role -> roster name
+    ASSERT stewards.box_for_role('box_smoke') = 'smokebox',
+        format('120 branch 3: enrolled box_smoke resolved to %s, wanted smokebox',
+               coalesce(stewards.box_for_role('box_smoke'), '<null>'));
+
+    SET LOCAL ROLE box_smoke;
+    PERFORM stewards.brain_add('vs120-box', 'VS120 Enrolled Probe', 'h', 'b');
+    RESET ROLE;
+    SELECT origin_box INTO v_lane FROM stewards.nodes WHERE ref='vs120-box';
+    ASSERT v_lane = 'smokebox', format('120 enrolled stamp: expected smokebox, got %s', v_lane);
+
+    -- the detector detects: vs119's 'box_smoke'-laned rows predate the
+    -- roster, so with a roster present they are orphan lanes — the
+    -- lanes_are_seats check must go red on them (a check that cannot fail
+    -- on the defect it names is not a check).
+    SELECT NOT ok INTO v_bad FROM stewards.lane_check()
+     WHERE check_name = 'lanes_are_seats';
+    ASSERT v_bad, '120 detector: lanes_are_seats stayed green with an orphan lane present';
+    RAISE NOTICE 'OK 120: roster branches hold (unenrolled NULL / enrolled stamps roster name) and lanes_are_seats detects an orphan lane';
+END
+$vs120$;
+
+-- restore the virgin posture: probes out, roster out, role out — and the
+-- lane oracle must be ALL green again on the restored install.
+DELETE FROM stewards.nodes WHERE ref LIKE 'vs119-%' OR ref LIKE 'vs120-%';
+DROP SCHEMA house CASCADE;
+DROP ROLE box_smoke;
+
+DO $vs120b$
+DECLARE r record; v_bad text := '';
+BEGIN
+    FOR r IN SELECT * FROM stewards.lane_check() WHERE NOT ok LOOP
+        v_bad := v_bad || r.check_name || ' (' || r.detail || '); ';
+    END LOOP;
+    ASSERT v_bad = '', format('120b lane_check not green after cleanup: %s', v_bad);
+    RAISE NOTICE 'OK 120b: lane_check all green on the restored roster-less install';
+END
+$vs120b$;
+
+-- ---------------------------------------------------------------------
+-- OK 121 — fact-edge behavior (v43/v44/v45): bi-temporal insert, md5 exact
+-- dedup, and recall reaching a live neighbor then honouring expiry.
+-- ---------------------------------------------------------------------
+DO $vs121$
+DECLARE v_a uuid; v_b uuid; v_caught boolean; v_n int;
+BEGIN
+    INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs121-a','seed a')
+      RETURNING id INTO v_a;
+    INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs121-b','neighbor b')
+      RETURNING id INTO v_b;
+    INSERT INTO stewards.fact_edges (src, dst, kind, fact)
+    VALUES (v_a, v_b, 'RELATES', 'vs121 exact fact text');
+
+    -- v44: exact duplicate (same src, dst, generated fact_norm) refused by
+    -- the md5 partial unique while the first stands live
+    v_caught := false;
+    BEGIN
+        INSERT INTO stewards.fact_edges (src, dst, kind, fact)
+        VALUES (v_a, v_b, 'RELATES', 'vs121 exact fact text');
+    EXCEPTION WHEN unique_violation THEN v_caught := true;
+    END;
+    ASSERT v_caught, '121 v44 dedup: an exact duplicate live fact was accepted';
+
+    -- v45: one-hop recall reaches the neighbor
+    SELECT count(*) INTO v_n FROM stewards.fact_recall(
+        '[{"kind":"memory","ref":"vs121-a"}]'::jsonb, 1, 5)
+     WHERE ref = 'vs121-b';
+    ASSERT v_n = 1, '121 v45 recall: the live neighbor was not reached';
+
+    -- v43 bi-temporal: expire the fact; default-as-of recall must drop it
+    UPDATE stewards.fact_edges SET expired_at = now() WHERE src = v_a AND dst = v_b;
+    SELECT count(*) INTO v_n FROM stewards.fact_recall(
+        '[{"kind":"memory","ref":"vs121-a"}]'::jsonb, 1, 5)
+     WHERE ref = 'vs121-b';
+    ASSERT v_n = 0, '121 v43 expiry: an expired fact still reachable at now()';
+
+    DELETE FROM stewards.fact_edges WHERE src = v_a AND dst = v_b;
+    DELETE FROM stewards.nodes WHERE ref LIKE 'vs121-%';
+    RAISE NOTICE 'OK 121: fact edges behave (v43 bi-temporal expiry honoured, v44 exact dedup refuses, v45 recall walks a live hop)';
+END
+$vs121$;
+
+-- ---------------------------------------------------------------------
+-- OK 122 — the shipped lane oracles are green and the v51 ACLs hold.
+-- (The two-session races are tests/concurrency-write-path.sql, run as its
+-- own CI step AFTER this file — it installs dblink, which OK 1's
+-- dependency-surface assert must not see.)
+-- ---------------------------------------------------------------------
+DO $vs122$
+DECLARE r record; v_bad text := '';
+BEGIN
+    FOR r IN SELECT * FROM stewards.brain_write_check() WHERE NOT ok LOOP
+        v_bad := v_bad || r.check_name || ' (' || r.detail || '); ';
+    END LOOP;
+    ASSERT v_bad = '', format('122 brain_write_check: %s', v_bad);
+
+    ASSERT (SELECT proacl IS NOT NULL FROM pg_proc
+             WHERE oid = 'stewards.brain_selftest_reap()'::regprocedure)
+       AND NOT EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
+                        WHERE p.oid = 'stewards.brain_selftest_reap()'::regprocedure
+                          AND a.grantee = 0),
+        '122 reap ACL: PUBLIC can execute a SECURITY DEFINER delete';
+    ASSERT has_function_privilege('brain_absorb', 'stewards.brain_selftest_reap()', 'EXECUTE'),
+        '122 reap ACL: brain_absorb lost its grant';
+    ASSERT (SELECT proacl IS NOT NULL FROM pg_proc
+             WHERE oid = 'stewards.fact_recall_laned(jsonb,text,integer,integer,real,timestamptz,real)'::regprocedure)
+       AND NOT EXISTS (SELECT 1 FROM pg_proc p, aclexplode(p.proacl) a
+                        WHERE p.oid = 'stewards.fact_recall_laned(jsonb,text,integer,integer,real,timestamptz,real)'::regprocedure
+                          AND a.grantee = 0),
+        '122 laned ACL: any caller can privilege an arbitrary lane';
+    ASSERT has_function_privilege('brain_read',
+            'stewards.fact_recall_mine(jsonb,integer,integer,real,timestamptz,real)', 'EXECUTE'),
+        '122 mine ACL: brain_read cannot execute fact_recall_mine';
+
+    RAISE NOTICE 'OK 122: brain_write_check green; v51 ACLs hold (reap + laned PUBLIC-free, mine granted to brain_read)';
+END
+$vs122$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v51 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening) is sound =='
