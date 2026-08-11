@@ -6869,6 +6869,88 @@ BEGIN
 END
 $vs120c$;
 
+-- ---------------------------------------------------------------------
+-- OK 120j — the roster is the AUTHORITY under roster_required (v55).
+-- Codex's round-5 reds, all watched land on v54: an authorized-but-
+-- unrostered brain member wrote under a fresh lane; a revoked mapping
+-- with a surviving role did the same; duplicate active mappings made
+-- LIMIT 1 the arbiter of identity. Now: exactly one active mapping, or
+-- nothing writes.
+-- ---------------------------------------------------------------------
+CREATE ROLE box_ghost NOLOGIN IN ROLE brain_absorb;
+
+DO $vs120j$
+DECLARE v_caught boolean; v_n int;
+BEGIN
+    -- unrostered member: fail closed at every surface
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.box_for_role('box_ghost');
+    EXCEPTION WHEN insufficient_privilege THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120j authority: an unrostered role resolved instead of failing closed';
+    SET LOCAL ROLE box_ghost;
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.brain_add('vs120j-ghost', 'VS120j Ghost', 'h', 'b');
+    EXCEPTION WHEN insufficient_privilege THEN v_caught := true;
+    END;
+    RESET ROLE;
+    ASSERT v_caught, '120j authority: an authorized-but-unrostered member wrote under a fresh lane';
+
+    -- revoked mapping, surviving role: same fail-closed
+    UPDATE house.roster SET revoked_at = now() WHERE pg_role = 'box_smoke';
+    SET LOCAL ROLE box_smoke;
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.brain_add('vs120j-revoked', 'VS120j Revoked', 'h', 'b');
+    EXCEPTION WHEN insufficient_privilege THEN v_caught := true;
+    END;
+    RESET ROLE;
+    ASSERT v_caught, '120j authority: a REVOKED mapping with a surviving role still wrote';
+    UPDATE house.roster SET revoked_at = NULL WHERE pg_role = 'box_smoke';
+
+    -- duplicate active mappings: nondeterministic authority fails closed
+    INSERT INTO house.roster (kind, name, box, pg_role)
+    VALUES ('box', 'vs120j-dup', 'vs120j-dup', 'box_smoke');
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.box_for_role('box_smoke');
+    EXCEPTION WHEN integrity_constraint_violation THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120j authority: duplicate active mappings resolved by LIMIT 1 instead of failing closed';
+    SELECT count(*) INTO v_n FROM stewards.lane_check()
+     WHERE check_name = 'roster_pg_role_unique' AND NOT ok;
+    ASSERT v_n = 1, '120j oracle: lane_check did not report the duplicate active mapping';
+    DELETE FROM house.roster WHERE name = 'vs120j-dup';
+
+    -- the host is unaffected by roster authority
+    INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs120j-host','host probe');
+    ASSERT (SELECT origin_box FROM stewards.nodes WHERE ref='vs120j-host') = 'fermion',
+        '120j host: the substrate owner must stamp fermion under roster_required';
+    DELETE FROM stewards.nodes WHERE ref = 'vs120j-host';
+    RAISE NOTICE 'OK 120j: roster authority holds — unrostered, revoked, and duplicate mappings all fail closed; host unaffected';
+END
+$vs120j$;
+
+-- the partial unique index (mirrors brain-client DDL) prevents the
+-- duplicate class at write time
+CREATE UNIQUE INDEX roster_active_pg_role ON house.roster (pg_role)
+ WHERE revoked_at IS NULL AND pg_role IS NOT NULL;
+DO $vs120k$
+DECLARE v_caught boolean := false;
+BEGIN
+    BEGIN
+        INSERT INTO house.roster (kind, name, box, pg_role)
+        VALUES ('box', 'vs120k-dup', 'vs120k-dup', 'box_smoke');
+    EXCEPTION WHEN unique_violation THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120k index: a duplicate active pg_role mapping was inserted past the partial unique index';
+    RAISE NOTICE 'OK 120k: the partial unique index refuses a second active mapping (revoked rows stay free)';
+END
+$vs120k$;
+DROP ROLE box_ghost;
+
 -- probes out before the destructive phases, so the lane_check reads below
 -- measure posture, not leftovers
 DELETE FROM stewards.nodes WHERE ref LIKE 'vs119-%' OR ref LIKE 'vs120-%' OR ref LIKE 'vs120c-%';
@@ -7141,4 +7223,4 @@ BEGIN
 END
 $vs122$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v54 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source) is sound =='
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v55 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority) is sound =='

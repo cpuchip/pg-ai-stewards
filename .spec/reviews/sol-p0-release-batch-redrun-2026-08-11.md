@@ -163,6 +163,34 @@ The lane-forcing wall silently off, the oracle green. Every trigger
 assertion (lane_check b/b2/b3, smoke OK 118, verify-53/54) now requires
 `tgenabled IN ('O','A')`.
 
+## Round 5 — codex's review of 50a56f6a: the roster must be the AUTHORITY,
+## not merely the source
+
+Under roster_required, an active-roster MISS still returned NULL and the
+callers fell back to the raw role name. Three reds, all watched land on the
+v54 build (container `pg-p0green`, mode flipped to roster_required):
+
+```
+ box_ghost IN ROLE brain_absorb, no roster row:
+   brain_add -> 'added red5-ghost to lane box_ghost'      -- fresh lane, no enrollment
+ two active rows pg_role=box_dup:
+   box_for_role('box_dup') -> 'name-one'                  -- LIMIT 1 arbitrating identity
+ revoked mapping, surviving role:
+   brain_add -> 'added red5-revoked to lane box_ghost'    -- revocation moot
+```
+
+The unrostered-member state is not hypothetical: approve_card created the
+LOGIN role before the roster row, so a failure between the two calls left
+exactly that principal. v55: host resolves fermion; every other caller needs
+EXACTLY ONE active mapping (zero or duplicates fail closed, distinct
+errors); the migration aborts over duplicate active mappings; lane_check
+audits roster_pg_role_unique. brain-client: partial unique index on active
+pg_role in the DDL, and approve_card reordered to roster row → posture flip
+→ login role in ONE transaction (access granted last), with the
+token/projection render strictly after the commit — an aborted enrollment
+publishes nothing. Smoke OK 120j/120k carry the reds; verify-55 the
+live-safe subset. role_name posture untouched.
+
 ## Standing finding — GitHub CI has never run on this repository
 
 While watching the e79895fc push: GitHub recorded every PushEvent (events

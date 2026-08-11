@@ -684,6 +684,26 @@ extension_sql_file!(
     requires = ["create_v53_posture_guard_hardening"],
 );
 
+// v55-roster-authority.sql — codex's round-5 red on v54: under
+// roster_required an active-roster MISS still fell back to the raw role
+// name, so an authorized-but-unrostered principal (surviving brain_*
+// membership, no active roster row — exactly what a failed enrollment
+// leaves) wrote under a fresh lane; and pg_role being non-unique among
+// active rows made LIMIT 1 the arbiter of identity (all three watched red).
+// v55: under roster_required the roster is the AUTHORITY — host resolves
+// fermion, every other caller needs EXACTLY ONE active mapping; zero
+// (unenrolled/revoked) or duplicates fail closed at the box_for_role choke
+// point. Migration aborts over duplicate active mappings; lane_check gains
+// the roster_pg_role_unique audit; the private roster gains a partial
+// unique index and enrollment reorders roster→flip→role in one transaction
+// (brain-client). role_name posture untouched. Oracles: verify-55 + smoke
+// OK 120j/120k (red-first on v54).
+extension_sql_file!(
+    "../v55-roster-authority.sql",
+    name = "create_v55_roster_authority",
+    requires = ["create_v54_posture_chooses_source"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
