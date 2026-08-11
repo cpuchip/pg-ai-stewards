@@ -27,13 +27,15 @@ END $$;
 \echo === three guard triggers, bound to stewards.config, enabled ===
 DO $$
 BEGIN
+    -- v54: origin-enabled required — tgenabled 'R' (replica-only) never
+    -- fires for normal sessions and must not satisfy this check.
     IF (SELECT count(*) FROM pg_trigger
          WHERE tgname LIKE 'lane_identity_mode_guard%' AND NOT tgisinternal
-           AND tgenabled <> 'D'
+           AND tgenabled IN ('O', 'A')
            AND tgrelid = 'stewards.config'::regclass) <> 3 THEN
-        RAISE EXCEPTION 'V53 GUARD INCOMPLETE: expected 3 enabled lane_identity_mode_guard* triggers on stewards.config';
+        RAISE EXCEPTION 'V53 GUARD INCOMPLETE: expected 3 ORIGIN-enabled lane_identity_mode_guard* triggers on stewards.config';
     END IF;
-    RAISE NOTICE 'guards: OK (update/delete/insert legs present and enabled)';
+    RAISE NOTICE 'guards: OK (update/delete/insert legs present and origin-enabled)';
 END $$;
 
 \echo === the key is pinned: rename out and rename in both refuse ===

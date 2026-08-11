@@ -129,6 +129,40 @@ closed in both postures), validates inherited preseed rows at migration or
 aborts, and binds every trigger assertion to its table + enabled state.
 Smoke OK 120h/120i carry the reds; verify-53 carries the live-safe subset.
 
+## Round 4 — codex's review of 5ae8901b: posture must be causal, and the
+## oracle must require origin-enabled triggers
+
+Two holes, both watched red on the v53 build (container `pg-v54red`):
+
+**A. The mode was validated but not USED as the source chooser.** Declared
+`role_name`, then created a roster with a conflicting mapping:
+
+```
+ declared_mode = role_name
+ INSERT INTO house.roster ... ('box','probename','probename','box_probe');
+ SELECT stewards.box_for_role('box_probe');
+  -> 'probename'          -- the roster answered under role_name posture
+```
+
+Restoring a backup (or preparing an enrollment early) silently changed every
+box's lane derivation with no posture transition. v54: role_name returns
+NULL unconditionally (the roster is INERT until the explicit forward flip);
+roster_required requires and queries it. Smoke OK 120 now asserts the inert
+case and OK 120c asserts the source switches exactly at the flip.
+
+**B. `tgenabled <> 'D'` accepted replica-only triggers.**
+
+```
+ ALTER TABLE stewards.nodes ENABLE REPLICA TRIGGER stamp_origin_box;
+ SELECT ... lane_check() WHERE check_name='stamp_is_forced';  -> ok = t
+ INSERT INTO stewards.nodes ... RETURNING origin_box;
+  -> <NULL — trigger did not fire>
+```
+
+The lane-forcing wall silently off, the oracle green. Every trigger
+assertion (lane_check b/b2/b3, smoke OK 118, verify-53/54) now requires
+`tgenabled IN ('O','A')`.
+
 ## Standing finding — GitHub CI has never run on this repository
 
 While watching the e79895fc push: GitHub recorded every PushEvent (events

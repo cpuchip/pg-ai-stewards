@@ -59,3 +59,4 @@ COPY v50-lane-write-path.sql ./
 COPY v51-write-path-hardening.sql ./
 COPY v52-lane-identity-mode.sql ./
 COPY v53-posture-guard-hardening.sql ./
+COPY v54-posture-chooses-source.sql ./

@@ -666,6 +666,24 @@ extension_sql_file!(
     requires = ["create_v52_lane_identity_mode"],
 );
 
+// v54-posture-chooses-source.sql — codex's round-4 red on v53: the mode row
+// was validated but not USED — in role_name posture box_for_role still
+// consulted an existing roster, so restoring a backup silently changed lane
+// derivation with no transition (watched: declared role_name, roster
+// created, box_for_role answered). v54 makes posture causal: role_name
+// returns NULL unconditionally (roster inert until the explicit flip);
+// roster_required requires and queries the roster. Second closure:
+// tgenabled <> 'D' accepted replica-only ('R') triggers that never fire in
+// origin sessions (watched: ENABLE REPLICA TRIGGER stamp_origin_box,
+// lane_check green, next INSERT stamped NULL) — every trigger assertion now
+// requires tgenabled IN ('O','A'). Oracles: verify-54 + smoke OK 120/120c
+// rework (roster-inert red, flip-switches-source, both red-first on v53).
+extension_sql_file!(
+    "../v54-posture-chooses-source.sql",
+    name = "create_v54_posture_chooses_source",
+    requires = ["create_v53_posture_guard_hardening"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

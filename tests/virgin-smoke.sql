@@ -6662,10 +6662,13 @@ BEGIN
                IN ('role_name', 'roster_required')
        AND (SELECT count(*) = 3 FROM pg_trigger
              WHERE tgname LIKE 'lane_identity_mode_guard%' AND NOT tgisinternal
-               AND tgenabled <> 'D'
+               AND tgenabled IN ('O', 'A')
                AND tgrelid = 'stewards.config'::regclass),
-        '118 v52/v53: lane_identity_mode posture row missing, or its three guard triggers not present+enabled on stewards.config';
-    RAISE NOTICE 'OK 118: every registered volume v41→v53 present (one representative object each) — the oracle now reaches the end of the shipped chain';
+        '118 v52-v54: lane_identity_mode posture row missing, or its three guard triggers not present + ORIGIN-enabled on stewards.config (v54: replica-only R does not fire and does not count)';
+    -- (the green line states its own coverage — threadchip's legibility
+    -- note: a green that under-reports what it proved makes the next
+    -- auditor read the SQL)
+    RAISE NOTICE 'OK 118: every registered volume v41→v54 present — one representative object each, posture row valid, and its 3 guard triggers bound to stewards.config AND origin-enabled (tgenabled O/A)';
 END
 $vs118$;
 
@@ -6745,10 +6748,13 @@ END
 $vs119$;
 
 -- ---------------------------------------------------------------------
--- OK 120 — the roster branches (v51 branches 2+3): present+unenrolled is
--- v49's unchanged NULL, present+enrolled stamps the roster name; and
--- lane_check's resolution check actually detects an orphan lane. Roster
--- shape mirrors brain-client roster.py DDL.
+-- OK 120 — the roster is INERT under role_name (v54): posture CHOOSES the
+-- identity source. v53's box_for_role consulted an existing roster in
+-- role_name mode, so restoring a backup silently flipped every box's lane
+-- with no transition — watched red on the v53 build (declared role_name,
+-- roster created, box_for_role answered 'probename'). Now the roster only
+-- speaks after the explicit forward flip (OK 120c). Roster shape mirrors
+-- brain-client roster.py DDL.
 -- ---------------------------------------------------------------------
 CREATE SCHEMA house;
 CREATE TABLE house.roster (
@@ -6768,30 +6774,32 @@ INSERT INTO house.roster (kind, name, box, pg_role, scopes, notes)
 VALUES ('box', 'smokebox', 'smokebox', 'box_smoke', ARRAY['brain-absorb'], 'vs120 enrollment');
 
 DO $vs120$
-DECLARE v_lane text; v_bad boolean;
+DECLARE v_lane text; v_mode text; v_ok boolean;
 BEGIN
-    -- branch 2: unenrolled role -> NULL (semantic unchanged from v49)
-    ASSERT stewards.box_for_role('vs120_definitely_unenrolled') IS NULL,
-        '120 branch 2: an unenrolled role resolved to a lane';
-    -- branch 3: enrolled role -> roster name
-    ASSERT stewards.box_for_role('box_smoke') = 'smokebox',
-        format('120 branch 3: enrolled box_smoke resolved to %s, wanted smokebox',
-               coalesce(stewards.box_for_role('box_smoke'), '<null>'));
+    -- sticky: creating a roster did not flip posture; enrollment does.
+    v_mode := stewards.config_get_text('lane_identity_mode', 'MISSING');
+    ASSERT v_mode = 'role_name', format('120 sticky: expected role_name, got %s', v_mode);
 
+    -- v54 red case: under declared role_name, the roster does NOT answer —
+    -- a conflicting mapping (box_smoke -> smokebox) sits enrolled and inert.
+    ASSERT stewards.box_for_role('box_smoke') IS NULL,
+        '120 inert: the roster answered under role_name posture (the v53 silent source switch)';
+    ASSERT stewards.box_for_role('vs120_definitely_unenrolled') IS NULL,
+        '120 inert: an unenrolled role resolved to a lane';
+
+    -- writes stay role-named until the explicit flip
     SET LOCAL ROLE box_smoke;
     PERFORM stewards.brain_add('vs120-box', 'VS120 Enrolled Probe', 'h', 'b');
     RESET ROLE;
     SELECT origin_box INTO v_lane FROM stewards.nodes WHERE ref='vs120-box';
-    ASSERT v_lane = 'smokebox', format('120 enrolled stamp: expected smokebox, got %s', v_lane);
+    ASSERT v_lane = 'box_smoke',
+        format('120 inert: expected role-name lane box_smoke before the flip, got %s', v_lane);
 
-    -- the detector detects: vs119's 'box_smoke'-laned rows predate the
-    -- roster, so with a roster present they are orphan lanes — the
-    -- lanes_are_seats check must go red on them (a check that cannot fail
-    -- on the defect it names is not a check).
-    SELECT NOT ok INTO v_bad FROM stewards.lane_check()
+    -- and the oracle reads the declared posture, roster notwithstanding
+    SELECT ok INTO v_ok FROM stewards.lane_check()
      WHERE check_name = 'lanes_are_seats';
-    ASSERT v_bad, '120 detector: lanes_are_seats stayed green with an orphan lane present';
-    RAISE NOTICE 'OK 120: roster branches hold (unenrolled NULL / enrolled stamps roster name) and lanes_are_seats detects an orphan lane';
+    ASSERT v_ok, '120 oracle: lanes_are_seats went red under declared role_name (roster must be inert)';
+    RAISE NOTICE 'OK 120: a present roster is INERT under role_name — box_for_role NULL, writes role-named, oracle reads the declared posture';
 END
 $vs120$;
 
@@ -6805,21 +6813,32 @@ $vs120$;
 -- road back is the disable-and-account operator migration, exercised at
 -- the end.
 -- ---------------------------------------------------------------------
--- probes out first, so the lane_check reads below measure posture, not leftovers
-DELETE FROM stewards.nodes WHERE ref LIKE 'vs119-%' OR ref LIKE 'vs120-%';
-
 DO $vs120c$
-DECLARE v_caught boolean; v_mode text;
+DECLARE v_caught boolean; v_lane text; v_bad boolean;
 BEGIN
-    -- seeded role_name on this virgin (roster-less-at-install) cluster,
-    -- and STILL role_name now — sticky: creating a roster mid-life does
-    -- not flip posture; enrollment flips it, explicitly.
-    v_mode := stewards.config_get_text('lane_identity_mode', 'MISSING');
-    ASSERT v_mode = 'role_name', format('120c seed: expected role_name, got %s', v_mode);
-
-    -- the one normal transition: role_name -> roster_required
+    -- the one normal transition: role_name -> roster_required. THE FLIP is
+    -- what switches the identity source (v54) — nothing else does.
     UPDATE stewards.config SET value = to_jsonb('roster_required'::text)
      WHERE key = 'lane_identity_mode';
+
+    -- now, and only now, the roster answers
+    ASSERT stewards.box_for_role('box_smoke') = 'smokebox',
+        format('120c source switch: enrolled box_smoke resolved to %s after the flip, wanted smokebox',
+               coalesce(stewards.box_for_role('box_smoke'), '<null>'));
+    SET LOCAL ROLE box_smoke;
+    PERFORM stewards.brain_add('vs120c-box', 'VS120c Post-Flip Probe', 'h', 'b');
+    RESET ROLE;
+    SELECT origin_box INTO v_lane FROM stewards.nodes WHERE ref='vs120c-box';
+    ASSERT v_lane = 'smokebox',
+        format('120c source switch: expected smokebox after the flip, got %s', v_lane);
+
+    -- the detector detects: the pre-flip role-named probes (vs119/vs120)
+    -- are now orphan lanes under roster authority — lanes_are_seats must go
+    -- red on them (a check that cannot fail on the defect it names is not a
+    -- check).
+    SELECT NOT ok INTO v_bad FROM stewards.lane_check()
+     WHERE check_name = 'lanes_are_seats';
+    ASSERT v_bad, '120c detector: lanes_are_seats stayed green with orphan lanes under roster authority';
 
     -- unknown value rejected
     v_caught := false;
@@ -6846,9 +6865,13 @@ BEGIN
     EXCEPTION WHEN integrity_constraint_violation THEN v_caught := true;
     END;
     ASSERT v_caught, '120c guard: the posture row was deleted';
-    RAISE NOTICE 'OK 120c: posture row sticky and guarded (forward-only transition; unknown value, reverse, delete all rejected)';
+    RAISE NOTICE 'OK 120c: the flip switches the identity source (roster answers only after it; detector fires on pre-flip lanes) and the posture row stays guarded (forward-only; unknown value, reverse, delete all rejected)';
 END
 $vs120c$;
+
+-- probes out before the destructive phases, so the lane_check reads below
+-- measure posture, not leftovers
+DELETE FROM stewards.nodes WHERE ref LIKE 'vs119-%' OR ref LIKE 'vs120-%' OR ref LIKE 'vs120c-%';
 
 -- roster_required + DROP TABLE: codex's first red case
 DROP TABLE house.roster;
@@ -7118,4 +7141,4 @@ BEGIN
 END
 $vs122$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v53 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening) is sound =='
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v54 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source) is sound =='
