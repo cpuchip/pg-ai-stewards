@@ -112,6 +112,7 @@ COPY v52-lane-identity-mode.sql ./
 COPY v53-posture-guard-hardening.sql ./
 COPY v54-posture-chooses-source.sql ./
 COPY v55-roster-authority.sql ./
+COPY v56-project-metrics.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/

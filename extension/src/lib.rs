@@ -704,6 +704,20 @@ extension_sql_file!(
     requires = ["create_v54_posture_chooses_source"],
 );
 
+// v56-project-metrics.sql — a jsonb `metrics` column on stewards.projects,
+// the home for the dark-factory metabolic feed (nightly git w/m/q sweep).
+// Foreman ruling: a single current-reading column (overwritten each sweep),
+// NOT fact_edges — a rolling instrument reading is not knowledge, and git is
+// already the metric's re-derivable history; storing it in the bi-temporal
+// store would pollute recall. Each reading carries as_of + source in-blob
+// (untimestamped reading = aging-caveat trap). Additive/nullable. Schema
+// change → routed to codex. Oracle: virgin-smoke OK 123.
+extension_sql_file!(
+    "../v56-project-metrics.sql",
+    name = "create_v56_project_metrics",
+    requires = ["create_v55_roster_authority"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

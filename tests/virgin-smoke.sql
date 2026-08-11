@@ -7223,4 +7223,32 @@ BEGIN
 END
 $vs122$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v55 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 123 — v56 project metrics column: additive jsonb home for the
+-- metabolic feed; nullable, and a written reading round-trips with its
+-- as_of + source intact.
+-- ---------------------------------------------------------------------
+DO $vs123$
+DECLARE v_metrics jsonb;
+BEGIN
+    ASSERT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema='stewards' AND table_name='projects'
+                      AND column_name='metrics' AND data_type='jsonb'),
+        '123 v56: stewards.projects.metrics jsonb column missing';
+    -- additive: existing rows default NULL (nothing reads it until the feed writes)
+    INSERT INTO stewards.projects (slug, name) VALUES ('vs123-proj','VS123 Probe');
+    ASSERT (SELECT metrics FROM stewards.projects WHERE slug='vs123-proj') IS NULL,
+        '123 v56: a fresh project row must have NULL metrics (additive column)';
+    -- a written reading round-trips with as_of + source in-blob (rider 1)
+    UPDATE stewards.projects
+       SET metrics = jsonb_build_object('w',3,'m',3,'q',3,'as_of', now(), 'source','git')
+     WHERE slug='vs123-proj';
+    SELECT metrics INTO v_metrics FROM stewards.projects WHERE slug='vs123-proj';
+    ASSERT v_metrics ? 'as_of' AND v_metrics ? 'source' AND (v_metrics->>'source')='git',
+        format('123 v56: metrics reading must carry as_of + source, got %s', v_metrics);
+    DELETE FROM stewards.projects WHERE slug='vs123-proj';
+    RAISE NOTICE 'OK 123: v56 project metrics column (additive jsonb; nullable; reading round-trips with as_of + source)';
+END
+$vs123$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v56 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics) is sound =='
