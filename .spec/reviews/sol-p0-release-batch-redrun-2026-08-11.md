@@ -104,6 +104,31 @@ plpgsql, lane computed before the query; fail-closed no longer depends on
 result-set size. (A guard you can inline away is a guard that leaves no
 trace.)
 
+## Round 3 — codex's review of 11803e4b: the guard's key was a door
+
+Codex accepted v52's shape and then found the hole in its skin (room msg
+#823): the guard's `WHEN (OLD.key = 'lane_identity_mode')` watched the VALUE
+while permitting the KEY to change. Observed live on the v52 build
+(container `pg-p0green`, post-green-run state):
+
+```
+UPDATE stewards.config SET key='lane_identity_mode_old' WHERE key='lane_identity_mode';
+UPDATE 1                                      -- the protected row escaped
+INSERT INTO stewards.config (key, value) VALUES ('evil', to_jsonb('anarchy'::text));
+UPDATE stewards.config SET key='lane_identity_mode' WHERE key='evil';
+UPDATE 1                                      -- a poisoned row took the key
+SELECT coalesce(stewards.box_for_role('box_anything'), '<null = silent fallback>');
+ <null = silent fallback>                     -- readers defaulted right past it
+```
+
+Because v52's readers DEFAULTED a missing/foreign mode from roster presence,
+the rename resurrected the structural fallback v52 existed to remove — with
+lane_check reporting mode valid off the same default. v53 pins the key (both
+rename directions), removes the default entirely (missing/invalid row fails
+closed in both postures), validates inherited preseed rows at migration or
+aborts, and binds every trigger assertion to its table + enabled state.
+Smoke OK 120h/120i carry the reds; verify-53 carries the live-safe subset.
+
 ## Standing finding — GitHub CI has never run on this repository
 
 While watching the e79895fc push: GitHub recorded every PushEvent (events

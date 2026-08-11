@@ -649,6 +649,23 @@ extension_sql_file!(
     requires = ["create_v51_write_path_hardening"],
 );
 
+// v53-posture-guard-hardening.sql — codex's round-3 red on v52: the guard's
+// WHEN clause watched the VALUE while the KEY was a door — the posture row
+// could be renamed out (and a poisoned row renamed in), and the readers'
+// derived default then resurrected the structural fallback v52 removed
+// (both renames watched succeeding on the v52 build). v53 pins the key
+// (guard fires on either side of an UPDATE, rejects any key change; INSERT
+// leg validates a restore), removes the default entirely (missing/invalid
+// row fails closed in BOTH postures — post-v52 the row always exists, the
+// migration is transactional), validates inherited preseed rows or aborts,
+// and binds every lane_check trigger assertion to its table + enabled
+// state. Oracles: verify-53 + smoke OK 120h/120i (red-first on v52).
+extension_sql_file!(
+    "../v53-posture-guard-hardening.sql",
+    name = "create_v53_posture_guard_hardening",
+    requires = ["create_v52_lane_identity_mode"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

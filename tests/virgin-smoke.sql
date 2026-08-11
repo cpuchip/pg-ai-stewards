@@ -6660,10 +6660,12 @@ BEGIN
         '118 v51: hardening incomplete (memory_title_norm / fact_recall_mine / reject triggers)';
     ASSERT (SELECT value #>> '{}' FROM stewards.config WHERE key='lane_identity_mode')
                IN ('role_name', 'roster_required')
-       AND EXISTS (SELECT 1 FROM pg_trigger
-                    WHERE tgname='lane_identity_mode_guard' AND NOT tgisinternal),
-        '118 v52: lane_identity_mode posture row or its guard trigger missing';
-    RAISE NOTICE 'OK 118: every registered volume v41→v52 present (one representative object each) — the oracle now reaches the end of the shipped chain';
+       AND (SELECT count(*) = 3 FROM pg_trigger
+             WHERE tgname LIKE 'lane_identity_mode_guard%' AND NOT tgisinternal
+               AND tgenabled <> 'D'
+               AND tgrelid = 'stewards.config'::regclass),
+        '118 v52/v53: lane_identity_mode posture row missing, or its three guard triggers not present+enabled on stewards.config';
+    RAISE NOTICE 'OK 118: every registered volume v41→v53 present (one representative object each) — the oracle now reaches the end of the shipped chain';
 END
 $vs118$;
 
@@ -6951,6 +6953,93 @@ END
 $vs120g$;
 
 -- ---------------------------------------------------------------------
+-- OK 120h — the posture KEY is pinned (v53). Codex's round-3 red on v52:
+-- the guard watched values but the row could be RENAMED out of its key
+-- (and a poisoned row renamed in), after which the readers' derived
+-- default resurrected the structural fallback. Both renames observed
+-- succeeding on the v52 build; both must now refuse.
+-- ---------------------------------------------------------------------
+DO $vs120h$
+DECLARE v_caught boolean;
+BEGIN
+    v_caught := false;
+    BEGIN
+        UPDATE stewards.config SET key = 'lane_identity_mode_old'
+         WHERE key = 'lane_identity_mode';
+    EXCEPTION WHEN integrity_constraint_violation THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120h pin: the posture row was renamed OUT of its key';
+
+    INSERT INTO stewards.config (key, value)
+    VALUES ('vs120h-evil', to_jsonb('anarchy'::text));
+    v_caught := false;
+    BEGIN
+        UPDATE stewards.config SET key = 'lane_identity_mode'
+         WHERE key = 'vs120h-evil';
+    EXCEPTION WHEN integrity_constraint_violation THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120h pin: a foreign row was renamed INTO the posture key';
+    DELETE FROM stewards.config WHERE key = 'vs120h-evil';
+    RAISE NOTICE 'OK 120h: the posture key is pinned (rename out and rename in both rejected by the guard, not the PK)';
+END
+$vs120h$;
+
+-- ---------------------------------------------------------------------
+-- OK 120i — no defaults (v53): a MISSING or INVALID posture row fails
+-- closed in every posture; only a lawful INSERT restores. The deletion
+-- goes through the accounted operator path (disable, act, re-enable) —
+-- the same escape hatch the guard's messages document.
+-- ---------------------------------------------------------------------
+ALTER TABLE stewards.config DISABLE TRIGGER lane_identity_mode_guard;
+ALTER TABLE stewards.config DISABLE TRIGGER lane_identity_mode_guard_del;
+ALTER TABLE stewards.config DISABLE TRIGGER lane_identity_mode_guard_ins;
+DELETE FROM stewards.config WHERE key = 'lane_identity_mode';
+ALTER TABLE stewards.config ENABLE TRIGGER lane_identity_mode_guard;
+ALTER TABLE stewards.config ENABLE TRIGGER lane_identity_mode_guard_del;
+ALTER TABLE stewards.config ENABLE TRIGGER lane_identity_mode_guard_ins;
+
+DO $vs120i$
+DECLARE v_caught boolean; v_n int;
+BEGIN
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.box_for_role('anything');
+    EXCEPTION WHEN undefined_object THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120i no-default: box_for_role answered with the posture row MISSING';
+
+    v_caught := false;
+    BEGIN
+        INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs120i-probe','x');
+    EXCEPTION WHEN undefined_object THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120i no-default: a write landed with the posture row MISSING';
+
+    SELECT count(*) INTO v_n FROM stewards.lane_check()
+     WHERE check_name = 'posture_fail_closed' AND NOT ok;
+    ASSERT v_n = 1, '120i oracle: lane_check did not report the posture fail-closed row';
+
+    -- an INVALID restore is refused by the guard's INSERT leg
+    v_caught := false;
+    BEGIN
+        INSERT INTO stewards.config (key, value)
+        VALUES ('lane_identity_mode', to_jsonb('anarchy'::text));
+    EXCEPTION WHEN invalid_parameter_value THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120i guard: an invalid posture value was INSERTed into the key';
+
+    -- a LAWFUL restore recovers the install
+    INSERT INTO stewards.config (key, value)
+    VALUES ('lane_identity_mode', to_jsonb('role_name'::text));
+    INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs120i-probe','back');
+    DELETE FROM stewards.nodes WHERE ref = 'vs120i-probe';
+    SELECT count(*) INTO v_n FROM stewards.lane_check() WHERE NOT ok;
+    ASSERT v_n = 0, '120i recovery: lane_check not green after the lawful restore';
+    RAISE NOTICE 'OK 120i: missing posture row fails closed everywhere; invalid restore refused; lawful restore recovers';
+END
+$vs120i$;
+
+-- ---------------------------------------------------------------------
 -- OK 121 — fact-edge behavior (v43/v44/v45): bi-temporal insert, md5 exact
 -- dedup, and recall reaching a live neighbor then honouring expiry.
 -- ---------------------------------------------------------------------
@@ -7029,4 +7118,4 @@ BEGIN
 END
 $vs122$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v52 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode) is sound =='
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v53 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening) is sound =='
