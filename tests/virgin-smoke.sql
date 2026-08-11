@@ -6658,7 +6658,12 @@ BEGIN
                     WHERE n.nspname='stewards' AND p.proname='fact_recall_mine')
        AND (SELECT count(*) FROM pg_trigger WHERE tgname='reject_origin_box_change' AND NOT tgisinternal) = 2,
         '118 v51: hardening incomplete (memory_title_norm / fact_recall_mine / reject triggers)';
-    RAISE NOTICE 'OK 118: every registered volume v41→v51 present (one representative object each) — the oracle now reaches the end of the shipped chain';
+    ASSERT (SELECT value #>> '{}' FROM stewards.config WHERE key='lane_identity_mode')
+               IN ('role_name', 'roster_required')
+       AND EXISTS (SELECT 1 FROM pg_trigger
+                    WHERE tgname='lane_identity_mode_guard' AND NOT tgisinternal),
+        '118 v52: lane_identity_mode posture row or its guard trigger missing';
+    RAISE NOTICE 'OK 118: every registered volume v41→v52 present (one representative object each) — the oracle now reaches the end of the shipped chain';
 END
 $vs118$;
 
@@ -6788,22 +6793,162 @@ BEGIN
 END
 $vs120$;
 
--- restore the virgin posture: probes out, roster out, role out — and the
--- lane oracle must be ALL green again on the restored install.
+-- ---------------------------------------------------------------------
+-- OK 120c–g — lane identity posture (v52): sticky, guarded, fail-closed.
+-- Codex's ruling (review of e79895fc) INVERTED the old OK 120b here: the
+-- old test dropped the roster and asserted the install went quietly back
+-- to role-name lanes — green-certifying a silent authority downgrade.
+-- Now that downgrade is the RED case; under roster_required a missing
+-- roster (table OR schema) fails closed at every surface, and the only
+-- road back is the disable-and-account operator migration, exercised at
+-- the end.
+-- ---------------------------------------------------------------------
+-- probes out first, so the lane_check reads below measure posture, not leftovers
 DELETE FROM stewards.nodes WHERE ref LIKE 'vs119-%' OR ref LIKE 'vs120-%';
+
+DO $vs120c$
+DECLARE v_caught boolean; v_mode text;
+BEGIN
+    -- seeded role_name on this virgin (roster-less-at-install) cluster,
+    -- and STILL role_name now — sticky: creating a roster mid-life does
+    -- not flip posture; enrollment flips it, explicitly.
+    v_mode := stewards.config_get_text('lane_identity_mode', 'MISSING');
+    ASSERT v_mode = 'role_name', format('120c seed: expected role_name, got %s', v_mode);
+
+    -- the one normal transition: role_name -> roster_required
+    UPDATE stewards.config SET value = to_jsonb('roster_required'::text)
+     WHERE key = 'lane_identity_mode';
+
+    -- unknown value rejected
+    v_caught := false;
+    BEGIN
+        UPDATE stewards.config SET value = to_jsonb('anarchy'::text)
+         WHERE key = 'lane_identity_mode';
+    EXCEPTION WHEN invalid_parameter_value THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120c guard: an unknown mode value was accepted';
+
+    -- reverse transition rejected as an ordinary UPDATE
+    v_caught := false;
+    BEGIN
+        UPDATE stewards.config SET value = to_jsonb('role_name'::text)
+         WHERE key = 'lane_identity_mode';
+    EXCEPTION WHEN integrity_constraint_violation THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120c guard: roster_required -> role_name passed as an ordinary UPDATE';
+
+    -- delete rejected
+    v_caught := false;
+    BEGIN
+        DELETE FROM stewards.config WHERE key = 'lane_identity_mode';
+    EXCEPTION WHEN integrity_constraint_violation THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120c guard: the posture row was deleted';
+    RAISE NOTICE 'OK 120c: posture row sticky and guarded (forward-only transition; unknown value, reverse, delete all rejected)';
+END
+$vs120c$;
+
+-- roster_required + DROP TABLE: codex's first red case
+DROP TABLE house.roster;
+
+DO $vs120d$
+DECLARE v_caught boolean; v_n int;
+BEGIN
+    v_caught := false;
+    BEGIN
+        PERFORM stewards.box_for_role('box_smoke');
+    EXCEPTION WHEN undefined_table THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120d fail-closed: box_for_role answered with the roster table dropped';
+
+    v_caught := false;
+    BEGIN
+        INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs120d-probe','x');
+    EXCEPTION WHEN undefined_table THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120d fail-closed: a write landed with the roster table dropped';
+
+    v_caught := false;
+    BEGIN
+        PERFORM * FROM stewards.fact_recall_mine('[]'::jsonb, 1, 1);
+    EXCEPTION WHEN undefined_table THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120d fail-closed: mine-recall answered with the roster table dropped';
+
+    SELECT count(*) INTO v_n FROM stewards.lane_check()
+     WHERE check_name = 'roster_required_fail_closed' AND NOT ok;
+    ASSERT v_n = 1, '120d oracle: lane_check did not report the fail-closed red row';
+    RAISE NOTICE 'OK 120d: roster_required + DROP TABLE fails closed at every surface; lane_check reports red without raising';
+END
+$vs120d$;
+
+-- recovery: restore the table and the system comes back
+CREATE TABLE house.roster (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    kind text NOT NULL CHECK (kind IN ('box', 'seat')),
+    name text NOT NULL UNIQUE,
+    box  text,
+    pg_role text,
+    scopes text[] NOT NULL DEFAULT '{}',
+    chillacks_token text,
+    notes text,
+    approved_by text NOT NULL DEFAULT 'michael',
+    approved_at timestamptz NOT NULL DEFAULT now(),
+    revoked_at timestamptz
+);
+
+DO $vs120e$
+DECLARE v_n int;
+BEGIN
+    INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs120e-probe','recovered');
+    DELETE FROM stewards.nodes WHERE ref = 'vs120e-probe';
+    SELECT count(*) INTO v_n FROM stewards.lane_check()
+     WHERE check_name = 'roster_required_fail_closed';
+    ASSERT v_n = 0, '120e recovery: fail-closed row still reported after the roster was restored';
+    RAISE NOTICE 'OK 120e: restoring the roster recovers the install (writes land, fail-closed row gone)';
+END
+$vs120e$;
+
+-- roster_required + DROP SCHEMA: codex's second red case (the schema-level
+-- drop the minimum stopgap would have missed)
 DROP SCHEMA house CASCADE;
+
+DO $vs120f$
+DECLARE v_caught boolean; v_n int;
+BEGIN
+    v_caught := false;
+    BEGIN
+        INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs120f-probe','x');
+    EXCEPTION WHEN undefined_table THEN v_caught := true;
+    END;
+    ASSERT v_caught, '120f fail-closed: a write landed with the house SCHEMA dropped';
+    SELECT count(*) INTO v_n FROM stewards.lane_check()
+     WHERE check_name = 'roster_required_fail_closed' AND NOT ok;
+    ASSERT v_n = 1, '120f oracle: lane_check did not report the fail-closed red row (schema drop)';
+    RAISE NOTICE 'OK 120f: roster_required + DROP SCHEMA fails closed identically';
+END
+$vs120f$;
+
+-- the ONLY road back to role_name: the disable-and-account operator
+-- migration. This also restores the virgin posture for the sections below.
+ALTER TABLE stewards.config DISABLE TRIGGER lane_identity_mode_guard;
+UPDATE stewards.config SET value = to_jsonb('role_name'::text)
+ WHERE key = 'lane_identity_mode';
+ALTER TABLE stewards.config ENABLE TRIGGER lane_identity_mode_guard;
 DROP ROLE box_smoke;
 
-DO $vs120b$
+DO $vs120g$
 DECLARE r record; v_bad text := '';
 BEGIN
+    INSERT INTO stewards.nodes (kind, ref, label) VALUES ('memory','vs120g-probe','back');
+    DELETE FROM stewards.nodes WHERE ref = 'vs120g-probe';
     FOR r IN SELECT * FROM stewards.lane_check() WHERE NOT ok LOOP
         v_bad := v_bad || r.check_name || ' (' || r.detail || '); ';
     END LOOP;
-    ASSERT v_bad = '', format('120b lane_check not green after cleanup: %s', v_bad);
-    RAISE NOTICE 'OK 120b: lane_check all green on the restored roster-less install';
+    ASSERT v_bad = '', format('120g lane_check not green after the operator migration: %s', v_bad);
+    RAISE NOTICE 'OK 120g: the accounted operator migration restored role_name posture; the install is green again';
 END
-$vs120b$;
+$vs120g$;
 
 -- ---------------------------------------------------------------------
 -- OK 121 — fact-edge behavior (v43/v44/v45): bi-temporal insert, md5 exact
@@ -6884,4 +7029,4 @@ BEGIN
 END
 $vs122$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v51 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening) is sound =='
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v52 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode) is sound =='

@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # On-demand runs. Added 2026-08-11 while diagnosing why push events
+  # (recorded by GitHub — the events API shows every push) have never
+  # created a single run of this workflow: dispatch gives the oracle a
+  # manual trigger and gives the diagnosis a run object to read.
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref.
 concurrency:

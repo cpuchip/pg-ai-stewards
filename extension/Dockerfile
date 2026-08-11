@@ -108,6 +108,7 @@ COPY v48-window-clamp.sql ./
 COPY v49-memory-lanes.sql ./
 COPY v50-lane-write-path.sql ./
 COPY v51-write-path-hardening.sql ./
+COPY v52-lane-identity-mode.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/

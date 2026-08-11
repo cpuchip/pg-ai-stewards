@@ -632,6 +632,23 @@ extension_sql_file!(
     requires = ["create_v50_lane_write_path"],
 );
 
+// v52-lane-identity-mode.sql — codex's authority-semantics ruling on v51's
+// roster-absence fallback: structural absence is NOT posture (to_regclass is
+// mutable state; dropping authority data must not silently downgrade the
+// identity function). Posture is a sticky config row lane_identity_mode
+// (role_name | roster_required), seeded from roster presence, guarded by
+// trigger (no delete, no unknown value, forward-only transition; reverse =
+// disable-and-account operator migration). Under roster_required a missing
+// roster (table OR schema) fails closed at box_for_role — the shared choke
+// point for the stamp trigger, writes, and mine-recall — and lane_check
+// reports a red row without raising. Oracles: verify-52 + smoke OK 120c
+// (DROP TABLE and DROP SCHEMA reds + recovery, watched fail on v51 first).
+extension_sql_file!(
+    "../v52-lane-identity-mode.sql",
+    name = "create_v52_lane_identity_mode",
+    requires = ["create_v51_write_path_hardening"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
