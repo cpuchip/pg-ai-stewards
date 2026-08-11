@@ -7239,16 +7239,59 @@ BEGIN
     INSERT INTO stewards.projects (slug, name) VALUES ('vs123-proj','VS123 Probe');
     ASSERT (SELECT metrics FROM stewards.projects WHERE slug='vs123-proj') IS NULL,
         '123 v56: a fresh project row must have NULL metrics (additive column)';
-    -- a written reading round-trips with as_of + source in-blob (rider 1)
+    -- a written reading round-trips with as_of + VERSIONED source (rider 1 +
+    -- codex: source is versioned because re-derivation depends on the algorithm)
     UPDATE stewards.projects
-       SET metrics = jsonb_build_object('w',3,'m',3,'q',3,'as_of', now(), 'source','git')
+       SET metrics = jsonb_build_object('w',3,'m',3,'q',3,'as_of', now(), 'source','git-activity-v1')
      WHERE slug='vs123-proj';
     SELECT metrics INTO v_metrics FROM stewards.projects WHERE slug='vs123-proj';
-    ASSERT v_metrics ? 'as_of' AND v_metrics ? 'source' AND (v_metrics->>'source')='git',
-        format('123 v56: metrics reading must carry as_of + source, got %s', v_metrics);
+    ASSERT v_metrics ? 'as_of' AND (v_metrics->>'source')='git-activity-v1',
+        format('123 v56: metrics reading must carry as_of + versioned source, got %s', v_metrics);
     DELETE FROM stewards.projects WHERE slug='vs123-proj';
-    RAISE NOTICE 'OK 123: v56 project metrics column (additive jsonb; nullable; reading round-trips with as_of + source)';
+    RAISE NOTICE 'OK 123: v56 project metrics column (additive jsonb; nullable; reading round-trips with as_of + versioned source)';
 END
 $vs123$;
+
+-- ---------------------------------------------------------------------
+-- OK 124 — the projects_metrics_envelope CHECK REJECTS malformed readings
+-- (codex schema review): a scalar, a missing as_of, and a wrong-typed as_of
+-- must all be refused. Red-first: each is watched to raise check_violation.
+-- ---------------------------------------------------------------------
+DO $vs124$
+DECLARE v_caught boolean;
+BEGIN
+    INSERT INTO stewards.projects (slug, name) VALUES ('vs124-proj','VS124 Probe');
+
+    -- (1) a scalar is not an object
+    v_caught := false;
+    BEGIN UPDATE stewards.projects SET metrics = '5'::jsonb WHERE slug='vs124-proj';
+    EXCEPTION WHEN check_violation THEN v_caught := true; END;
+    ASSERT v_caught, '124 envelope: a scalar metrics value was accepted';
+
+    -- (2) an object with NO as_of
+    v_caught := false;
+    BEGIN UPDATE stewards.projects SET metrics = jsonb_build_object('w',1,'source','git-activity-v1') WHERE slug='vs124-proj';
+    EXCEPTION WHEN check_violation THEN v_caught := true; END;
+    ASSERT v_caught, '124 envelope: an object missing as_of was accepted';
+
+    -- (3) as_of the WRONG type (number, not string)
+    v_caught := false;
+    BEGIN UPDATE stewards.projects SET metrics = jsonb_build_object('as_of',123,'source','git-activity-v1') WHERE slug='vs124-proj';
+    EXCEPTION WHEN check_violation THEN v_caught := true; END;
+    ASSERT v_caught, '124 envelope: a numeric as_of was accepted';
+
+    -- (4) an EMPTY source string
+    v_caught := false;
+    BEGIN UPDATE stewards.projects SET metrics = jsonb_build_object('as_of', now(), 'source','') WHERE slug='vs124-proj';
+    EXCEPTION WHEN check_violation THEN v_caught := true; END;
+    ASSERT v_caught, '124 envelope: an empty source string was accepted';
+
+    -- and a WELL-FORMED reading still passes
+    UPDATE stewards.projects SET metrics = jsonb_build_object('w',1,'m',1,'q',1,'as_of', now(), 'source','git-activity-v1') WHERE slug='vs124-proj';
+
+    DELETE FROM stewards.projects WHERE slug='vs124-proj';
+    RAISE NOTICE 'OK 124: projects_metrics_envelope rejects scalar / missing-as_of / wrong-type / empty-source; accepts a well-formed reading';
+END
+$vs124$;
 
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v56 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics) is sound =='
