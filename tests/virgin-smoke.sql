@@ -32,6 +32,59 @@ END $$;
 CREATE EXTENSION pg_ai_stewards CASCADE;
 
 -- ---------------------------------------------------------------------
+-- OK 0 — THE DETERMINISTIC ENVIRONMENT. Asserted, not assumed.
+--
+-- This file is one psql session making thousands of assertions about the
+-- substrate's state. That is only sound if nothing ELSE is writing to the
+-- substrate while it reads. The dispatcher bgworker is exactly such a
+-- writer: on a preloaded cluster it ticks every 500ms and, on a virgin
+-- install with no model configured, its watchman check enqueues a PENDING
+-- 'model-unconfigured' hinge bell (bgworker.rs:414 -> watchman_scheduler_fire
+-- -> v27-lifeless-core.sql:936). OK 30 asserts "a virgin queue (nothing
+-- pending) must say should_run=false" — so whether the RELEASE GATE passed
+-- came down to whether the bgworker beat this session to line 1527.
+--
+-- That was observed BOTH WAYS on the same image minutes apart, and it means
+-- any seat's change could go red non-attributably. codex's weight: P1, with
+-- the sharp half — "a green is not proof that branch was deterministic."
+--
+-- The fix is to run this suite on a cluster that never preloads the library,
+-- so _PG_init returns early and no dispatcher is ever registered. Bgworker
+-- behaviour gets its own phase (tests/bgworker-integration.sql) where a
+-- concurrent writer is the POINT rather than a contaminant.
+--
+-- Asserting the ACTOR'S ABSENCE rather than the symptom's is deliberate:
+-- "we ran it and it was green" cannot distinguish a deterministic suite from
+-- a lucky one. This can. Deterministic reproduction of the hazard itself:
+-- tests/ok30-race-pin.sql.
+--
+-- ★ AND IT ASKS THE GUC, NOT THE PROCESS TABLE. The first version of this
+-- guard counted live dispatcher backends — and PASSED on a preloaded
+-- cluster, because the workers carry restart_time=5s and had not reconnected
+-- yet at the instant CREATE EXTENSION returned. A precondition that the
+-- hazardous environment satisfies is not a precondition. The GUC is known
+-- immediately and cannot race: if the library is preloaded, workers WILL
+-- arrive, whether or not they have yet. The process count is kept as a
+-- second assert because it can only ever add refusals, never remove one.
+-- ---------------------------------------------------------------------
+DO $vs0$
+DECLARE v_preload text; v_disp int;
+BEGIN
+    v_preload := coalesce(current_setting('shared_preload_libraries', true), '');
+    ASSERT v_preload NOT LIKE '%pg_ai_stewards%', format(
+        '0: shared_preload_libraries is "%s" — this suite must run on a cluster that does NOT preload pg_ai_stewards, or its assertions race the dispatcher bgworker, which writes to the substrate on a 500ms tick (the OK 30 flake: a pending model-unconfigured bell arriving before line 1527). Bgworker behaviour belongs to tests/bgworker-integration.sql.', v_preload);
+
+    SELECT count(*) INTO v_disp FROM pg_stat_activity
+     WHERE backend_type LIKE 'pg_ai_stewards dispatcher%';
+    ASSERT v_disp = 0, format(
+        '0: %s dispatcher bgworker(s) are connected despite shared_preload_libraries not naming us — something else started them; this suite needs a substrate nobody else is writing to', v_disp);
+
+    RAISE NOTICE 'OK 0: deterministic environment — pg_ai_stewards is not preloaded (%) and no dispatcher bgworker is connected, so nothing mutates the substrate concurrently while these assertions read it',
+        coalesce(nullif(v_preload, ''), 'shared_preload_libraries empty');
+END
+$vs0$;
+
+-- ---------------------------------------------------------------------
 -- 1. Dependency surface — vector ONLY. No pgcrypto, no AGE.
 -- ---------------------------------------------------------------------
 DO $$

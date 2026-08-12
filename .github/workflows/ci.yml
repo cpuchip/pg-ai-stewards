@@ -32,14 +32,26 @@ jobs:
       - name: Build the extension image
         run: docker build -t stewards-oss-pg:ci extension/
 
-      - name: Start a virgin Postgres
+      # NO shared_preload_libraries, deliberately. _PG_init returns early
+      # unless it is being preloaded, so this cluster registers ZERO
+      # dispatcher bgworkers — and the virgin smoke is one psql session
+      # asserting thousands of things about substrate state, which is only
+      # sound if nothing else is writing to it. The dispatcher ticks every
+      # 500ms and, on a lifeless install, enqueues a pending
+      # model-unconfigured hinge bell; OK 30 asserts the queue is empty. That
+      # race decided whether the RELEASE GATE passed, and it was observed
+      # both ways on the same image minutes apart.
+      #
+      # The suite asserts this environment itself (OK 0) rather than trusting
+      # the workflow to keep providing it. Bgworker behaviour is not dropped —
+      # it moves to its own job below, where a concurrent writer is the point.
+      - name: Start a virgin Postgres (bgworker ISOLATED — see OK 0)
         run: |
           docker run -d --name pg \
             -e POSTGRES_USER=stewards \
             -e POSTGRES_PASSWORD=ci \
             -e POSTGRES_DB=stewards \
-            stewards-oss-pg:ci \
-            -c shared_preload_libraries=pg_ai_stewards
+            stewards-oss-pg:ci
 
       - name: Wait for readiness
         run: |
@@ -86,9 +98,76 @@ jobs:
       - name: Concurrency regression (two-session add + amend)
         run: docker exec -i pg psql -U stewards -d stewards -v ON_ERROR_STOP=1 < tests/concurrency-write-path.sql
 
+      # The hazard OK 0 exists to exclude, reproduced ON DEMAND rather than
+      # waited for: one hand-made watchman tick (the exact call bgworker.rs:414
+      # makes) rings the bell and flips should_run false -> true, which is what
+      # OK 30 asserts against.
+      #
+      # Its OWN clean container, not the one the smoke just ran on: the pin
+      # opens by requiring a genuinely virgin queue, and a post-smoke database
+      # is not one. Reusing `pg` would make it fail for a reason that has
+      # nothing to do with the race it is pinning.
+      - name: OK 30 race pin (the flake, on demand)
+        run: |
+          docker run -d --name pin \
+            -e POSTGRES_USER=stewards -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=stewards \
+            stewards-oss-pg:ci
+          ok=
+          for i in $(seq 1 60); do
+            if docker exec pin pg_isready -U stewards -d stewards >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then echo "::error::pin Postgres did not become ready"; docker logs pin; exit 1; fi
+          docker exec -i pin psql -U stewards -d stewards -v ON_ERROR_STOP=1 < extension/init/00-bootstrap-roles.sql
+          docker exec -i pin psql -U stewards -d stewards -v ON_ERROR_STOP=1 < tests/ok30-race-pin.sql
+
       - name: Teardown
         if: always()
-        run: docker rm -f pg || true
+        run: docker rm -f pg pin || true
+
+  bgworker:
+    name: bgworker integration (preloaded — a writer is the point)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build the extension image
+        run: docker build -t stewards-oss-pg:ci extension/
+
+      # WITH shared_preload_libraries — the opposite of the smoke job, on
+      # purpose. Isolating the bgworker made the smoke deterministic; it must
+      # not also make the bgworker untested.
+      - name: Start Postgres WITH the dispatcher preloaded
+        run: |
+          docker run -d --name bg \
+            -e POSTGRES_USER=stewards \
+            -e POSTGRES_PASSWORD=ci \
+            -e POSTGRES_DB=stewards \
+            stewards-oss-pg:ci \
+            -c shared_preload_libraries=pg_ai_stewards
+
+      - name: Wait for readiness
+        run: |
+          ok=
+          for i in $(seq 1 60); do
+            if docker exec bg pg_isready -U stewards -d stewards >/dev/null 2>&1; then ok=1; break; fi
+            sleep 1
+          done
+          if [ -z "$ok" ]; then echo "::error::Postgres did not become ready"; docker logs bg; exit 1; fi
+
+      - name: Provision the operator roles (bootstrap fixture)
+        run: docker exec -i bg psql -U stewards -d stewards -v ON_ERROR_STOP=1 < extension/init/00-bootstrap-roles.sql
+
+      # Asserts the dispatcher is actually there before testing it (a vacuous
+      # pass is the failure mode this phase exists to avoid), that the lifeless
+      # degrade rings its deduped bell UNPROMPTED, and the inverse: a
+      # configured watchman must stay silent.
+      - name: Dispatcher behaviour (positive AND inverse)
+        run: docker exec -i bg psql -U stewards -d stewards -v ON_ERROR_STOP=1 < tests/bgworker-integration.sql
+
+      - name: Teardown
+        if: always()
+        run: docker rm -f bg || true
 
   go:
     name: go build + vet
