@@ -45,9 +45,16 @@
 -- proves EXECUTE and schema privilege AS the box role — the defect nocix hit
 -- — but does NOT change session_user, so it is not a literal remote-session
 -- equivalence test. Sound for THIS function because the body below reads
--- neither session_user nor current_user (verified, not assumed). If a
--- caller-relative check is ever added here, that oracle will not notice, and
--- a real separate-login harness becomes required.
+-- neither session_user nor current_user (verified, not assumed).
+--
+-- Two different futures, and only one is a harness problem:
+--   * SESSION-RELATIVE logic (session_user) would need a real separate-login
+--     harness; SET ROLE cannot stand in for it.
+--   * CALLER IDENTITY must be passed explicitly (as box_for_role does) or
+--     derived from a deliberately chosen caller-preserving primitive. NOT
+--     current_user: inside a definer function that is the OWNER even from a
+--     genuine box login, so no login harness would catch that misuse. That is
+--     a design rule, not a test gap.
 -- ---------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION stewards.lane_check()

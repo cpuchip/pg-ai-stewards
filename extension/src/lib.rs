@@ -767,8 +767,12 @@ extension_sql_file!(
 // Boundary: SET ROLE proves EXECUTE + schema privilege as the box role (the
 // actual defect) but does not change session_user, so it is not a literal
 // remote-session equivalence test. Safe today because this body reads neither
-// session_user nor current_user; a future caller-relative check here would
-// need a real separate-login harness.
+// session_user nor current_user. Two different futures: session-relative
+// logic would need a real separate-login harness, while caller identity must
+// be passed explicitly (as box_for_role does) or taken from a deliberately
+// chosen caller-preserving primitive — never current_user, which inside a
+// definer function is the OWNER even from a genuine box login, so no login
+// harness would catch that misuse. Design rule, not a test gap.
 extension_sql_file!(
     "../v58-lane-check-remote-read.sql",
     name = "create_v58_lane_check_remote_read",

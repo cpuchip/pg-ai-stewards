@@ -7040,11 +7040,25 @@ $vs120k$;
 -- and schema privilege AS the box role, which is the defect nocix hit. It
 -- does NOT change session_user, so this is not a literal remote-session
 -- equivalence test. It is sound for this function because the v55 body reads
--- neither session_user nor current_user — verified, not assumed. A future
--- caller-relative check inside lane_check would need a real separate-login
--- harness, and this assert would not catch its absence.
+-- neither session_user nor current_user — verified, not assumed.
+--
+-- Two different futures, and only one of them is a harness problem:
+--   * SESSION-RELATIVE logic (session_user) would need a real separate-login
+--     harness; SET ROLE cannot stand in for it.
+--   * CALLER IDENTITY must be passed explicitly (as box_for_role does) or
+--     derived from a deliberately chosen caller-preserving primitive. NOT
+--     current_user: inside a definer function that is the OWNER even from a
+--     genuine box login, so no login harness would catch that misuse either.
+--     That is a design rule, not a test gap.
 -- ---------------------------------------------------------------------
 CREATE ROLE vs120m_outsider NOLOGIN;
+-- ISOLATE THE PRIVILEGE UNDER TEST. This suite grants schema USAGE on
+-- stewards only to brain_read, so an outsider is refused at the SCHEMA before
+-- EXECUTE is ever consulted — and this negative would stay green even if v58
+-- accidentally left lane_check PUBLIC. Schema denial would be masking the
+-- exact leak the assert claims to rule out. Give the outsider USAGE, withhold
+-- the function grant, and let ONLY the EXECUTE ACL decide.
+GRANT USAGE ON SCHEMA stewards TO vs120m_outsider;
 DO $vs120m$
 DECLARE
     v_host jsonb; v_box jsonb; v_green int;
@@ -7080,7 +7094,12 @@ BEGIN
     SELECT count(*) FILTER (WHERE (e ->> 'ok')::boolean) INTO v_green
       FROM jsonb_array_elements(v_host) e;
 
-    -- INVERSE: definer must not mean public. A role outside brain_read is refused.
+    -- INVERSE: definer must not mean public. The outsider now HAS schema
+    -- USAGE, so nothing but the EXECUTE ACL stands between it and a
+    -- host-private read — which is the privilege v58 actually claims to
+    -- constrain. Asserted twice: the catalog says no, and the call agrees.
+    ASSERT NOT has_function_privilege('vs120m_outsider', 'stewards.lane_check()', 'EXECUTE'),
+        '120m inverse: the ACL itself grants EXECUTE on lane_check to a role outside brain_read — REVOKE PUBLIC did not take';
     BEGIN
         SET LOCAL ROLE vs120m_outsider;
         PERFORM * FROM stewards.lane_check();
@@ -7090,12 +7109,13 @@ BEGIN
         v_outsider_refused := true;
     END;
     ASSERT v_outsider_refused,
-        '120m inverse: a role outside brain_read executed lane_check — SECURITY DEFINER without REVOKE PUBLIC hands host-private reads to anyone';
+        '120m inverse: a role WITH schema USAGE but outside brain_read executed lane_check — SECURITY DEFINER without an effective REVOKE PUBLIC hands host-private reads to anyone';
 
     RAISE NOTICE 'OK 120m: lane_check runs from a BOX seat and returns EXACTLY the host''s answer (full ordered result set identical, %/% checks green), while a role outside brain_read is refused — the fleet can verify its own lanes without taking fermion''s word for it (nocix #705). Boundary: SET ROLE proves privilege, not session_user; sound here because this body reads neither.',
         v_green, jsonb_array_length(v_host);
 END
 $vs120m$;
+REVOKE USAGE ON SCHEMA stewards FROM vs120m_outsider;
 DROP ROLE vs120m_outsider;
 DROP ROLE box_ghost;
 
