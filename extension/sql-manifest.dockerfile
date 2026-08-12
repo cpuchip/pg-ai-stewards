@@ -63,3 +63,4 @@ COPY v54-posture-chooses-source.sql ./
 COPY v55-roster-authority.sql ./
 COPY v56-project-metrics.sql ./
 COPY v57-doc-split-preamble-fix.sql ./
+COPY v58-lane-check-remote-read.sql ./

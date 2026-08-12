@@ -740,6 +740,26 @@ extension_sql_file!(
     requires = ["create_v56_project_metrics"],
 );
 
+// v58-lane-check-remote-read.sql — lane_check(), runnable from the boxes
+// whose lanes it is about. Found by nocix (#705): the function was INVOKER
+// and reads host-private house.roster, so it died "permission denied for
+// schema house" from ANY remote box — meaning nocix and threadchip could
+// only take lane correctness on fermion's report of fermion's own run.
+// Verify-real-path, broken at fleet scale, on the one check that is about
+// everybody. Fix is box_for_role's proven pattern (v49:66): SECURITY
+// DEFINER, narrow, SET search_path, REVOKE PUBLIC, GRANT to brain_read
+// (brain_absorb inherits). Nothing widens write access to house — the
+// function only SELECTs and stays STABLE. Safe because the body is entirely
+// global: no current_user, nothing caller-relative, so definer changes who
+// may run it and not what it reports — which is precisely why box_for_role
+// takes the role as a PARAMETER instead. Body is v51's verbatim (diffed).
+// Oracle: virgin-smoke OK 120m, red on v57 with that exact error.
+extension_sql_file!(
+    "../v58-lane-check-remote-read.sql",
+    name = "create_v58_lane_check_remote_read",
+    requires = ["create_v57_doc_split_preamble_fix"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

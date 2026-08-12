@@ -7002,6 +7002,79 @@ BEGIN
     RAISE NOTICE 'OK 120k: the partial unique index refuses a second active mapping (revoked rows stay free)';
 END
 $vs120k$;
+
+-- ---------------------------------------------------------------------
+-- OK 120m — lane_check is RUNNABLE FROM A BOX SEAT (v58).
+--
+-- nocix's find (#705, and it sat unread two days behind a routing bug):
+-- stewards.lane_check() was INVOKER and read house.roster, which is
+-- host-private — no box role has USAGE on that schema. So the instrument
+-- that proves lane integrity died with "permission denied for schema house"
+-- from ANY remote box, and nocix and threadchip could only take lane
+-- correctness on fermion's report of fermion's own run. Verify-real-path,
+-- broken at fleet scale: the one check nobody else could make is the one
+-- about whether everybody's lanes are sound.
+--
+-- The fix is the pattern box_for_role already proves (v49:66): SECURITY
+-- DEFINER, narrow, SET search_path, REVOKE ALL FROM PUBLIC, explicit GRANT
+-- to brain_read (which brain_absorb is a member of, so every enrolled box
+-- reaches it). NOTHING widens write access to house.
+--
+-- Safe because lane_check's whole body is GLOBAL — NULL-lane counts, the
+-- four stamp triggers, roster resolution, the falsifier rule — with no
+-- current_user and nothing caller-relative. Definer changes WHO MAY RUN IT,
+-- not what it reports. That distinction is exactly why box_for_role takes
+-- the role as a PARAMETER: inside a definer function current_user is the
+-- OWNER, which would have silently attributed every box's writes to fermion
+-- (v49's own comment, paid for once already).
+--
+-- Both faces: a box seat gets the SAME answer the host does, and a role
+-- outside the read scope is still refused.
+-- ---------------------------------------------------------------------
+CREATE ROLE vs120m_outsider NOLOGIN;
+DO $vs120m$
+DECLARE
+    v_host_rows int; v_host_green int;
+    v_box_rows  int; v_box_green  int;
+    v_err text := NULL; v_outsider_refused boolean := false;
+BEGIN
+    SELECT count(*), count(*) FILTER (WHERE ok) INTO v_host_rows, v_host_green
+      FROM stewards.lane_check();
+
+    -- the box seat: an enrolled, rostered remote box (nocix/threadchip shape)
+    BEGIN
+        SET LOCAL ROLE box_smoke;
+        SELECT count(*), count(*) FILTER (WHERE ok) INTO v_box_rows, v_box_green
+          FROM stewards.lane_check();
+        RESET ROLE;
+    EXCEPTION WHEN insufficient_privilege THEN
+        RESET ROLE;
+        v_err := SQLERRM;
+    END;
+
+    ASSERT v_err IS NULL, format(
+        '120m: lane_check is not runnable from a box seat — "%s". The instrument that proves lane integrity must be runnable by the boxes whose lanes it is about (nocix #705).', v_err);
+    ASSERT v_box_rows = v_host_rows AND v_box_green = v_host_green, format(
+        '120m: the box seat got a DIFFERENT answer than the host (box %s/%s green, host %s/%s) — a definer read must not change what is reported, only who may ask',
+        v_box_green, v_box_rows, v_host_green, v_host_rows);
+
+    -- INVERSE: definer must not mean public. A role outside brain_read is refused.
+    BEGIN
+        SET LOCAL ROLE vs120m_outsider;
+        PERFORM * FROM stewards.lane_check();
+        RESET ROLE;
+    EXCEPTION WHEN insufficient_privilege THEN
+        RESET ROLE;
+        v_outsider_refused := true;
+    END;
+    ASSERT v_outsider_refused,
+        '120m inverse: a role outside brain_read executed lane_check — SECURITY DEFINER without REVOKE PUBLIC hands host-private reads to anyone';
+
+    RAISE NOTICE 'OK 120m: lane_check runs from a BOX seat and returns exactly the host''s answer (%/% checks green), while a role outside brain_read is refused — the fleet can verify its own lanes without taking fermion''s word for it (nocix #705)',
+        v_box_green, v_box_rows;
+END
+$vs120m$;
+DROP ROLE vs120m_outsider;
 DROP ROLE box_ghost;
 
 -- probes out before the destructive phases, so the lane_check reads below
@@ -7448,4 +7521,4 @@ BEGIN
 END
 $vs125$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v57 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix) is sound =='
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v57 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable) is sound =='
