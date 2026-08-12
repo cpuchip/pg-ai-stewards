@@ -39,17 +39,30 @@ CREATE EXTENSION IF NOT EXISTS pg_ai_stewards CASCADE;
 
 DO $pin$
 DECLARE
+    v_preload text;
     v_disp    int;
     v_before  boolean;
     v_pass    text;
     v_pending int;
     v_after   boolean;
 BEGIN
-    -- The pin is only exact if nothing else can act. Prove that first.
+    -- The pin is only exact if nothing else can act. Prove that first — and
+    -- prove it with the GUC, not the process table.
+    --
+    -- The first version of this guard counted live dispatcher backends, which
+    -- is the same toothless check OK 0 had to discard: the workers carry
+    -- restart_time=5s, so on a preloaded cluster there is a window where the
+    -- count is 0 while an actor is REGISTERED TO ARRIVE. The file claimed it
+    -- refused preloaded clusters and did not actually look. (Fixing a hole in
+    -- one file and leaving its twin in another is its own lesson.)
+    v_preload := coalesce(current_setting('shared_preload_libraries', true), '');
+    ASSERT v_preload NOT LIKE '%pg_ai_stewards%',
+        format('race pin must run on an ISOLATED cluster: shared_preload_libraries is "%s", so dispatcher bgworkers are registered (whether or not they have connected yet) and a result here could not say who caused it', v_preload);
+
     SELECT count(*) INTO v_disp FROM pg_stat_activity
      WHERE backend_type LIKE 'pg_ai_stewards dispatcher%';
     ASSERT v_disp = 0,
-        format('race pin must run on an ISOLATED cluster (no shared_preload_libraries): %s dispatcher bgworker(s) are running, so a green or red here would prove nothing about who did it', v_disp);
+        format('race pin: %s dispatcher bgworker(s) are connected despite shared_preload_libraries not naming us — something else started them, so this pin is not the only actor', v_disp);
 
     -- OK 30's premise, before we touch anything.
     v_before := (stewards.hinge_gate_status()->>'should_run')::bool;
