@@ -57,7 +57,13 @@ jobs:
         run: |
           ok=
           for i in $(seq 1 60); do
-            if docker exec pg pg_isready -U stewards -d stewards >/dev/null 2>&1; then ok=1; break; fi
+            # NOT pg_isready: it answers for the postgres image's TEMPORARY
+            #  init instance too, so it reports ready before the real
+            #  "stewards" database exists. That is how the bgworker job first
+            #  failed with FATAL: database "stewards" does not exist, while the
+            #  other jobs passed the same check by luck. Ask the question we
+            #  actually mean: can I run a query against THIS database?
+            if docker exec pg psql -U stewards -d stewards -tAc "SELECT 1" >/dev/null 2>&1; then ok=1; break; fi
             sleep 1
           done
           if [ -z "$ok" ]; then echo "::error::Postgres did not become ready"; docker logs pg; exit 1; fi
@@ -114,7 +120,13 @@ jobs:
             stewards-oss-pg:ci
           ok=
           for i in $(seq 1 60); do
-            if docker exec pin pg_isready -U stewards -d stewards >/dev/null 2>&1; then ok=1; break; fi
+            # NOT pg_isready: it answers for the postgres image's TEMPORARY
+            #  init instance too, so it reports ready before the real
+            #  "stewards" database exists. That is how the bgworker job first
+            #  failed with FATAL: database "stewards" does not exist, while the
+            #  other jobs passed the same check by luck. Ask the question we
+            #  actually mean: can I run a query against THIS database?
+            if docker exec pin psql -U stewards -d stewards -tAc "SELECT 1" >/dev/null 2>&1; then ok=1; break; fi
             sleep 1
           done
           if [ -z "$ok" ]; then echo "::error::pin Postgres did not become ready"; docker logs pin; exit 1; fi
@@ -150,7 +162,13 @@ jobs:
         run: |
           ok=
           for i in $(seq 1 60); do
-            if docker exec bg pg_isready -U stewards -d stewards >/dev/null 2>&1; then ok=1; break; fi
+            # NOT pg_isready: it answers for the postgres image's TEMPORARY
+            #  init instance too, so it reports ready before the real
+            #  "stewards" database exists. That is how the bgworker job first
+            #  failed with FATAL: database "stewards" does not exist, while the
+            #  other jobs passed the same check by luck. Ask the question we
+            #  actually mean: can I run a query against THIS database?
+            if docker exec bg psql -U stewards -d stewards -tAc "SELECT 1" >/dev/null 2>&1; then ok=1; break; fi
             sleep 1
           done
           if [ -z "$ok" ]; then echo "::error::Postgres did not become ready"; docker logs bg; exit 1; fi
