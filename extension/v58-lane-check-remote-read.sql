@@ -38,8 +38,16 @@
 -- prosrc on a live v57 cluster — not against whichever definition a
 -- truncated grep happened to show first.
 -- Oracle: virgin-smoke OK 120m (red on v57 with exactly the error above;
--- green after, box seat matching the host's answer, and a role outside
--- brain_read still refused).
+-- green after, the box seat's FULL ORDERED RESULT SET equal to the host's,
+-- and a role outside brain_read still refused).
+--
+-- BOUNDARY, named rather than overclaimed: that oracle uses SET ROLE, which
+-- proves EXECUTE and schema privilege AS the box role — the defect nocix hit
+-- — but does NOT change session_user, so it is not a literal remote-session
+-- equivalence test. Sound for THIS function because the body below reads
+-- neither session_user nor current_user (verified, not assumed). If a
+-- caller-relative check is ever added here, that oracle will not notice, and
+-- a real separate-login harness becomes required.
 -- ---------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION stewards.lane_check()

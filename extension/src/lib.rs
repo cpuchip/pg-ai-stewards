@@ -752,8 +752,23 @@ extension_sql_file!(
 // function only SELECTs and stays STABLE. Safe because the body is entirely
 // global: no current_user, nothing caller-relative, so definer changes who
 // may run it and not what it reports — which is precisely why box_for_role
-// takes the role as a PARAMETER instead. Body is v51's verbatim (diffed).
-// Oracle: virgin-smoke OK 120m, red on v57 with that exact error.
+// takes the role as a PARAMETER instead.
+//
+// BODY IS v55's VERBATIM — the CURRENT one. lane_check is re-authored six
+// times in the chain (v49, v51, v52, v53, v54, v55): posture awareness,
+// per-table trigger binding, posture-chooses-source, roster authority. The
+// first draft of this volume carried v51's, from a grep truncated by
+// `head -3`, and reverted v54's "roster is inert under role_name" property;
+// virgin-smoke OK 120 caught it. Verified byte-identical against the prosrc
+// installed on a live v57 cluster, not against a file a search showed first.
+//
+// Oracle: virgin-smoke OK 120m, red on v57 with that exact error. It asserts
+// the box seat's FULL ordered result set equals the host's, not just a count.
+// Boundary: SET ROLE proves EXECUTE + schema privilege as the box role (the
+// actual defect) but does not change session_user, so it is not a literal
+// remote-session equivalence test. Safe today because this body reads neither
+// session_user nor current_user; a future caller-relative check here would
+// need a real separate-login harness.
 extension_sql_file!(
     "../v58-lane-check-remote-read.sql",
     name = "create_v58_lane_check_remote_read",

@@ -7030,22 +7030,42 @@ $vs120k$;
 --
 -- Both faces: a box seat gets the SAME answer the host does, and a role
 -- outside the read scope is still refused.
+--
+-- SAME ANSWER MEANS THE WHOLE ANSWER. Comparing row count and number-green
+-- would pass if the check NAMES differed, if a detail string changed, or if
+-- one false check were swapped for another — so the comparison is the full
+-- ordered result set, canonicalised.
+--
+-- BOUNDARY, named rather than overclaimed (codex): SET ROLE proves EXECUTE
+-- and schema privilege AS the box role, which is the defect nocix hit. It
+-- does NOT change session_user, so this is not a literal remote-session
+-- equivalence test. It is sound for this function because the v55 body reads
+-- neither session_user nor current_user — verified, not assumed. A future
+-- caller-relative check inside lane_check would need a real separate-login
+-- harness, and this assert would not catch its absence.
 -- ---------------------------------------------------------------------
 CREATE ROLE vs120m_outsider NOLOGIN;
 DO $vs120m$
 DECLARE
-    v_host_rows int; v_host_green int;
-    v_box_rows  int; v_box_green  int;
+    v_host jsonb; v_box jsonb; v_green int;
     v_err text := NULL; v_outsider_refused boolean := false;
 BEGIN
-    SELECT count(*), count(*) FILTER (WHERE ok) INTO v_host_rows, v_host_green
-      FROM stewards.lane_check();
+    SELECT jsonb_agg(to_jsonb(x) ORDER BY x.check_name) INTO v_host
+      FROM stewards.lane_check() x;
+
+    -- jsonb_agg over zero rows is NULL, and NULL IS NOT DISTINCT FROM NULL is
+    -- TRUE — so an empty result on BOTH sides would satisfy the equality
+    -- assert below while proving nothing whatsoever. Anchor it: the host must
+    -- actually have produced the full check set first.
+    ASSERT v_host IS NOT NULL AND jsonb_array_length(v_host) >= 8, format(
+        '120m: the host run produced %s check(s) — the equality assert below would be vacuous (jsonb_agg of no rows is NULL, and NULL = NULL passes)',
+        coalesce(jsonb_array_length(v_host)::text, 'NULL'));
 
     -- the box seat: an enrolled, rostered remote box (nocix/threadchip shape)
     BEGIN
         SET LOCAL ROLE box_smoke;
-        SELECT count(*), count(*) FILTER (WHERE ok) INTO v_box_rows, v_box_green
-          FROM stewards.lane_check();
+        SELECT jsonb_agg(to_jsonb(x) ORDER BY x.check_name) INTO v_box
+          FROM stewards.lane_check() x;
         RESET ROLE;
     EXCEPTION WHEN insufficient_privilege THEN
         RESET ROLE;
@@ -7054,9 +7074,11 @@ BEGIN
 
     ASSERT v_err IS NULL, format(
         '120m: lane_check is not runnable from a box seat — "%s". The instrument that proves lane integrity must be runnable by the boxes whose lanes it is about (nocix #705).', v_err);
-    ASSERT v_box_rows = v_host_rows AND v_box_green = v_host_green, format(
-        '120m: the box seat got a DIFFERENT answer than the host (box %s/%s green, host %s/%s) — a definer read must not change what is reported, only who may ask',
-        v_box_green, v_box_rows, v_host_green, v_host_rows);
+    ASSERT v_box IS NOT DISTINCT FROM v_host, format(
+        '120m: the box seat got a DIFFERENT answer than the host — a definer read must not change what is reported, only who may ask.%s  host=%s%s  box=%s',
+        E'\n', v_host, E'\n', v_box);
+    SELECT count(*) FILTER (WHERE (e ->> 'ok')::boolean) INTO v_green
+      FROM jsonb_array_elements(v_host) e;
 
     -- INVERSE: definer must not mean public. A role outside brain_read is refused.
     BEGIN
@@ -7070,8 +7092,8 @@ BEGIN
     ASSERT v_outsider_refused,
         '120m inverse: a role outside brain_read executed lane_check — SECURITY DEFINER without REVOKE PUBLIC hands host-private reads to anyone';
 
-    RAISE NOTICE 'OK 120m: lane_check runs from a BOX seat and returns exactly the host''s answer (%/% checks green), while a role outside brain_read is refused — the fleet can verify its own lanes without taking fermion''s word for it (nocix #705)',
-        v_box_green, v_box_rows;
+    RAISE NOTICE 'OK 120m: lane_check runs from a BOX seat and returns EXACTLY the host''s answer (full ordered result set identical, %/% checks green), while a role outside brain_read is refused — the fleet can verify its own lanes without taking fermion''s word for it (nocix #705). Boundary: SET ROLE proves privilege, not session_user; sound here because this body reads neither.',
+        v_green, jsonb_array_length(v_host);
 END
 $vs120m$;
 DROP ROLE vs120m_outsider;
