@@ -718,6 +718,28 @@ extension_sql_file!(
     requires = ["create_v55_roster_authority"],
 );
 
+// v57-doc-split-preamble-fix.sql — one line, 28 volumes overdue.
+// doc_split_sections appended an UNTYPED literal to a text[]
+// (`v_refs := v_refs || 's0'`), so Postgres resolved || as
+// anyarray||anyarray and tried to cast 's0' itself to text[]:
+// `malformed array literal: "s0"`. The headed loop appends a declared
+// text variable and always worked, so ONLY the preamble branch died —
+// i.e. every doc with content before its first heading and every plain
+// .txt — and it died QUIETLY behind the function's deliberate
+// never-raise handler ({"ok":false}, subtransaction rolled back, doc
+// left in the pool with zero sections). Unseen since v29 because the
+// OK 109 fixture opens with a heading, leaving the s0 branch — a
+// section v29's own COMMENT promises — with zero coverage.
+// Found by threadchip (chillacks #908); root-caused by basecamp on live
+// v55. Sibling sweep clean: the only bare-literal append to an array in
+// the extension. Oracle: virgin-smoke OK 125 (red on v56 with exactly
+// that error).
+extension_sql_file!(
+    "../v57-doc-split-preamble-fix.sql",
+    name = "create_v57_doc_split_preamble_fix",
+    requires = ["create_v56_project_metrics"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

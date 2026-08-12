@@ -7294,4 +7294,105 @@ BEGIN
 END
 $vs124$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v56 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 125 — v57: doc_split_sections' PREAMBLE branch (the 's0' section).
+--
+-- The defect (threadchip's find, chillacks #908; root-caused by basecamp,
+-- repro'd rollback-wrapped on live v55): v29-normalize.sql:248 appended an
+-- UNTYPED literal to a text[] — `v_refs := v_refs || 's0';` — so Postgres
+-- resolved || as anyarray||anyarray and tried to cast 's0' ITSELF to
+-- text[], raising `malformed array literal: "s0"`. The headed loop appends
+-- a TYPED variable (v_ref text, line 266) and so always worked. Only the
+-- preamble branch died — which is EVERY doc with content before its first
+-- heading, and EVERY plain .txt. The function's deliberate never-raise
+-- handler swallowed it into {"ok":false}, so it failed QUIETLY from v29.
+--
+-- It went unseen because the OK 109 fixture starts with a heading, leaving
+-- the preamble branch with zero coverage for 28 volumes. This is that
+-- coverage. RED ON HEAD: (1) and (2) return ok:false carrying that exact
+-- error and write ZERO sections — the plpgsql exception block rolls its
+-- whole subtransaction back, so a failed split silently leaves the prior
+-- sections (or none) in place.
+-- ---------------------------------------------------------------------
+DO $vs125$
+DECLARE
+    v_res    jsonb;
+    v_doc    text;
+    v_txt    text;
+    v_body   text;
+    v_start  int;
+    v_end    int;
+BEGIN
+    -- ── (1) preamble BEFORE the first heading → s0 + the headed sections ──
+    v_res := stewards.file_drop_ingest('vs125-case/preamble.md',
+        E'Intro prose that belongs to no heading.\n\n# First\n\nUnder the first heading.\n\n## Nested\n\nUnder the nested one.\n',
+        'vs125-case', NULL);
+    ASSERT (v_res->>'ok')::boolean AND v_res->>'status' = 'ingested',
+        format('125: the preamble fixture must ingest, got %s', v_res);
+    v_doc := v_res->>'doc_id';
+    SELECT d.body INTO v_body FROM stewards.docs d WHERE d.id = v_doc;
+
+    v_res := stewards.doc_split_sections(v_doc);
+    ASSERT (v_res->>'ok')::boolean,
+        format('125: a doc with a preamble must SPLIT, not fail closed — got %s', v_res);
+    ASSERT (v_res->>'sections')::int = 3,
+        format('125: the preamble doc must split into 3 sections (s0 preamble, s1 First, s1.1 Nested), got %s', v_res);
+    ASSERT v_res->'refs'->>0 = 's0',
+        format('125: the FIRST ref of a preamble doc must be s0, got %s', v_res->'refs');
+    ASSERT (SELECT ds.body FROM stewards.doc_sections ds
+             WHERE ds.doc_id = v_doc AND ds.section_ref = 's0') LIKE 'Intro prose that belongs to no heading.%',
+        '125: the s0 section must carry the preamble text itself';
+    ASSERT (SELECT ds.heading FROM stewards.doc_sections ds
+             WHERE ds.doc_id = v_doc AND ds.section_ref = 's0') IS NULL
+       AND (SELECT ds.level FROM stewards.doc_sections ds
+             WHERE ds.doc_id = v_doc AND ds.section_ref = 's0') = 0,
+        '125: s0 is headingless and level 0 (it belongs to no heading)';
+    -- the headed sections still land at their own addresses beside it
+    ASSERT EXISTS (SELECT 1 FROM stewards.doc_sections ds
+                    WHERE ds.doc_id = v_doc AND ds.section_ref = 's1.1' AND ds.heading = 'Nested'),
+        '125: the headed sections must still address correctly alongside s0';
+    -- s0's span is a REAL address into docs.body, starting at 0
+    SELECT ds.char_start, ds.char_end INTO v_start, v_end
+      FROM stewards.doc_sections ds WHERE ds.doc_id = v_doc AND ds.section_ref = 's0';
+    ASSERT v_start = 0 AND substring(v_body FROM v_start + 1 FOR v_end - v_start)
+                           LIKE 'Intro prose%',
+        '125: [char_start,char_end) must slice docs.body to exactly the preamble';
+
+    -- ── (2) a plain .txt with NO heading at all → one section, all of it ──
+    v_res := stewards.file_drop_ingest('vs125-case/plain-note.txt',
+        E'A plain text note with no headings at all.\nJust two lines of prose.\n',
+        'vs125-case', NULL);
+    ASSERT (v_res->>'ok')::boolean AND v_res->>'status' = 'ingested',
+        format('125: the plain-text fixture must ingest, got %s', v_res);
+    v_txt := v_res->>'doc_id';
+
+    v_res := stewards.doc_split_sections(v_txt);
+    ASSERT (v_res->>'ok')::boolean AND (v_res->>'sections')::int = 1
+       AND v_res->'refs'->>0 = 's0',
+        format('125: a headingless .txt must split into exactly one s0 section, got %s', v_res);
+    ASSERT (SELECT ds.body FROM stewards.doc_sections ds
+             WHERE ds.doc_id = v_txt AND ds.section_ref = 's0')
+         = (SELECT d.body FROM stewards.docs d WHERE d.id = v_txt),
+        '125: the lone s0 of a headingless doc must carry the WHOLE body';
+
+    -- ── (3) idempotency: a re-split of the preamble doc rebuilds identically ──
+    v_res := stewards.doc_split_sections(v_doc);
+    ASSERT (v_res->>'ok')::boolean AND (v_res->>'sections')::int = 3
+       AND (SELECT count(*) FROM stewards.doc_sections ds WHERE ds.doc_id = v_doc) = 3
+       AND EXISTS (SELECT 1 FROM stewards.doc_sections ds
+                    WHERE ds.doc_id = v_doc AND ds.section_ref = 's0'),
+        '125: a re-split of a preamble doc must be idempotent (delete+rebuild, same refs)';
+
+    -- ── (4) the regression fingerprint itself must be gone from the body ──
+    ASSERT (SELECT p.prosrc FROM pg_proc p
+              JOIN pg_namespace n ON n.oid = p.pronamespace
+             WHERE n.nspname = 'stewards' AND p.proname = 'doc_split_sections')
+           NOT LIKE '%|| ''s0'';%',
+        '125: the untyped `v_refs || ''s0''` append must not survive anywhere in the body';
+
+    DELETE FROM stewards.docs WHERE id IN (v_doc, v_txt);   -- cascades doc_sections
+    RAISE NOTICE 'OK 125: doc_split_sections handles the PREAMBLE branch — content before the first heading lands at s0 (headingless, level 0, span slicing docs.body from 0) beside its headed sections, a headingless .txt becomes exactly one s0 carrying the whole body, and a re-split stays idempotent; the untyped-literal array append that quietly failed every such doc since v29 is gone (threadchip #908)';
+END
+$vs125$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v57 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix) is sound =='
