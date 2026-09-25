@@ -115,6 +115,7 @@ COPY v55-roster-authority.sql ./
 COPY v56-project-metrics.sql ./
 COPY v57-doc-split-preamble-fix.sql ./
 COPY v58-lane-check-remote-read.sql ./
+COPY v59-intent-on-first-call.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/

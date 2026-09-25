@@ -308,6 +308,21 @@ BEGIN
     ASSERT stewards.provider_cap_exceeded('opencode_go') = false,
         'an uncapped provider must never be gated';
 
+    -- OK 126 (v59): the FIRST model call of a dispatched stage carries the
+    -- item's === Intent === block. Red on v58: the session id reached
+    -- work_items.session_ids only in dispatch's terminal UPDATE, after the
+    -- prompt was composed, and compose_system_prompt finds the intent through
+    -- that array (live 2026-09-25: first call 1/587, later calls 1413/1413).
+    ASSERT (SELECT payload::text LIKE '%=== Intent ===%'
+              FROM stewards.work_queue
+             WHERE kind='chat' AND payload->>'_work_item_id' = v_wid::text
+             ORDER BY id DESC LIMIT 1),
+        '126: the first chat payload of a dispatched stage must carry the item''s === Intent === block';
+    ASSERT (SELECT wi.session_ids @> ARRAY['wi--' || substring(v_wid::text FROM 1 FOR 8) || '--work']
+              FROM stewards.work_items wi WHERE wi.id = v_wid),
+        '126: the stage session id must be on work_items.session_ids after dispatch';
+    RAISE NOTICE 'OK 126: the first model call of a stage carries the item intent (v59: session id appended before the compose call)';
+
     -- Teardown: restore lifelessness for every block after this one.
     DELETE FROM stewards.config WHERE key IN ('default_provider','default_model');
     ASSERT stewards.catalog_default_provider() IS NULL,
@@ -7563,4 +7578,4 @@ BEGIN
 END
 $vs125$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v57 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable) is sound =='
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v59 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call) is sound =='

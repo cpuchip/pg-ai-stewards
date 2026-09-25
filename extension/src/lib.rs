@@ -779,6 +779,22 @@ extension_sql_file!(
     requires = ["create_v57_doc_split_preamble_fix"],
 );
 
+// v59-intent-on-first-call.sql: the first model call of a stage carries the
+// item's intent. Found on a second instance (2026-09-25) on
+// a fresh install, then confirmed on the live record: first call per
+// session carried === Intent === 1/587, every later call 1413/1413.
+// work_item_dispatch_stage composed through dry_run_chat and only appended
+// the session id to work_items.session_ids in its terminal UPDATE, while
+// compose_system_prompt finds the intent through p_session_id =
+// ANY(wi.session_ids). One move: the same append, before the compose call.
+// Body is otherwise v34's verbatim, taken from the prosrc installed on the
+// live v58 cluster. Oracle: virgin-smoke OK 126, red on v58.
+extension_sql_file!(
+    "../v59-intent-on-first-call.sql",
+    name = "create_v59_intent_on_first_call",
+    requires = ["create_v58_lane_check_remote_read"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
