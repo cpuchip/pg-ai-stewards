@@ -250,7 +250,7 @@ pub(crate) fn tool_dispatch(payload: &serde_json::Value) -> Result<WorkOutcome, 
                         Some(1),
                         &[name.clone().into()],
                     )?;
-                    let (target, needs_confirm) = match target_rows.into_iter().next() {
+                    let (mut target, mut needs_confirm) = match target_rows.into_iter().next() {
                         Some(r) => (
                             r.get::<pgrx::JsonB>(1)?.map(|j| j.0)
                                 .unwrap_or(serde_json::json!({"kind":"missing"})),
@@ -258,6 +258,38 @@ pub(crate) fn tool_dispatch(payload: &serde_json::Value) -> Result<WorkOutcome, 
                         ),
                         None => (serde_json::json!({"kind":"missing"}), false),
                     };
+                    // The grant is the wall at EXECUTION, not only at offer time.
+                    // compose_tools decides which tools a family is offered
+                    // (tool_permission most-specific-wins, deny beats all, plus
+                    // the context/skill/shelf gates); a model can still name a
+                    // tool it was never offered, because tool results and
+                    // primers mention tool names. Found 2026-09-25 on a second
+                    // instance: a family with no doc_finalize grant learned the
+                    // name from doc_append_section's reply, called it, and the
+                    // executor ran it. So the same question compose_tools
+                    // answers is asked here, per call, and a tool outside the
+                    // family's offer becomes a "denied" sentinel that the
+                    // dispatch loop reports and never executes. One source of
+                    // truth: this query IS compose_tools, filtered to one name.
+                    let is_missing = target.get("kind").and_then(|k| k.as_str()) == Some("missing");
+                    if !is_missing {
+                        let granted_rows = client.select(
+                            "SELECT EXISTS (SELECT 1 FROM jsonb_array_elements(stewards.compose_tools($1)) e WHERE e->'function'->>'name' = $2)",
+                            Some(1),
+                            &[agent_family.clone().into(), name.clone().into()],
+                        )?;
+                        let granted = match granted_rows.into_iter().next() {
+                            Some(r) => r.get::<bool>(1)?.unwrap_or(false),
+                            None => false,
+                        };
+                        if !granted {
+                            target = serde_json::json!({
+                                "kind": "denied",
+                                "family": agent_family.clone(),
+                            });
+                            needs_confirm = false;
+                        }
+                    }
                     prepped.push((tc_id, name, args, target, needs_confirm));
                 }
                 Ok(Some(prepped))
@@ -457,6 +489,11 @@ fn exec_one_tool(
         "http"      => exec_http_tool(target, args).map(ToolReply::Sync),
         "mcp_proxy" => exec_mcp_proxy_tool(target, args),
         "missing"   => Err(format!("tool '{}' is not registered or inactive", name)),
+        "denied"    => Err(format!(
+            "tool '{}' is not granted to agent family '{}'; it was not executed",
+            name,
+            target.get("family").and_then(|v| v.as_str()).unwrap_or("?"),
+        )),
         other       => Err(format!("unsupported tool kind: {}", other)),
     }
 }
