@@ -51,17 +51,32 @@
 # silently deviated from — see the SHIPWRIGHT P1 PR body.
 #
 # Env:
-#   DB_CONTAINER  target container (default: stewards-oss-pg)
+#   DB_CONTAINER  target container. When unset, it is DERIVED from the DSN's
+#                 published port (the one container publishing that port);
+#                 there is no fixed default any more.
 #   DB_USER/DB_NAME  used only when the DSN carries no user/dbname
+#
+# ── WHY THERE IS NO DEFAULT CONTAINER (2026-09-25) ──────────────────────
+# This file used to default DB_CONTAINER to the live database's container.
+# A second instance on the same box, migrated with that variable forgotten,
+# would then have run its migrations inside PRODUCTION: the DSN named the
+# right port, and the shim ignored it. Caught by the second instance's own
+# wrapper (it refused unless current_database() matched, and was falsified
+# by aiming it at live). The DSN already carries the port, and Docker knows
+# which container publishes it, so the container is derived from the DSN
+# and the shim refuses (exit 3, before any exec) when the port is not
+# published by exactly one running container. A default that points at
+# production is a defect regardless of documentation.
 set -euo pipefail
 
-CONTAINER="${DB_CONTAINER:-stewards-oss-pg}"
+CONTAINER="${DB_CONTAINER:-}"
 DBUSER="${DB_USER:-stewards}"
 DBNAME="${DB_NAME:-stewards}"
+DBPORT=""
 CLEANUP_PATHS=()
 
 parse_dsn() {
-  local dsn="$1" rest userinfo hostinfo dbpart
+  local dsn="$1" rest userinfo hostinfo dbpart hostport
   rest="${dsn#*://}"
   case "$rest" in
     *@*)
@@ -73,11 +88,37 @@ parse_dsn() {
       hostinfo="$rest"
       ;;
   esac
+  hostport="${hostinfo%%/*}"
+  case "$hostport" in
+    *:*) DBPORT="${hostport##*:}"; DBPORT="${DBPORT%%\?*}" ;;
+  esac
   dbpart="${hostinfo#*/}"
   if [ "$dbpart" != "$hostinfo" ] && [ -n "$dbpart" ]; then
     dbpart="${dbpart%%\?*}"
     [ -n "$dbpart" ] && DBNAME="$dbpart"
   fi
+}
+
+# Resolve the container from the DSN's port when the caller did not name one.
+# Exactly one running container must publish that port; anything else refuses
+# before any docker exec, because the alternative is guessing at production.
+resolve_container() {
+  [ -n "$CONTAINER" ] && return 0
+  if [ -z "$DBPORT" ]; then
+    echo "pgshim/psql: no DB_CONTAINER and the DSN carries no port; refusing rather than guessing a container" >&2
+    exit 3
+  fi
+  # Not `docker ps --filter publish=`: measured 2026-09-25, it matches a
+  # container bound to 127.0.0.1 and misses one bound to a specific address
+  # (the live database publishes on the mesh IP). Read the port lists instead.
+  local found
+  found="$(docker ps --format '{{.Names}}\t{{.Ports}}' 2>/dev/null \
+    | awk -F'\t' -v p=":$DBPORT->" 'index($2, p) { print $1 }' | sed '/^$/d')"
+  case "$(printf '%s\n' "$found" | sed '/^$/d' | wc -l | tr -d ' ')" in
+    1) CONTAINER="$found" ;;
+    0) echo "pgshim/psql: no running container publishes port $DBPORT (DSN); set DB_CONTAINER explicitly if that is intended" >&2; exit 3 ;;
+    *) echo "pgshim/psql: more than one container publishes port $DBPORT: $(printf '%s' "$found" | tr '\n' ' '); set DB_CONTAINER explicitly" >&2; exit 3 ;;
+  esac
 }
 
 # Sets the global STAGED_DEST as its "return value" — NOT a command
@@ -101,6 +142,16 @@ psql_args=()
 i=0
 argv=("$@")
 n=${#argv[@]}
+
+# The DSN decides the container, and `-f` staging needs the container, so
+# find and parse the DSN before touching any other argument.
+for a in "${argv[@]}"; do
+  case "$a" in
+    postgres://*|postgresql://*) parse_dsn "$a" ;;
+  esac
+done
+resolve_container
+
 while [ "$i" -lt "$n" ]; do
   a="${argv[$i]}"
   case "$a" in
