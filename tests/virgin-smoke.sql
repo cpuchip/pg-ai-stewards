@@ -7578,4 +7578,42 @@ BEGIN
 END
 $vs125$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v59 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 127 (v60): render_stage_input carries backslashes in input values
+-- verbatim. Each value was the replacement argument of regexp_replace,
+-- where "\\" is read as "\", "\&" as the matched {{path}}, "\1" as an empty
+-- group. Red on v59: the rendered text below loses a backslash from every
+-- "\\", turns "\&" into "{{input.text}}" and drops "\1".
+-- ---------------------------------------------------------------------
+DO $vs127$
+DECLARE
+    v_intent uuid;
+    v_wid    uuid;
+    v_in     text;
+    v_out    text;
+BEGIN
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug='default';
+    INSERT INTO stewards.pipelines (family, description, stages, sabbath_enabled, atonement_enabled,
+        file_destination_template, file_content_jsonpath, maturity_ladder, auto_materialize_on_verified, metadata)
+    VALUES ('smoke-render-bs','virgin smoke: rendered input keeps its backslashes',
+      '[{"name":"work","next":null,"model":"smoke-bad","agent_family":"smoke","auto_advance":false,"input_template":"before {{input.text}} after"}]'::jsonb,
+      false,false,NULL,NULL,'["raw","verified"]'::jsonb,false,'{}'::jsonb)
+    ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages;
+
+    -- A LaTeX line break, a Windows path, a UNC path, "\&" and "\1".
+    v_in := E'R &= R_0(1 + at). \\\\ R &= R_0. C:\\Users\\me\\new.tex \\\\server\\share \\& \\1 done';
+    v_wid := stewards.work_item_create('smoke-render-bs', jsonb_build_object('text', v_in),
+                                       'smoke-wi-render-bs', 'tester', NULL, v_intent);
+    v_out := stewards.render_stage_input(v_wid);
+
+    ASSERT v_out = 'before ' || v_in || ' after',
+        format('127: render_stage_input must carry input backslashes verbatim; expected %L, got %L',
+               'before ' || v_in || ' after', v_out);
+
+    DELETE FROM stewards.work_items WHERE id = v_wid;
+    DELETE FROM stewards.pipelines WHERE family = 'smoke-render-bs';
+    RAISE NOTICE 'OK 127: render_stage_input carries backslashes in input values verbatim (LaTeX \\, Windows and UNC paths, \& and \1 unchanged)';
+END
+$vs127$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v60 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes) is sound =='
