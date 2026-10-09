@@ -795,6 +795,17 @@ extension_sql_file!(
     requires = ["create_v58_lane_check_remote_read"],
 );
 
+// v60-render-backslash.sql: render_stage_input passed each input value to
+// regexp_replace as the replacement string, where "\\" means "\" and "\&"
+// means the match, so backslashes in input values (LaTeX, Windows paths)
+// reached the model altered. The value's backslashes are now doubled first.
+// Oracle: virgin-smoke OK 127, red on v59.
+extension_sql_file!(
+    "../v60-render-backslash.sql",
+    name = "create_v60_render_backslash",
+    requires = ["create_v59_intent_on_first_call"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
