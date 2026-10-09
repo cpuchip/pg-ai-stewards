@@ -781,6 +781,7 @@ fn process_one_pending() -> bool {
                     tokens_in,
                     tokens_out,
                     reasoning_tokens,
+                    reasoning_in_completion,
                     cache_creation_tokens,
                     cache_read_tokens,
                     upstream_cost_micro,
@@ -1295,7 +1296,7 @@ fn process_one_pending() -> bool {
                         "reasoning_tokens": reasoning_tokens,
                         "billable_output":
                             tokens_out.unwrap_or(0)
-                            + reasoning_tokens.unwrap_or(0),
+                            + if *reasoning_in_completion { 0 } else { reasoning_tokens.unwrap_or(0) },
                         "tool_call_count":
                             assistant_tool_calls.as_ref()
                                 .and_then(|v| v.as_array())
@@ -1723,6 +1724,71 @@ data: [DONE]\n";
         let sse = "data: {\"error\":{\"message\":\"boom\"}}\n";
         let err = parse_chat_sse_reader(sse.as_bytes()).expect_err("must error");
         assert!(err.contains("boom"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod anthropic_cache_tests {
+    use super::anthropic_body_from_openai;
+
+    fn marked(v: &serde_json::Value) -> bool {
+        v.get("cache_control").and_then(|c| c.get("type")) == Some(&serde_json::json!("ephemeral"))
+    }
+
+    fn count_marks(v: &serde_json::Value) -> usize {
+        match v {
+            serde_json::Value::Object(m) => {
+                m.contains_key("cache_control") as usize + m.values().map(count_marks).sum::<usize>()
+            }
+            serde_json::Value::Array(a) => a.iter().map(count_marks).sum(),
+            _ => 0,
+        }
+    }
+
+    #[test]
+    fn marks_last_tool_system_and_last_user_text() {
+        let body = serde_json::json!({
+            "model": "claude-haiku-5-5",
+            "messages": [
+                {"role": "system", "content": "You are a careful extractor."},
+                {"role": "user", "content": "Differentiate y = x^13."}
+            ],
+            "tools": [
+                {"type": "function", "function": {"name": "a", "parameters": {"type": "object"}}},
+                {"type": "function", "function": {"name": "b", "parameters": {"type": "object"}}}
+            ]
+        });
+        let out = anthropic_body_from_openai(&body, false);
+        let tools = out["tools"].as_array().unwrap();
+        assert!(!marked(&tools[0]) && marked(&tools[1]), "only the last tool is marked: {tools:?}");
+        assert!(marked(&out["system"][0]), "system becomes a marked text block: {}", out["system"]);
+        assert_eq!(out["system"][0]["text"], "You are a careful extractor.");
+        let last = &out["messages"][0]["content"];
+        assert!(marked(&last[0]), "the final user text is marked: {last}");
+        assert_eq!(last[0]["text"], "Differentiate y = x^13.");
+        assert_eq!(count_marks(&out), 3, "three breakpoints of the four allowed");
+    }
+
+    #[test]
+    fn marks_the_last_tool_result_block_and_skips_absent_parts() {
+        let body = serde_json::json!({
+            "model": "claude-sonnet-5-5",
+            "messages": [
+                {"role": "user", "content": "go"},
+                {"role": "assistant", "content": "", "tool_calls": [
+                    {"id": "t1", "function": {"name": "a", "arguments": "{}"}},
+                    {"id": "t2", "function": {"name": "a", "arguments": "{}"}}
+                ]},
+                {"role": "tool", "tool_call_id": "t1", "content": "one"},
+                {"role": "tool", "tool_call_id": "t2", "content": "two"}
+            ]
+        });
+        let out = anthropic_body_from_openai(&body, true);
+        assert!(out.get("tools").is_none() && out.get("system").is_none());
+        let blocks = out["messages"].as_array().unwrap().last().unwrap()["content"].as_array().unwrap().clone();
+        assert_eq!(blocks.len(), 2);
+        assert!(!marked(&blocks[0]) && marked(&blocks[1]), "only the last tool_result is marked: {blocks:?}");
+        assert_eq!(count_marks(&out), 1);
     }
 }
 
@@ -2312,6 +2378,13 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
         .and_then(|d| d.get("reasoning_tokens"))
         .and_then(|v| v.as_i64())
         .map(|v| v as i32);
+    // Set by parse_anthropic_sse: Anthropic's thinking tokens are part of
+    // output_tokens, unlike kimi/o1 reasoning tokens.
+    let reasoning_in_completion = usage
+        .and_then(|u| u.get("completion_tokens_details"))
+        .and_then(|d| d.get("reasoning_included_in_completion"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Phase 4h — Anthropic-style cache token fields.
     // Anthropic API exposes:
@@ -2402,6 +2475,7 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
         tokens_in,
         tokens_out,
         reasoning_tokens,
+        reasoning_in_completion,
         cache_creation_tokens,
         cache_read_tokens,
         upstream_cost_micro,
@@ -3051,7 +3125,10 @@ fn anthropic_body_from_openai(
     if !system.is_empty() {
         out["system"] = serde_json::Value::String(system);
     }
-    if let Some(temp) = body_orig.get("temperature") {
+    // Several composers write 'temperature', v_agent.temperature unconditionally,
+    // so an agent with no temperature arrives here as null. Omit it then: Claude
+    // 5.5 models reject the field outright.
+    if let Some(temp) = body_orig.get("temperature").filter(|t| !t.is_null()) {
         out["temperature"] = temp.clone();
     }
     // AT.1: translate tool definitions unless disabled.
@@ -3077,7 +3154,52 @@ fn anthropic_body_from_openai(
             }
         }
     }
+    add_cache_breakpoints(&mut out);
     out
+}
+
+/// Prompt caching: mark three points of the request (of the four Anthropic
+/// allows) so the stable prefix is read from cache on the next turn at the
+/// cache-read rate: the last tool definition, the system block, and the last
+/// content block of the final message (a tool loop's history grows by
+/// appending, so this turn's end is the next turn's cached prefix). A prefix
+/// shorter than the model's minimum cacheable length is simply not cached.
+/// The default 5-minute TTL is used; the 1-hour TTL ("ttl": "1h") bills
+/// writes at 2x input instead of 1.25x and is left off.
+fn add_cache_breakpoints(out: &mut serde_json::Value) {
+    let eph = serde_json::json!({ "type": "ephemeral" });
+    if let Some(last) = out
+        .get_mut("tools")
+        .and_then(|v| v.as_array_mut())
+        .and_then(|a| a.last_mut())
+    {
+        last["cache_control"] = eph.clone();
+    }
+    if let Some(s) = out.get("system").and_then(|v| v.as_str()).map(str::to_owned) {
+        out["system"] = serde_json::json!([{ "type": "text", "text": s, "cache_control": eph.clone() }]);
+    }
+    if let Some(last) = out
+        .get_mut("messages")
+        .and_then(|v| v.as_array_mut())
+        .and_then(|a| a.last_mut())
+    {
+        match last.get("content").cloned() {
+            Some(serde_json::Value::String(t)) if !t.is_empty() => {
+                last["content"] =
+                    serde_json::json!([{ "type": "text", "text": t, "cache_control": eph }]);
+            }
+            Some(serde_json::Value::Array(_)) => {
+                if let Some(b) = last
+                    .get_mut("content")
+                    .and_then(|c| c.as_array_mut())
+                    .and_then(|a| a.last_mut())
+                {
+                    b["cache_control"] = eph;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// AN.2: parse opencode's Anthropic-format (/messages) SSE stream and
@@ -3101,6 +3223,10 @@ fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::
     let mut output_tokens: Option<i64> = None;
     let mut cache_creation: Option<i64> = None;
     let mut cache_read: Option<i64> = None;
+    // usage.output_tokens_details.thinking_tokens on the closing message_delta.
+    // Claude 5.5 models think by default (Haiku adaptively), and these tokens
+    // are part of output_tokens.
+    let mut thinking_tokens: Option<i64> = None;
     // AT.2: tool_use blocks keyed by content-block index -> (id, name, args-json).
     let mut tool_uses: std::collections::BTreeMap<usize, (String, String, String)> =
         std::collections::BTreeMap::new();
@@ -3205,6 +3331,11 @@ fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::
                         .get("output_tokens")
                         .and_then(|v| v.as_i64())
                         .or(output_tokens);
+                    thinking_tokens = u
+                        .get("output_tokens_details")
+                        .and_then(|d| d.get("thinking_tokens"))
+                        .and_then(|v| v.as_i64())
+                        .or(thinking_tokens);
                 }
             }
             _ => {} // ping, content_block_start/stop, message_stop
@@ -3267,6 +3398,12 @@ fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::
     }
     if let Some(c) = cache_read {
         usage.insert("cache_read_input_tokens".to_string(), serde_json::json!(c));
+    }
+    if let Some(t) = thinking_tokens {
+        usage.insert(
+            "completion_tokens_details".to_string(),
+            serde_json::json!({ "reasoning_tokens": t, "reasoning_included_in_completion": true }),
+        );
     }
 
     let mut resp_obj = serde_json::json!({

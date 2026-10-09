@@ -39,6 +39,9 @@ pub(crate) enum WorkOutcome {
         // Billed separately from tokens_out by kimi/o1-style models;
         // store so cost computation can sum both. None when absent.
         reasoning_tokens: Option<i32>,
+        // True when reasoning_tokens is already counted inside tokens_out
+        // (Anthropic: output_tokens includes thinking), so nothing sums them.
+        reasoning_in_completion: bool,
         // Phase 4h — Anthropic-style usage fields. Most OpenCode Go
         // Chinese models don't expose these; Anthropic models via
         // OpenCode Zen do. Recorded to cost_events so cache discount
