@@ -121,7 +121,12 @@ pub extern "C-unwind" fn stewards_dispatcher_main(arg: pg_sys::Datum) {
         SignalWakeFlags::SIGHUP | SignalWakeFlags::SIGTERM,
     );
 
-    let dbname = std::env::var("POSTGRES_DB").unwrap_or_else(|_| "stewards".to_string());
+    // STEWARDS_DATABASE first: the official postgres image's entrypoint now
+    // unsets every POSTGRES_* variable before it execs the server, so
+    // POSTGRES_DB no longer reaches this process on a fresh image build.
+    let dbname = std::env::var("STEWARDS_DATABASE")
+        .or_else(|_| std::env::var("POSTGRES_DB"))
+        .unwrap_or_else(|_| "stewards".to_string());
     BackgroundWorker::connect_worker_to_spi(Some(&dbname), None);
 
     let provider_count = PROVIDER_REGISTRY.get().map(|r| r.providers.len()).unwrap_or(0);
