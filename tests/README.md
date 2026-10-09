@@ -49,8 +49,10 @@ added/removed in `lib.rs` without regenerating — run
 docker build -t stewards-oss-pg:test extension/
 docker run -d --name stewards-test \
   -e POSTGRES_USER=stewards -e POSTGRES_PASSWORD=test -e POSTGRES_DB=stewards \
-  stewards-oss-pg:test -c shared_preload_libraries=pg_ai_stewards
-# wait a second for readiness, then:
+  stewards-oss-pg:test
+# wait a second for readiness, then (no preload: the suite refuses a cluster whose
+# bgworker is running, and it needs the operator roles first):
+docker exec -i stewards-test psql -U stewards -d stewards -v ON_ERROR_STOP=1 < extension/init/00-bootstrap-roles.sql
 docker exec -i stewards-test psql -U stewards -d stewards -v ON_ERROR_STOP=1 < tests/virgin-smoke.sql
 docker rm -f stewards-test
 ```

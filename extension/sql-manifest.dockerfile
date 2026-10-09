@@ -66,3 +66,4 @@ COPY v57-doc-split-preamble-fix.sql ./
 COPY v58-lane-check-remote-read.sql ./
 COPY v59-intent-on-first-call.sql ./
 COPY v60-render-backslash.sql ./
+COPY v61-probe-anthropic-temperature.sql ./
