@@ -24,6 +24,9 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-stewards}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-stewards}
       POSTGRES_DB: ${POSTGRES_DB:-stewards}
+      # The bgworker's database. The postgres entrypoint unsets POSTGRES_*
+      # before starting the server, so the name is passed again here.
+      STEWARDS_DATABASE: ${POSTGRES_DB:-stewards}
       # #334: a loom-shim stage is ONE completion POST (the claude session does
       # all its MCP tool work inside it); grounded/xhigh war-games exceed the
       # old 600s default and send_with_retry restarts a FRESH session per
