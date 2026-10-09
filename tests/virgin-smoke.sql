@@ -7616,4 +7616,35 @@ BEGIN
 END
 $vs127$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v60 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 128 (v61): the model probe leaves temperature out for Anthropic-
+-- format models, which reject it (Claude 5.5: HTTP 400 "`temperature` is
+-- deprecated for this model"), and still sends it to everything else.
+-- Red on v60: both probe bodies carry 'temperature': 0.
+-- ---------------------------------------------------------------------
+DO $vs128$
+DECLARE
+    v_anth bigint;
+    v_oai  bigint;
+BEGIN
+    INSERT INTO stewards.model_capability (provider, model, usable, api_format)
+    VALUES ('smoke-anth', 'smoke-claude', false, 'anthropic'),
+           ('smoke-oai',  'smoke-gpt',    false, 'openai')
+    ON CONFLICT (provider, model) DO UPDATE SET api_format = EXCLUDED.api_format;
+
+    v_anth := stewards.enqueue_model_probe('smoke-anth', 'smoke-claude');
+    v_oai  := stewards.enqueue_model_probe('smoke-oai', 'smoke-gpt');
+
+    ASSERT NOT (SELECT payload->'body' ? 'temperature' FROM stewards.work_queue WHERE id = v_anth),
+        '128: an Anthropic-format probe must not carry temperature';
+    ASSERT (SELECT payload->'body'->'temperature' FROM stewards.work_queue WHERE id = v_oai) = '0'::jsonb,
+        '128: a non-Anthropic probe keeps temperature 0';
+
+    DELETE FROM stewards.work_queue WHERE id IN (v_anth, v_oai);
+    DELETE FROM stewards.sessions WHERE id LIKE 'probe--smoke-anth--%' OR id LIKE 'probe--smoke-oai--%';
+    DELETE FROM stewards.model_capability WHERE provider IN ('smoke-anth', 'smoke-oai');
+    RAISE NOTICE 'OK 128: the model probe omits temperature for Anthropic-format models and keeps it for the rest (v61)';
+END
+$vs128$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v61 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic) is sound =='

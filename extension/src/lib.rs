@@ -806,6 +806,16 @@ extension_sql_file!(
     requires = ["create_v59_intent_on_first_call"],
 );
 
+// v61-probe-anthropic-temperature.sql: enqueue_model_probe sent temperature 0,
+// which Claude 5.5 rejects with HTTP 400, so healthy Anthropic models were
+// recorded unusable. Anthropic-format models are now probed without it.
+// Oracle: virgin-smoke OK 128.
+extension_sql_file!(
+    "../v61-probe-anthropic-temperature.sql",
+    name = "create_v61_probe_anthropic_temperature",
+    requires = ["create_v60_render_backslash"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
