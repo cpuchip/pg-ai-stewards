@@ -7647,4 +7647,119 @@ BEGIN
 END
 $vs128$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v61 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 129 (v62): round one composes with the stage's own budget. A session's
+-- first compose has no chat row in work_queue, so v48's effective_budget
+-- found no model and no agent and fell through to 64000. Red on v61: 64000.
+-- ---------------------------------------------------------------------
+DO $vs129$
+DECLARE
+    v_intent uuid;
+    v_wid    uuid;
+    v_sess   text := 'smoke-r1-sess';
+    e        jsonb;
+BEGIN
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug='default';
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature, working_budget)
+    VALUES ('smoke-r1','*','virgin smoke round-one agent','primary','You are a smoke agent.',NULL,90000)
+    ON CONFLICT (family, model_match) DO UPDATE SET working_budget = EXCLUDED.working_budget;
+    INSERT INTO stewards.model_aliases (alias, provider, provider_model, priority)
+    VALUES ('smoke-r1-alias','smoke-r1-prov','smoke-r1-model',0) ON CONFLICT DO NOTHING;
+    INSERT INTO stewards.model_capability (provider, model, usable, context_window)
+    VALUES ('smoke-r1-prov','smoke-r1-model', true, 200000)
+    ON CONFLICT (provider, model) DO UPDATE SET context_window = EXCLUDED.context_window;
+    INSERT INTO stewards.pipelines (family, description, stages, sabbath_enabled, atonement_enabled,
+        file_destination_template, file_content_jsonpath, maturity_ladder, auto_materialize_on_verified, metadata)
+    VALUES ('smoke-r1','virgin smoke: round-one budget',
+      '[{"name":"work","next":null,"model":"smoke-r1-alias","agent_family":"smoke-r1","auto_advance":false,"input_template":"{{input.text}}"}]'::jsonb,
+      false,false,NULL,NULL,'["raw","verified"]'::jsonb,false,'{}'::jsonb)
+    ON CONFLICT (family) DO UPDATE SET stages=EXCLUDED.stages;
+    v_wid := stewards.work_item_create('smoke-r1', jsonb_build_object('text','x','tools_disabled',true),
+                                       'smoke-wi-r1', 'tester', NULL, v_intent);
+    UPDATE stewards.work_items SET session_ids = ARRAY[v_sess] WHERE id = v_wid;
+    INSERT INTO stewards.sessions (id) VALUES (v_sess) ON CONFLICT DO NOTHING;
+
+    ASSERT stewards.effective_budget(v_sess, 'work') = 90000,
+        format('129: round one must compose with the agent budget 90000, got %s', stewards.effective_budget(v_sess, 'work'));
+    e := stewards.effective_budget_explain(v_sess, 'work');
+    ASSERT e->>'layer' = 'agent' AND (e->>'round_one')::boolean AND e->>'model' = 'smoke-r1-model',
+        format('129: explain names the agent layer, round one and the resolved model; got %s', e);
+    UPDATE stewards.agents SET working_budget = NULL WHERE family = 'smoke-r1';
+    ASSERT stewards.effective_budget(v_sess, 'work') = 140000,
+        format('129: with no agent budget the model window bounds round one (200000 * 0.70); got %s', stewards.effective_budget(v_sess, 'work'));
+    UPDATE stewards.agents SET working_budget = 90000 WHERE family = 'smoke-r1';
+    RAISE NOTICE 'OK 129: round one composes with the stage''s agent budget and model window, not the 64000 fallback (v62)';
+END
+$vs129$;
+
+-- ---------------------------------------------------------------------
+-- OK 130 (v62): a tools-off stage is never paged out. Its input carries
+-- tools_disabled, so it cannot call the result_read a page-in banner names:
+-- a user message under the window is sent whole, one over it fails by name.
+-- A tools-on stage is paged as before. Red on v61: the 200,000-char message
+-- comes back cut to its head plus a banner.
+-- ---------------------------------------------------------------------
+DO $vs130$
+DECLARE
+    v_sess   text := 'smoke-r1-sess';
+    v_out    jsonb;
+    v_len    int;
+    v_raised boolean := false;
+BEGIN
+    INSERT INTO stewards.messages (session_id, role, content) VALUES (v_sess, 'user', repeat('a', 200000));
+    v_out := stewards.compose_messages('smoke-r1', 'smoke-r1-model', v_sess);
+    SELECT max(length(m->>'content')) INTO v_len FROM jsonb_array_elements(v_out) m WHERE m->>'role' = 'user';
+    ASSERT v_len >= 200000 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(v_out) m WHERE m->>'content' LIKE '%[page-in:%'),
+        format('130: a tools-off user message under the window is sent whole; longest user content %s', v_len);
+
+    INSERT INTO stewards.messages (session_id, role, content) VALUES (v_sess, 'user', repeat('b', 400000));
+    BEGIN
+        v_out := stewards.compose_messages('smoke-r1', 'smoke-r1-model', v_sess);
+    EXCEPTION WHEN program_limit_exceeded THEN
+        v_raised := true;
+    END;
+    ASSERT v_raised, '130: a tools-off user message over the window (90000 * 3.5 chars) fails the compose by name';
+    DELETE FROM stewards.messages WHERE session_id = v_sess AND length(content) = 400000;
+
+    UPDATE stewards.work_items SET input = input || '{"tools_disabled": false}'::jsonb WHERE v_sess = ANY(session_ids);
+    v_out := stewards.compose_messages('smoke-r1', 'smoke-r1-model', v_sess);
+    ASSERT EXISTS (SELECT 1 FROM jsonb_array_elements(v_out) m WHERE m->>'content' LIKE '%[page-in:%'),
+        '130: a tools-on stage still pages a long message (unchanged)';
+    UPDATE stewards.work_items SET input = input || '{"tools_disabled": true}'::jsonb WHERE v_sess = ANY(session_ids);
+    RAISE NOTICE 'OK 130: a tools-off stage is never paged out: sent whole under the window, refused by name over it; tools-on unchanged (v62)';
+END
+$vs130$;
+
+-- ---------------------------------------------------------------------
+-- OK 131 (v62): every chat enqueue logs the budget its compose used and the
+-- cascade layer that produced it. Red on v61: no compose_budget_log.
+-- ---------------------------------------------------------------------
+DO $vs131$
+DECLARE
+    v_sess text := 'smoke-r1-sess';
+    v_q    bigint;
+    r      record;
+BEGIN
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-r1-prov',
+            jsonb_build_object('agent_family', 'smoke-r1', 'session_id', v_sess, 'body', jsonb_build_object('model', 'smoke-r1-model')),
+            'pending')
+    RETURNING id INTO v_q;
+    SELECT * INTO r FROM stewards.compose_budget_log WHERE session_id = v_sess ORDER BY id DESC LIMIT 1;
+    ASSERT r.budget = 90000 AND r.layer = 'agent' AND r.round_one AND r.model = 'smoke-r1-model',
+        format('131: the log records budget 90000 from the agent layer on round one; got %s %s %s %s', r.budget, r.layer, r.round_one, r.model);
+
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+    DELETE FROM stewards.compose_budget_log WHERE session_id = v_sess;
+    DELETE FROM stewards.messages WHERE session_id = v_sess;
+    DELETE FROM stewards.work_items WHERE v_sess = ANY(session_ids);
+    DELETE FROM stewards.sessions WHERE id = v_sess;
+    DELETE FROM stewards.pipelines WHERE family = 'smoke-r1';
+    DELETE FROM stewards.model_capability WHERE provider = 'smoke-r1-prov';
+    DELETE FROM stewards.model_aliases WHERE alias = 'smoke-r1-alias';
+    DELETE FROM stewards.agents WHERE family = 'smoke-r1';
+    RAISE NOTICE 'OK 131: each chat enqueue logs its compose budget and the layer that produced it (v62)';
+END
+$vs131$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v62 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose) is sound =='

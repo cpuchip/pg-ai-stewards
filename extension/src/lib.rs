@@ -816,6 +816,18 @@ extension_sql_file!(
     requires = ["create_v60_render_backslash"],
 );
 
+// v62-round-one-budget.sql: effective_budget found no model or agent on a
+// session's first compose (no chat row yet) and fell through to 64000, so
+// compose_messages paged out tools-off prompts behind a result_read banner the
+// stage could not follow. Round one now resolves from the work item and stage;
+// a tools-off stage is never paged out (over the window it fails by name); and
+// each chat enqueue logs its budget and layer. Oracle: virgin-smoke OK 129-131.
+extension_sql_file!(
+    "../v62-round-one-budget.sql",
+    name = "create_v62_round_one_budget",
+    requires = ["create_v61_probe_anthropic_temperature"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
