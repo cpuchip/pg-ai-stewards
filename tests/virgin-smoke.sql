@@ -7932,4 +7932,160 @@ BEGIN
 END
 $vs134$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v65 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 135 (v66): a batch agent's single-shot anthropic chats wait in
+-- batch_pending; batch_open groups them (fill window, spend cap);
+-- failed rows go back or fail by name; a batch result costs half.
+-- Red on v65: no dispatch_mode column, no batch functions.
+-- ---------------------------------------------------------------------
+DO $vs135$
+DECLARE
+    v_body   jsonb := jsonb_build_object('model', 'smoke-batch-model', 'max_tokens', 1000, 'messages',
+                 jsonb_build_array(jsonb_build_object('role', 'user', 'content', 'x')));
+    v_tools  jsonb := jsonb_build_array(jsonb_build_object('type', 'function',
+                 'function', jsonb_build_object('name', 't', 'parameters', '{}'::jsonb)));
+    v_a      bigint;
+    v_b      bigint;
+    v_c      bigint;
+    v_d      bigint;
+    v_e      bigint;
+    v_batch  bigint;
+    v_full   bigint;
+    v_half   bigint;
+    v_notes  text;
+    v_id     bigint;
+    v_i      int;
+BEGIN
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature, dispatch_mode)
+    VALUES ('smoke-batch', '*', 'virgin smoke: batch', 'primary', 'You are a smoke agent.', NULL, 'batch');
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature)
+    VALUES ('smoke-batch-now', '*', 'virgin smoke: immediate', 'primary', 'You are a smoke agent.', NULL);
+    INSERT INTO stewards.model_pricing (provider, model, input_micro_per_mtok, output_micro_per_mtok, effective_at)
+    VALUES ('smoke-batch-prov', 'smoke-batch-model', 1000000, 5000000, now() - interval '1 day');
+
+    -- Routing.
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-batch-prov', jsonb_build_object('agent_family', 'smoke-batch', 'session_id', 'smoke-batch-sess',
+            'requested_model', 'smoke-batch-model', 'api_format', 'anthropic', 'tools_disabled', true,
+            'body', v_body || jsonb_build_object('tools', v_tools)), 'pending')
+    RETURNING id INTO v_a;
+    ASSERT (SELECT status FROM stewards.work_queue WHERE id = v_a) = 'batch_pending',
+        '135: a tools-off anthropic chat of a batch agent waits in batch_pending';
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-batch-prov', jsonb_build_object('agent_family', 'smoke-batch', 'session_id', 'smoke-batch-sess',
+            'requested_model', 'smoke-batch-model', 'api_format', 'anthropic', 'body', v_body), 'pending')
+    RETURNING id INTO v_b;
+    ASSERT (SELECT status FROM stewards.work_queue WHERE id = v_b) = 'batch_pending',
+        '135: a chat that offers no tools is single-shot too';
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-batch-prov', jsonb_build_object('agent_family', 'smoke-batch', 'session_id', 'smoke-batch-sess',
+            'requested_model', 'smoke-batch-model', 'api_format', 'anthropic',
+            'body', v_body || jsonb_build_object('tools', v_tools)), 'pending')
+    RETURNING id INTO v_c;
+    ASSERT (SELECT status FROM stewards.work_queue WHERE id = v_c) = 'pending',
+        '135: a chat that offers tools runs immediately';
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-batch-prov', jsonb_build_object('agent_family', 'smoke-batch', 'session_id', 'smoke-batch-sess',
+            'requested_model', 'smoke-batch-model', 'api_format', 'openai', 'tools_disabled', true, 'body', v_body), 'pending')
+    RETURNING id INTO v_d;
+    ASSERT (SELECT status FROM stewards.work_queue WHERE id = v_d) = 'pending',
+        '135: an openai-format chat runs immediately';
+    ASSERT (SELECT count(*) FROM stewards.batch_fallback_log WHERE agent_family = 'smoke-batch') = 2,
+        '135: each fallback reason is logged once';
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-batch-prov', jsonb_build_object('agent_family', 'smoke-batch-now', 'session_id', 'smoke-batch-sess',
+            'requested_model', 'smoke-batch-model', 'api_format', 'anthropic', 'tools_disabled', true, 'body', v_body), 'pending')
+    RETURNING id INTO v_e;
+    ASSERT (SELECT status FROM stewards.work_queue WHERE id = v_e) = 'pending',
+        '135: an immediate agent is untouched';
+    DELETE FROM stewards.work_queue WHERE id IN (v_c, v_d, v_e);
+
+    -- batch_open: the fill window, then the batch.
+    ASSERT stewards.batch_open('smoke-batch-prov') IS NULL, '135: rows younger than the fill window wait';
+    UPDATE stewards.work_queue SET created_at = now() - interval '1 minute' WHERE id IN (v_a, v_b);
+    v_batch := stewards.batch_open('smoke-batch-prov');
+    ASSERT v_batch > 0, format('135: batch_open opens a batch; got %s', v_batch);
+    ASSERT (SELECT count(*) FROM stewards.work_queue WHERE batch_id = v_batch AND status = 'batched') = 2,
+        '135: both rows are batched';
+    ASSERT (SELECT request_count FROM stewards.provider_batches WHERE id = v_batch) = 2, '135: request_count';
+
+    -- batch_row_failed: invalid fails by name, overloaded goes back 3 times then fails.
+    ASSERT stewards.batch_row_failed(v_a, 'invalid_request_error', 'bad field') = 'failed', '135: invalid fails';
+    ASSERT (SELECT status = 'error' AND error = 'batch invalid_request_error: bad field'
+              FROM stewards.work_queue WHERE id = v_a), '135: the failure is named';
+    ASSERT stewards.batch_row_failed(v_a, 'overloaded_error', 'x') = 'skipped', '135: a row no longer batched is skipped';
+    FOR v_i IN 1..3 LOOP
+        ASSERT stewards.batch_row_failed(v_b, 'overloaded_error', 'busy') = 'requeued',
+            format('135: overloaded requeue %s', v_i);
+        ASSERT (SELECT status = 'batch_pending' AND batch_id IS NULL AND batch_attempts = v_i
+                  FROM stewards.work_queue WHERE id = v_b), format('135: requeued row state %s', v_i);
+        UPDATE stewards.work_queue SET status = 'batched', batch_id = v_batch WHERE id = v_b;
+    END LOOP;
+    ASSERT stewards.batch_row_failed(v_b, 'overloaded_error', 'busy') = 'failed', '135: the fourth overload fails';
+
+    -- expired goes back once; batch_ended sends a missing row back once.
+    UPDATE stewards.work_queue SET status = 'batched', batch_id = v_batch, batch_attempts = 0, error = NULL WHERE id IN (v_a, v_b);
+    ASSERT stewards.batch_row_failed(v_a, 'expired', 'x') = 'requeued', '135: expired goes back once';
+    UPDATE stewards.work_queue SET status = 'batched', batch_id = v_batch WHERE id = v_a;
+    ASSERT stewards.batch_row_failed(v_a, 'expired', 'x') = 'failed', '135: a second expiry fails';
+    UPDATE stewards.provider_batches SET status = 'submitted', external_id = 'smoke_ext_1', submitted_at = now() WHERE id = v_batch;
+    ASSERT stewards.batch_ended(v_batch) = 1, '135: batch_ended counts the row with no result';
+    ASSERT (SELECT status FROM stewards.work_queue WHERE id = v_b) = 'batch_pending', '135: the missing row goes back';
+    ASSERT (SELECT status FROM stewards.provider_batches WHERE id = v_batch) = 'ended', '135: the batch ended';
+
+    -- submit backoff: four retryable failures wait, the fifth fails the batch and its rows.
+    v_batch := stewards.batch_open('smoke-batch-prov');
+    ASSERT v_batch > 0, '135: the requeued row opens a new batch at once';
+    FOR v_i IN 1..4 LOOP
+        ASSERT stewards.batch_submit_failed(v_batch, 'HTTP 529', true) = 'retry', format('135: submit retry %s', v_i);
+    END LOOP;
+    ASSERT (SELECT next_attempt_at > now() + interval '200 seconds' FROM stewards.provider_batches WHERE id = v_batch),
+        '135: the backoff grows';
+    ASSERT stewards.batch_submit_failed(v_batch, 'HTTP 529', true) = 'failed', '135: the fifth submit failure fails';
+    ASSERT (SELECT error LIKE 'batch submit failed after 5 attempt(s): HTTP 529%' FROM stewards.work_queue WHERE id = v_b),
+        '135: its rows fail by name';
+
+    -- stuck: no end 25 h after submit; rows go back once.
+    UPDATE stewards.work_queue SET status = 'batch_pending', batch_id = NULL, batch_attempts = 0, error = NULL WHERE id = v_b;
+    v_batch := stewards.batch_open('smoke-batch-prov');
+    PERFORM stewards.batch_submitted(v_batch, 'smoke_ext_2');
+    UPDATE stewards.provider_batches SET submitted_at = now() - interval '26 hours' WHERE id = v_batch;
+    ASSERT stewards.batch_sweep_stuck() = 1, '135: the stuck batch is swept';
+    ASSERT (SELECT status FROM stewards.provider_batches WHERE id = v_batch) = 'stuck', '135: marked stuck';
+    ASSERT (SELECT status = 'batch_pending' AND batch_attempts = 1 FROM stewards.work_queue WHERE id = v_b),
+        '135: the stuck row went back once';
+
+    -- the spend cap refuses what would cross it.
+    INSERT INTO stewards.provider_spend_caps (provider, cap_micro, enforced) VALUES ('smoke-batch-prov', 1, true);
+    ASSERT stewards.batch_open('smoke-batch-prov') = -1, '135: the cap refuses the batch';
+    ASSERT (SELECT status FROM stewards.work_queue WHERE id = v_b) = 'batch_pending', '135: refused rows wait';
+
+    -- the price factor halves the recorded cost and is noted; out of range is ignored.
+    -- (record_cost_event is called on its own line: in a WHERE clause a volatile
+    -- function runs once per scanned row, which is never on an empty table.)
+    v_id := stewards.record_cost_event(NULL, 1, 'smoke-batch-prov', 'smoke-batch-model', 1000, 1000, 0, 0, 'smoke-batch-sess', 'full');
+    v_full := (SELECT micro_dollars FROM stewards.cost_events WHERE id = v_id);
+    PERFORM set_config('stewards.price_factor', '0.5', true);
+    v_id := stewards.record_cost_event(NULL, 2, 'smoke-batch-prov', 'smoke-batch-model', 1000, 1000, 0, 0, 'smoke-batch-sess', 'half');
+    SELECT micro_dollars, notes INTO v_half, v_notes FROM stewards.cost_events WHERE id = v_id;
+    ASSERT v_full = 6000 AND v_half = 3000, format('135: batch rate is half; full %s half %s', v_full, v_half);
+    ASSERT v_notes = 'half price_factor=0.5', format('135: the factor is noted; got %s', v_notes);
+    PERFORM set_config('stewards.price_factor', '7', true);
+    v_id := stewards.record_cost_event(NULL, 3, 'smoke-batch-prov', 'smoke-batch-model', 1000, 1000, 0, 0, 'smoke-batch-sess', 'x');
+    ASSERT (SELECT micro_dollars FROM stewards.cost_events WHERE id = v_id) = 6000,
+        '135: a factor outside (0, 1) is ignored';
+    PERFORM set_config('stewards.price_factor', '', true);
+
+    DELETE FROM stewards.cost_events WHERE session_id = 'smoke-batch-sess';
+    DELETE FROM stewards.work_queue WHERE id IN (v_a, v_b);
+    DELETE FROM stewards.provider_batches WHERE provider = 'smoke-batch-prov';
+    DELETE FROM stewards.provider_spend_caps WHERE provider = 'smoke-batch-prov';
+    DELETE FROM stewards.model_pricing WHERE provider = 'smoke-batch-prov';
+    DELETE FROM stewards.batch_fallback_log WHERE agent_family = 'smoke-batch';
+    DELETE FROM stewards.compose_budget_log WHERE session_id = 'smoke-batch-sess';
+    DELETE FROM stewards.agents WHERE family IN ('smoke-batch', 'smoke-batch-now');
+    RAISE NOTICE 'OK 135: batch agents'' single-shot anthropic chats wait in batch_pending; batches open after the fill window under the cap; failed rows go back or fail by name; a batch result costs half (v66)';
+END
+$vs135$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v66 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch) is sound =='

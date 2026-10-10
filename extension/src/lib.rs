@@ -859,6 +859,17 @@ extension_sql_file!(
     requires = ["create_v64_stage_images"],
 );
 
+// v66-batch-dispatch.sql: agents.dispatch_mode = 'batch' routes an agent's
+// single-shot anthropic-format chats to 'batch_pending'; the leader's batch
+// cycle sends them through the Message Batches API and writes each result like
+// an immediate chat, with cost_events at the batch rate (stewards.price_factor
+// in record_cost_event). Oracle: virgin-smoke OK 135.
+extension_sql_file!(
+    "../v66-batch-dispatch.sql",
+    name = "create_v66_batch_dispatch",
+    requires = ["create_v65_agent_anthropic_options"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

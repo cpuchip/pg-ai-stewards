@@ -310,6 +310,12 @@ pub extern "C-unwind" fn stewards_dispatcher_main(arg: pg_sys::Datum) {
     let mut last_reaper: Option<Instant> = None;
     const REAPER_INTERVAL: Duration = Duration::from_secs(60);
 
+    // v66: Message Batches cycle (run_batch_cycle). Leader-only, like the
+    // other ticks; batch_open's SKIP LOCKED would make a second caller safe
+    // but useless.
+    let mut last_batch: Option<Instant> = None;
+    const BATCH_INTERVAL: Duration = Duration::from_secs(30);
+
     while BackgroundWorker::wait_latch(Some(Duration::from_millis(500))) {
         if BackgroundWorker::sighup_received() {
             pgrx::log!("stewards: SIGHUP received");
@@ -361,6 +367,11 @@ pub extern "C-unwind" fn stewards_dispatcher_main(arg: pg_sys::Datum) {
         if is_leader && last_reaper.map_or(true, |t| t.elapsed() >= REAPER_INTERVAL) {
             last_reaper = Some(Instant::now());
             run_periodic_reaper();
+        }
+
+        if is_leader && last_batch.map_or(true, |t| t.elapsed() >= BATCH_INTERVAL) {
+            last_batch = Some(Instant::now());
+            run_batch_cycle();
         }
     }
 
@@ -631,6 +642,438 @@ fn run_periodic_reaper() {
     }
 }
 
+/// v66: one SPI step of the batch cycle in its own transaction. A Postgres
+/// error or a panic is logged and gives None, so one bad row can neither stop
+/// the leader nor crash it in a loop over the same batch.
+fn batch_spi<T, F>(label: &str, f: F) -> Option<T>
+where
+    F: FnOnce(&mut pgrx::spi::SpiClient<'_>) -> Result<T, pgrx::spi::Error>,
+{
+    use pgrx::PgTryBuilder;
+    use std::panic::AssertUnwindSafe;
+    let f = AssertUnwindSafe(f);
+    let result: Result<T, String> = PgTryBuilder::new(AssertUnwindSafe(move || {
+        let f = f;
+        BackgroundWorker::transaction(AssertUnwindSafe(move || Spi::connect_mut(|client| (f.0)(client))))
+            .map_err(|e| format!("spi: {}", e))
+    }))
+    .catch_others(|cause| Err(format!("postgres error: {:?}", cause)))
+    .execute();
+    match result {
+        Ok(v) => Some(v),
+        Err(e) => {
+            pgrx::log!("stewards: batch {}: {} (bgworker survived)", label, e);
+            None
+        }
+    }
+}
+
+/// v66: the Message Batches cycle, every 30 s on the leader. Marks batches
+/// with no end 25 h after submit, opens a batch per provider from rows that
+/// have waited the fill window, submits opening batches whose backoff has
+/// passed, and polls submitted batches, writing each result through
+/// write_outcome. HTTP runs between transactions, never inside one.
+fn run_batch_cycle() {
+    let stuck = batch_spi("sweep", |c| {
+        Ok(c.update("SELECT stewards.batch_sweep_stuck()", Some(1), &[])?
+            .into_iter()
+            .next()
+            .and_then(|r| r.get::<i32>(1).ok().flatten())
+            .unwrap_or(0))
+    });
+    if let Some(n) = stuck.filter(|n| *n > 0) {
+        pgrx::log!("stewards: {} batch(es) had no end 25 h after submit; their rows went back once", n);
+    }
+
+    let providers: Vec<String> = batch_spi("providers", |c| {
+        let rows = c.select(
+            "SELECT DISTINCT provider FROM stewards.work_queue WHERE status = 'batch_pending'",
+            None,
+            &[],
+        )?;
+        Ok(rows.into_iter().filter_map(|r| r.get::<String>(1).ok().flatten()).collect())
+    })
+    .unwrap_or_default();
+    for p in &providers {
+        let opened = batch_spi("open", |c| {
+            Ok(c.update("SELECT stewards.batch_open($1)", Some(1), &[p.as_str().into()])?
+                .into_iter()
+                .next()
+                .and_then(|r| r.get::<i64>(1).ok().flatten()))
+        })
+        .flatten();
+        if opened == Some(-1) {
+            log_batch_cap_refusal(p);
+        }
+    }
+
+    let opening: Vec<(i64, String)> = batch_spi("opening", |c| {
+        let rows = c.select(
+            "SELECT id, provider FROM stewards.provider_batches \
+             WHERE status = 'opening' AND (next_attempt_at IS NULL OR next_attempt_at <= now()) \
+             ORDER BY id",
+            None,
+            &[],
+        )?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| Some((r.get::<i64>(1).ok()??, r.get::<String>(2).ok()??)))
+            .collect())
+    })
+    .unwrap_or_default();
+    for (batch, provider) in &opening {
+        submit_batch(*batch, provider);
+    }
+
+    let polls: Vec<(i64, String, String)> = batch_spi("poll list", |c| {
+        let rows = c.select(
+            "SELECT batch_id, provider, external_id FROM stewards.batch_poll_list(60)",
+            None,
+            &[],
+        )?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| {
+                Some((r.get::<i64>(1).ok()??, r.get::<String>(2).ok()??, r.get::<String>(3).ok()??))
+            })
+            .collect())
+    })
+    .unwrap_or_default();
+    for (batch, provider, external_id) in &polls {
+        poll_batch(*batch, provider, external_id);
+    }
+}
+
+/// Rows refused by the spend cap wait in batch_pending; say so at most every
+/// ten minutes per provider rather than every cycle.
+fn log_batch_cap_refusal(provider: &str) {
+    thread_local! {
+        static LAST: std::cell::RefCell<std::collections::HashMap<String, Instant>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    LAST.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.get(provider).map_or(true, |t| t.elapsed() >= Duration::from_secs(600)) {
+            m.insert(provider.to_string(), Instant::now());
+            pgrx::log!(
+                "stewards: batch rows for provider {} are waiting: the next row's estimate would cross its enforced spend cap (raise or refill the cap to send them)",
+                provider
+            );
+        }
+    });
+}
+
+/// The provider's batch id goes into a URL path; accept only its own alphabet.
+fn valid_batch_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// v66: one batched chat as Message Batches `params`: the same body an
+/// immediate anthropic chat sends, without `stream` (a batch rejects it).
+fn anthropic_batch_params(payload: &serde_json::Value) -> Result<serde_json::Value, String> {
+    let body = payload.get("body").ok_or_else(|| "payload.body missing".to_string())?;
+    let tools_disabled = payload.get("tools_disabled").and_then(|v| v.as_bool()).unwrap_or(false);
+    let mut b = anthropic_body_from_openai(&sanitize_phantom_tool_history(body), tools_disabled);
+    inline_remote_images(&mut b);
+    if let Some(m) = b.as_object_mut() {
+        m.remove("stream");
+    }
+    Ok(b)
+}
+
+fn batch_submit_failed(batch: i64, error: &str, retryable: bool) {
+    let action = batch_spi("submit failed", |c| {
+        Ok(c.update(
+            "SELECT stewards.batch_submit_failed($1, $2, $3)",
+            Some(1),
+            &[batch.into(), error.into(), retryable.into()],
+        )?
+        .into_iter()
+        .next()
+        .and_then(|r| r.get::<String>(1).ok().flatten()))
+    })
+    .flatten();
+    pgrx::log!(
+        "stewards: batch {} submit failed ({}): {}",
+        batch,
+        action.as_deref().unwrap_or("?"),
+        error
+    );
+}
+
+/// POST an opening batch's rows to {base_url}/messages/batches.
+fn submit_batch(batch: i64, provider_name: &str) {
+    let Some(rows) = batch_spi("rows", |c| {
+        let rows = c.select(
+            "SELECT id, payload FROM stewards.work_queue WHERE batch_id = $1 AND status = 'batched' ORDER BY id",
+            None,
+            &[batch.into()],
+        )?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|r| Some((r.get::<i64>(1).ok()??, r.get::<pgrx::JsonB>(2).ok()??.0)))
+            .collect::<Vec<(i64, serde_json::Value)>>())
+    }) else {
+        return;
+    };
+
+    let mut requests = Vec::with_capacity(rows.len());
+    for (id, payload) in &rows {
+        match anthropic_batch_params(payload) {
+            Ok(params) => requests.push(serde_json::json!({ "custom_id": format!("wq{}", id), "params": params })),
+            Err(e) => {
+                let msg = format!("batch params: {}", e);
+                batch_spi("bad row", |c| {
+                    c.update("SELECT stewards.batch_fail_row($1, $2)", None, &[(*id).into(), msg.as_str().into()])?;
+                    Ok(())
+                });
+            }
+        }
+    }
+    if requests.is_empty() {
+        // Every row was cancelled or refused before the POST.
+        batch_spi("empty", |c| {
+            c.update(
+                "UPDATE stewards.provider_batches SET status = 'ended', ended_at = now(), \
+                 error = 'no rows left to send' WHERE id = $1 AND status = 'opening'",
+                None,
+                &[batch.into()],
+            )?;
+            Ok(())
+        });
+        return;
+    }
+
+    let provider = match resolve_dispatch_provider(provider_name) {
+        Ok(p) => p,
+        Err(e) => return batch_submit_failed(batch, &format!("provider {}: {}", provider_name, e), false),
+    };
+    let Some(key) = provider.api_key.clone() else {
+        return batch_submit_failed(batch, &format!("provider {} has no api_key", provider_name), false);
+    };
+    let url = format!("{}/messages/batches", provider.base_url.trim_end_matches('/'));
+    let sent = http_client()
+        .post(&url)
+        .timeout(Duration::from_secs(300))
+        .header("x-api-key", key.as_str())
+        .header("anthropic-version", "2023-06-01")
+        .json(&serde_json::json!({ "requests": requests }))
+        .send();
+    match sent {
+        Ok(r) if r.status().is_success() => {
+            let id = r
+                .json::<serde_json::Value>()
+                .ok()
+                .and_then(|v| v.get("id").and_then(|x| x.as_str()).map(String::from));
+            match id {
+                Some(ext) if valid_batch_id(&ext) => {
+                    batch_spi("submitted", |c| {
+                        c.update("SELECT stewards.batch_submitted($1, $2)", None, &[batch.into(), ext.as_str().into()])?;
+                        Ok(())
+                    });
+                    pgrx::log!("stewards: batch {} submitted to {} as {} ({} request(s))", batch, provider_name, ext, requests.len());
+                }
+                // Accepted, so a retry could send the rows twice; fail them by name instead.
+                _ => batch_submit_failed(batch, "the provider accepted the batch but its response had no usable id", false),
+            }
+        }
+        Ok(r) => {
+            let status = r.status();
+            let body: String = r.text().unwrap_or_default().chars().take(500).collect();
+            let retryable = status.as_u16() == 408 || status.as_u16() == 429 || status.is_server_error();
+            batch_submit_failed(batch, &format!("HTTP {}: {}", status, body), retryable);
+        }
+        Err(e) => batch_submit_failed(batch, &format!("POST: {}", e), true),
+    }
+}
+
+/// GET a submitted batch; once it has ended, stream its results (JSONL, any
+/// order, matched by custom_id) and write each one.
+fn poll_batch(batch: i64, provider_name: &str, external_id: &str) {
+    use std::io::BufRead;
+    let mark_polled = || {
+        batch_spi("polled", |c| {
+            c.update("SELECT stewards.batch_polled($1)", None, &[batch.into()])?;
+            Ok(())
+        });
+    };
+    if !valid_batch_id(external_id) {
+        pgrx::log!("stewards: batch {} has an unusable provider id; left for the stuck sweep", batch);
+        return mark_polled();
+    }
+    let provider = match resolve_dispatch_provider(provider_name) {
+        Ok(p) => p,
+        Err(e) => {
+            pgrx::log!("stewards: batch {} poll: provider {}: {}", batch, provider_name, e);
+            return mark_polled();
+        }
+    };
+    let Some(key) = provider.api_key.clone() else {
+        pgrx::log!("stewards: batch {} poll: provider {} has no api_key", batch, provider_name);
+        return mark_polled();
+    };
+    // The results URL is built from the configured base_url, not taken from the
+    // provider's results_url, so the key only ever goes to the configured host.
+    let base = format!("{}/messages/batches/{}", provider.base_url.trim_end_matches('/'), external_id);
+    let get = |url: &str, secs: u64| {
+        http_client()
+            .get(url)
+            .timeout(Duration::from_secs(secs))
+            .header("x-api-key", key.as_str())
+            .header("anthropic-version", "2023-06-01")
+            .send()
+            .and_then(|r| r.error_for_status())
+    };
+    let state = get(&base, 60).and_then(|r| r.json::<serde_json::Value>());
+    let ended = match state {
+        Ok(v) => v.get("processing_status").and_then(|s| s.as_str()) == Some("ended"),
+        Err(e) => {
+            pgrx::log!("stewards: batch {} ({}) poll failed: {}", batch, external_id, e);
+            false
+        }
+    };
+    if !ended {
+        return mark_polled();
+    }
+
+    let resp = match get(&format!("{}/results", base), 1800) {
+        Ok(r) => r,
+        Err(e) => {
+            pgrx::log!("stewards: batch {} ({}) results fetch failed: {}", batch, external_id, e);
+            return mark_polled();
+        }
+    };
+    let mut counts: std::collections::BTreeMap<&'static str, u32> = std::collections::BTreeMap::new();
+    for line in std::io::BufReader::new(resp).lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(e) => {
+                // Rows written so far are no longer 'batched'; the next poll re-reads and skips them.
+                pgrx::log!("stewards: batch {} ({}) results read failed: {}", batch, external_id, e);
+                return mark_polled();
+            }
+        };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+            continue;
+        };
+        let Some(id) = v
+            .get("custom_id")
+            .and_then(|c| c.as_str())
+            .and_then(|c| c.strip_prefix("wq"))
+            .and_then(|n| n.parse::<i64>().ok())
+        else {
+            continue;
+        };
+        *counts.entry(apply_batch_result(batch, external_id, id, &v)).or_insert(0) += 1;
+    }
+    let missing = batch_spi("ended", |c| {
+        Ok(c.update("SELECT stewards.batch_ended($1)", Some(1), &[batch.into()])?
+            .into_iter()
+            .next()
+            .and_then(|r| r.get::<i32>(1).ok().flatten())
+            .unwrap_or(0))
+    })
+    .unwrap_or(0);
+    pgrx::log!("stewards: batch {} ({}) ended: {:?}, {} missing", batch, external_id, counts, missing);
+}
+
+/// The WorkOutcome a `succeeded` result stands for, built the way chat() builds one.
+fn batch_outcome(payload: &serde_json::Value, msg: &serde_json::Value) -> Result<WorkOutcome, String> {
+    let field = |k: &str| {
+        payload
+            .get(k)
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .ok_or_else(|| format!("payload.{} missing", k))
+    };
+    let (session_id, agent_family, requested_model) =
+        (field("session_id")?, field("agent_family")?, field("requested_model")?);
+    let body_model = payload.pointer("/body/model").and_then(|v| v.as_str()).unwrap_or("?");
+    outcome_from_completion(completion_from_anthropic_message(msg), body_model, session_id, agent_family, requested_model)
+}
+
+fn batch_row_failed(id: i64, kind: &str, message: &str) -> &'static str {
+    let action = batch_spi("row failed", |c| {
+        Ok(c.update(
+            "SELECT stewards.batch_row_failed($1, $2, $3)",
+            Some(1),
+            &[id.into(), kind.into(), message.into()],
+        )?
+        .into_iter()
+        .next()
+        .and_then(|r| r.get::<String>(1).ok().flatten()))
+    })
+    .flatten();
+    match action.as_deref() {
+        Some("requeued") => "requeued",
+        Some("failed") => "failed",
+        Some("skipped") => "skipped",
+        _ => "unrecorded",
+    }
+}
+
+/// One result line: write a succeeded message, route anything else through
+/// batch_row_failed. Returns what happened, for the batch's log line.
+fn apply_batch_result(batch: i64, external_id: &str, id: i64, line: &serde_json::Value) -> &'static str {
+    let row = batch_spi("row", |c| {
+        let rows = c.select(
+            "SELECT kind, provider, payload FROM stewards.work_queue \
+             WHERE id = $1 AND batch_id = $2 AND status = 'batched'",
+            Some(1),
+            &[id.into(), batch.into()],
+        )?;
+        Ok(rows.into_iter().next().and_then(|r| {
+            Some((r.get::<String>(1).ok()??, r.get::<String>(2).ok()??, r.get::<pgrx::JsonB>(3).ok()??.0))
+        }))
+    })
+    .flatten();
+    let Some((kind, provider, payload)) = row else {
+        return "skipped";
+    };
+    let result = line.get("result");
+    match result.and_then(|r| r.get("type")).and_then(|t| t.as_str()) {
+        Some("succeeded") => {
+            let msg = result.and_then(|r| r.get("message")).cloned().unwrap_or(serde_json::Value::Null);
+            let outcome = batch_outcome(&payload, &msg);
+            let written: Result<bool, String> = pgrx::PgTryBuilder::new(std::panic::AssertUnwindSafe(|| {
+                Ok(write_outcome(id, &kind, &provider, &payload, &outcome, Some(external_id)))
+            }))
+            .catch_others(|cause| Err(format!("{:?}", cause)))
+            .execute();
+            match written {
+                Ok(true) => "written",
+                Ok(false) => "skipped",
+                Err(e) => {
+                    let msg = format!("batch result could not be written: {}", e);
+                    pgrx::log!("stewards: work_item id={} {}", id, msg);
+                    batch_spi("unwritable", |c| {
+                        c.update(
+                            "SELECT stewards.batch_fail_row($1, $2) FROM stewards.work_queue WHERE id = $1 AND status = 'batched'",
+                            None,
+                            &[id.into(), msg.as_str().into()],
+                        )?;
+                        Ok(())
+                    });
+                    "failed"
+                }
+            }
+        }
+        Some(t @ ("expired" | "canceled")) => batch_row_failed(id, t, "the provider did not run this request"),
+        Some("errored") => {
+            // result.error is the API's error shape: {"type": "error", "error": {"type", "message"}}.
+            let err = result.and_then(|r| r.get("error"));
+            let inner = err.and_then(|e| e.get("error")).or(err);
+            let etype = inner.and_then(|e| e.get("type")).and_then(|t| t.as_str()).unwrap_or("errored");
+            let emsg = inner.and_then(|e| e.get("message")).and_then(|t| t.as_str()).unwrap_or("");
+            batch_row_failed(id, etype, emsg)
+        }
+        other => batch_row_failed(id, "unknown_result", &format!("result type {:?}", other)),
+    }
+}
+
 /// Try to claim and process exactly one pending row. Returns true if
 /// a row was processed (caller may want to immediately try again),
 /// false if the queue was empty.
@@ -711,9 +1154,42 @@ fn process_one_pending() -> bool {
     let outcome = dispatch(&kind, &provider, &payload);
 
     // ----- Phase 3: write result -----
-    let write: Result<(), pgrx::spi::Error> = BackgroundWorker::transaction(|| {
+    write_outcome(id, &kind, &provider, &payload, &outcome, None);
+    true
+}
+
+/// Phase 3 of a dispatch: one transaction writes the outcome (the assistant
+/// message, its cost_event, the apply handlers, the row's status) and NOTIFYs.
+/// v66: a Message Batches result passes `batch` (the provider's batch id). It is
+/// written only while the row is still 'batched', so a row cancelled or already
+/// answered is left alone, and its cost_event is recorded at the batch rate.
+/// Returns whether the outcome was written.
+fn write_outcome(
+    id: i64,
+    kind: &str,
+    provider: &str,
+    payload: &serde_json::Value,
+    outcome: &Result<WorkOutcome, String>,
+    batch: Option<&str>,
+) -> bool {
+    let write: Result<bool, pgrx::spi::Error> = BackgroundWorker::transaction(|| {
         Spi::connect_mut(|client| {
-            match &outcome {
+            if batch.is_some() {
+                let still_batched = client
+                    .update(
+                        "SELECT 1 FROM stewards.work_queue WHERE id = $1 AND status = 'batched' FOR UPDATE",
+                        Some(1),
+                        &[id.into()],
+                    )?
+                    .into_iter()
+                    .next()
+                    .is_some();
+                if !still_batched {
+                    return Ok(false);
+                }
+                client.update("SELECT set_config('stewards.price_factor', '0.5', true)", Some(1), &[])?;
+            }
+            match outcome {
                 Ok(WorkOutcome::Embedded {
                     target_table,
                     target_id,
@@ -871,6 +1347,9 @@ fn process_one_pending() -> bool {
                         }
                         if let Some(r) = reasoning_tokens {
                             notes.push_str(&format!(" thinking_tokens={r}"));
+                        }
+                        if let Some(b) = batch {
+                            notes.push_str(&format!(" batch={b}"));
                         }
 
                         let cost_result = client.update(
@@ -1579,21 +2058,24 @@ fn process_one_pending() -> bool {
                 let _ = client.update(
                     "SELECT stewards.record_kind_success($1)",
                     Some(1),
-                    &[kind.clone().into()],
+                    &[kind.to_string().into()],
                 );
             }
 
             // NOTIFY listeners with the row id as payload.
             let notify_sql = format!("NOTIFY stewards_done, '{}'", id);
             client.update(&notify_sql, None, &[])?;
-            Ok(())
+            Ok(true)
         })
     });
 
-    if let Err(e) = write {
-        pgrx::log!("stewards: write phase errored for id={}: {}", id, e);
+    match write {
+        Ok(written) => written,
+        Err(e) => {
+            pgrx::log!("stewards: write phase errored for id={}: {}", id, e);
+            false
+        }
     }
-    true
 }
 
 // `WorkOutcome` enum moved to types.rs (Phase 3c.3.6 v2 module split).
@@ -1804,6 +2286,64 @@ mod anthropic_cache_tests {
         assert_eq!(blocks.len(), 2);
         assert!(!marked(&blocks[0]) && marked(&blocks[1]), "only the last tool_result is marked: {blocks:?}");
         assert_eq!(count_marks(&out), 1);
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    // v66: a batch result's message reads like a streamed reply, and the params
+    // a batch sends are the immediate body without `stream`.
+    use super::{anthropic_batch_params, completion_from_anthropic_message, valid_batch_id};
+
+    #[test]
+    fn batch_message_becomes_a_completion() {
+        let msg = serde_json::json!({
+            "id": "msg_01", "type": "message", "role": "assistant", "model": "claude-haiku-5-5",
+            "content": [
+                {"type": "thinking", "thinking": "Item 15 is on page 40.", "signature": "x"},
+                {"type": "text", "text": "{\"quote\": "},
+                {"type": "text", "text": "\"Find x.\"}"}
+            ],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1200, "output_tokens": 90, "cache_creation_input_tokens": 0,
+                      "cache_read_input_tokens": 800, "output_tokens_details": {"thinking_tokens": 40}}
+        });
+        let c = completion_from_anthropic_message(&msg);
+        assert_eq!(c["choices"][0]["message"]["content"], "{\"quote\": \"Find x.\"}");
+        assert_eq!(c["choices"][0]["message"]["reasoning_content"], "Item 15 is on page 40.");
+        assert_eq!(c["choices"][0]["finish_reason"], "stop");
+        assert_eq!(c["model"], "claude-haiku-5-5");
+        assert_eq!(c["usage"]["prompt_tokens"], 1200);
+        assert_eq!(c["usage"]["completion_tokens"], 90);
+        assert_eq!(c["usage"]["cache_read_input_tokens"], 800);
+        assert_eq!(c["usage"]["completion_tokens_details"]["reasoning_tokens"], 40);
+        assert!(c["choices"][0]["message"].get("tool_calls").is_none());
+    }
+
+    #[test]
+    fn batch_params_drop_stream_and_keep_options() {
+        let payload = serde_json::json!({
+            "tools_disabled": true,
+            "body": {
+                "model": "claude-haiku-5-5", "max_tokens": 4096,
+                "messages": [{"role": "system", "content": "Extract."}, {"role": "user", "content": "Chapter 1."}],
+                "tools": [{"type": "function", "function": {"name": "t", "parameters": {}}}],
+                "anthropic_options": {"output_config": {"effort": "low"}}
+            }
+        });
+        let p = anthropic_batch_params(&payload).unwrap();
+        assert!(p.get("stream").is_none());
+        assert!(p.get("tools").is_none());
+        assert_eq!(p["output_config"]["effort"], "low");
+        assert_eq!(p["model"], "claude-haiku-5-5");
+    }
+
+    #[test]
+    fn batch_ids_are_path_safe() {
+        assert!(valid_batch_id("msgbatch_01HkcTjaV5uDC8jWR4ZsDV8d"));
+        assert!(!valid_batch_id("../../v1/files"));
+        assert!(!valid_batch_id("a?b"));
+        assert!(!valid_batch_id(""));
     }
 }
 
@@ -2418,12 +2958,25 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
     // stream and reassemble it into the standard non-streaming response
     // shape, so every downstream extraction below — and the SQL apply
     // handlers that re-parse result.response — are unchanged.
-    let mut parsed: serde_json::Value = if is_anthropic {
+    let parsed: serde_json::Value = if is_anthropic {
         parse_anthropic_sse(resp).map_err(|e| format!("decode anthropic SSE stream: {}", e))?
     } else {
         parse_chat_sse(resp).map_err(|e| format!("decode chat SSE stream: {}", e))?
     };
 
+    let body_model = body.get("model").and_then(|v| v.as_str()).unwrap_or("?");
+    outcome_from_completion(parsed, body_model, session_id, agent_family, requested_model)
+}
+
+/// A completion in the OpenAI chat.completion shape (what both SSE parsers and
+/// the batch result reader produce) as a WorkOutcome::Chatted.
+fn outcome_from_completion(
+    mut parsed: serde_json::Value,
+    body_model: &str,
+    session_id: String,
+    agent_family: String,
+    requested_model: String,
+) -> Result<WorkOutcome, String> {
     // Standard OpenAI shape: { choices: [{ message: { role, content,
     // tool_calls? }, finish_reason }], usage: { prompt_tokens,
     // completion_tokens } }
@@ -2463,9 +3016,7 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
     let model = parsed
         .get("model")
         .and_then(|v| v.as_str())
-        .unwrap_or_else(|| {
-            body.get("model").and_then(|v| v.as_str()).unwrap_or("?")
-        })
+        .unwrap_or(body_model)
         .to_string();
 
     let usage = parsed.get("usage");
@@ -3665,6 +4216,36 @@ fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::
         }
     }
 
+    Ok(anthropic_completion(
+        content,
+        reasoning,
+        tool_uses.into_values().collect(),
+        stop_reason,
+        model,
+        input_tokens,
+        output_tokens,
+        cache_creation,
+        cache_read,
+        thinking_tokens,
+    ))
+}
+
+/// An Anthropic reply, streamed or a batch result's message, in the OpenAI
+/// chat.completion shape the rest of the worker reads. tool_uses are
+/// (id, name, arguments-json) in content-block order.
+#[allow(clippy::too_many_arguments)]
+fn anthropic_completion(
+    content: String,
+    reasoning: String,
+    tool_uses: Vec<(String, String, String)>,
+    stop_reason: Option<String>,
+    model: Option<String>,
+    input_tokens: Option<i64>,
+    output_tokens: Option<i64>,
+    cache_creation: Option<i64>,
+    cache_read: Option<i64>,
+    thinking_tokens: Option<i64>,
+) -> serde_json::Value {
     let finish_reason = stop_reason.as_deref().map(|sr| {
         match sr {
             "end_turn" | "stop_sequence" => "stop",
@@ -3691,7 +4272,7 @@ fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::
     // content-block index order) so the provider-agnostic tool loop drives them.
     if !tool_uses.is_empty() {
         let arr: Vec<serde_json::Value> = tool_uses
-            .values()
+            .iter()
             .map(|(id, name, args)| {
                 serde_json::json!({
                     "id": id,
@@ -3741,5 +4322,40 @@ fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::
         resp_obj["model"] = serde_json::Value::String(m);
     }
     resp_obj["usage"] = serde_json::Value::Object(usage);
-    Ok(resp_obj)
+    resp_obj
+}
+
+/// v66: a Message Batches `succeeded` result's message (a non-streaming
+/// Messages API response) in the chat.completion shape.
+fn completion_from_anthropic_message(msg: &serde_json::Value) -> serde_json::Value {
+    let mut content = String::new();
+    let mut reasoning = String::new();
+    let mut tool_uses: Vec<(String, String, String)> = Vec::new();
+    for block in msg.get("content").and_then(|v| v.as_array()).into_iter().flatten() {
+        let text = |k: &str| block.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        match block.get("type").and_then(|v| v.as_str()) {
+            Some("text") => content.push_str(&text("text")),
+            Some("thinking") => reasoning.push_str(&text("thinking")),
+            Some("tool_use") => tool_uses.push((
+                text("id"),
+                text("name"),
+                block.get("input").map(|v| v.to_string()).unwrap_or_default(),
+            )),
+            _ => {}
+        }
+    }
+    let usage = msg.get("usage");
+    let n = |p: &str| usage.and_then(|u| u.pointer(p)).and_then(|v| v.as_i64());
+    anthropic_completion(
+        content,
+        reasoning,
+        tool_uses,
+        msg.get("stop_reason").and_then(|v| v.as_str()).map(String::from),
+        msg.get("model").and_then(|v| v.as_str()).map(String::from),
+        n("/input_tokens"),
+        n("/output_tokens"),
+        n("/cache_creation_input_tokens"),
+        n("/cache_read_input_tokens"),
+        n("/output_tokens_details/thinking_tokens"),
+    )
 }
