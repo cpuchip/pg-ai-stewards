@@ -2362,13 +2362,29 @@ mod anthropic_cache_tests {
         let body = serde_json::json!({"model": "claude-haiku-5-5", "messages": [
             {"role": "user", "content": "A\n<<<cache-break>>>\nB"},
             {"role": "assistant", "content": "ok"},
-            {"role": "user", "content": "next"}]});
+            {"role": "user", "content": "C\n<<<cache-break>>>\nD"}]});
         let out = anthropic_body_from_openai(&body, false);
-        assert_eq!(out["messages"][0]["content"], "A\nB");
+        assert_eq!(out["messages"][0]["content"], "A\nB", "an older marked message is stripped: {}", out["messages"]);
+        let last = out["messages"][2]["content"].as_array().unwrap().clone();
+        assert_eq!(last[0]["text"], "C\n");
+        assert!(marked(&last[0]) && marked(&last[1]), "the newest is split, its tail marked (tools on): {last:?}");
         assert!(!out.to_string().contains(super::CACHE_BREAK));
         let mut msgs = vec![serde_json::json!({"role": "user", "content": [{"type": "text", "text": "x\n<<<cache-break>>>\ny"}]})];
         super::strip_cache_break_in(&mut msgs);
         assert_eq!(msgs[0]["content"][0]["text"], "x\ny");
+    }
+
+    #[test]
+    fn a_stage_call_followed_by_a_notice_shares_its_set() {
+        let body = serde_json::json!({"model": "claude-opus-5-5", "messages": [
+            {"role": "system", "content": "Adjudicate."},
+            {"role": "user", "content": "THE SET\n<<<cache-break>>>\nTHE RECORD"},
+            {"role": "user", "content": "[STEWARD NOTICE] pressure"}]});
+        let out = anthropic_body_from_openai(&body, true);
+        let stage = out["messages"][0]["content"].as_array().unwrap().clone();
+        assert!(marked(&stage[0]) && !marked(&stage[1]), "the set is marked, the record not: {stage:?}");
+        assert_eq!(out["messages"][1]["content"], "[STEWARD NOTICE] pressure", "the notice is not marked");
+        assert_eq!(count_marks(&out), 2, "system and the shared set");
     }
 }
 
@@ -3915,9 +3931,9 @@ fn anthropic_body_from_openai(
             }
         }
     }
-    // v68: a tools-off request with one user message is the whole conversation (a stage's single call);
-    // nothing will ever read its tail back from the cache.
-    let single_round = tools_disabled && out["messages"].as_array().map_or(false, |m| m.len() == 1);
+    // v68: a tools-off request with no reply in it yet is the whole conversation (a stage's single call,
+    // which compose may follow with a short notice); nothing will ever read its tail back from the cache.
+    let single_round = is_single_round(tools_disabled, &out);
     add_cache_breakpoints(&mut out, single_round);
     out
 }
@@ -4161,6 +4177,10 @@ fn strip_cache_break_in(msgs: &mut [serde_json::Value]) {
     }
 }
 
+fn is_single_round(tools_disabled: bool, out: &serde_json::Value) -> bool {
+    tools_disabled && !out["messages"].as_array().map_or(false, |m| m.iter().any(|x| x["role"] == "assistant"))
+}
+
 fn add_cache_breakpoints(out: &mut serde_json::Value, single_round: bool) {
     let eph = serde_json::json!({ "type": "ephemeral" });
     if let Some(last) = out
@@ -4180,41 +4200,71 @@ fn add_cache_breakpoints(out: &mut serde_json::Value, single_round: bool) {
     if n == 0 {
         return;
     }
-    strip_cache_break_in(&mut msgs[..n - 1]);
-    let last = &mut msgs[n - 1];
-    // The last message as blocks; a cache-break line in its first text that has one splits that text into
-    // a marked shared part and the rest.
-    let mut blocks: Vec<serde_json::Value> = match last.get("content").cloned() {
-        Some(serde_json::Value::String(t)) if !t.is_empty() => vec![serde_json::json!({ "type": "text", "text": t })],
-        Some(serde_json::Value::Array(a)) => a,
-        _ => return,
-    };
-    let mut shared = false;
-    let split = blocks.iter().position(|b| b.get("text").and_then(|t| t.as_str()).map_or(false, |t| t.contains(CACHE_BREAK)));
-    if let Some(k) = split {
-        let text = blocks[k]["text"].as_str().unwrap_or("").to_string();
-        let (head, tail) = text.split_once(CACHE_BREAK).unwrap_or((text.as_str(), ""));
-        let tail = tail.strip_prefix('\n').unwrap_or(tail);
-        let mut parts = Vec::new();
-        if !head.trim().is_empty() {
-            parts.push(serde_json::json!({ "type": "text", "text": head, "cache_control": eph.clone() }));
-            shared = true;
+    // The newest message that carries a cache-break line is split there and its shared part marked; the
+    // line is removed from every other message. Compose may follow the stage input with a short notice, so
+    // that message need not be the last.
+    let target = (0..n).rev().find(|&i| carries_cache_break(&msgs[i]));
+    for i in 0..n {
+        if Some(i) != target {
+            strip_cache_break_in(&mut msgs[i..i + 1]);
         }
-        if !tail.is_empty() {
-            parts.push(serde_json::json!({ "type": "text", "text": strip_cache_break(tail) }));
-        }
-        blocks.splice(k..k + 1, parts);
+    }
+    if let Some(k) = target {
+        split_at_cache_break(&mut msgs[k], &eph);
     }
     // The tail mark lets the next round read this prefix back (and lets this request read the last round's);
     // a request that is the whole conversation has neither, so it would only pay the cache write.
     if !single_round {
-        if let Some(b) = blocks.last_mut() {
-            b["cache_control"] = eph;
+        let last = &mut msgs[n - 1];
+        match last.get("content").cloned() {
+            Some(serde_json::Value::String(t)) if !t.is_empty() => {
+                last["content"] = serde_json::json!([{ "type": "text", "text": t, "cache_control": eph }]);
+            }
+            Some(serde_json::Value::Array(_)) => {
+                if let Some(b) = last.get_mut("content").and_then(|c| c.as_array_mut()).and_then(|a| a.last_mut()) {
+                    b["cache_control"] = eph;
+                }
+            }
+            _ => {}
         }
     }
-    if split.is_some() || shared || !single_round {
-        last["content"] = serde_json::Value::Array(blocks);
+}
+
+fn carries_cache_break(m: &serde_json::Value) -> bool {
+    match m.get("content") {
+        Some(serde_json::Value::String(t)) => t.contains(CACHE_BREAK),
+        Some(serde_json::Value::Array(a)) => a
+            .iter()
+            .any(|b| b.get("text").and_then(|t| t.as_str()).map_or(false, |t| t.contains(CACHE_BREAK))),
+        _ => false,
     }
+}
+
+/// The message's first text with a cache-break line becomes a marked shared part and the unmarked rest.
+fn split_at_cache_break(m: &mut serde_json::Value, eph: &serde_json::Value) {
+    let mut blocks: Vec<serde_json::Value> = match m.get("content").cloned() {
+        Some(serde_json::Value::String(t)) => vec![serde_json::json!({ "type": "text", "text": t })],
+        Some(serde_json::Value::Array(a)) => a,
+        _ => return,
+    };
+    let Some(k) = blocks
+        .iter()
+        .position(|b| b.get("text").and_then(|t| t.as_str()).map_or(false, |t| t.contains(CACHE_BREAK)))
+    else {
+        return;
+    };
+    let text = blocks[k]["text"].as_str().unwrap_or("").to_string();
+    let (head, tail) = text.split_once(CACHE_BREAK).unwrap_or((text.as_str(), ""));
+    let tail = tail.strip_prefix('\n').unwrap_or(tail);
+    let mut parts = Vec::new();
+    if !head.trim().is_empty() {
+        parts.push(serde_json::json!({ "type": "text", "text": head, "cache_control": eph.clone() }));
+    }
+    if !tail.is_empty() {
+        parts.push(serde_json::json!({ "type": "text", "text": strip_cache_break(tail) }));
+    }
+    blocks.splice(k..k + 1, parts);
+    m["content"] = serde_json::Value::Array(blocks);
 }
 
 /// AN.2: parse opencode's Anthropic-format (/messages) SSE stream and
