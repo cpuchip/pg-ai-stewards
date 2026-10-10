@@ -15,7 +15,9 @@
 -- image block and, before sending, downloads URL images and inlines them as
 -- base64: Anthropic's own fetch timed out on archive.org page images
 -- (2026-10-10, "The request timed out while trying to download the file"),
--- while the same page sent as base64 was read correctly.
+-- while the same page sent as base64 was read correctly. That download is
+-- fenced in the worker (public addresses only, every redirect hop rechecked, a
+-- bounded read, a short timeout); this trigger caps a stage at 8 images.
 --
 -- A stage that sends images needs a model that reads them; this file does not
 -- check model capability.
@@ -40,6 +42,12 @@ BEGIN
      LIMIT 1;
     IF jsonb_typeof(v_images) IS DISTINCT FROM 'array' OR jsonb_array_length(v_images) = 0 THEN
         RETURN NEW;
+    END IF;
+    -- the worker downloads URL images inside a dispatcher thread; bgworker.rs MAX_IMAGES_PER_MESSAGE
+    IF jsonb_array_length(v_images) > 8 THEN
+        RAISE EXCEPTION 'attach_stage_images: session % lists % images; a stage may show at most 8',
+            NEW.payload ->> 'session_id', jsonb_array_length(v_images)
+            USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
     v_parts := '[]'::jsonb;

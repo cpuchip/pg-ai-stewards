@@ -7867,11 +7867,22 @@ BEGIN
     END;
     ASSERT v_raised, '133: an image that is neither an http(s) URL nor a data:image URI fails the enqueue';
 
+    v_raised := false;
+    UPDATE stewards.work_items SET input = jsonb_set(input, '{images}',
+        (SELECT jsonb_agg(format('https://example.org/p%s.jpg', g)) FROM generate_series(1, 9) g)) WHERE id = v_wid;
+    BEGIN
+        INSERT INTO stewards.work_queue (kind, provider, payload, status)
+        VALUES ('chat', 'smoke-img-prov', jsonb_build_object('agent_family', 'smoke-img', 'session_id', 'smoke-img-sess', 'body', v_body), 'pending');
+    EXCEPTION WHEN invalid_parameter_value THEN
+        v_raised := true;
+    END;
+    ASSERT v_raised, '133: a stage that lists more than 8 images fails the enqueue';
+
     DELETE FROM stewards.compose_budget_log WHERE session_id IN ('smoke-img-sess', 'smoke-img-plain-sess');
     DELETE FROM stewards.work_items WHERE id IN (v_wid, v_plain);
     DELETE FROM stewards.sessions WHERE id IN ('smoke-img-sess', 'smoke-img-plain-sess');
     DELETE FROM stewards.pipelines WHERE family = 'smoke-img';
-    RAISE NOTICE 'OK 133: a work item that lists images has them attached to its stage prompt; one without keeps a string; a bad image fails by name (v64)';
+    RAISE NOTICE 'OK 133: a work item that lists images has them attached to its stage prompt; one without keeps a string; a bad image or more than 8 fails by name (v64)';
 END
 $vs133$;
 
