@@ -1798,6 +1798,55 @@ mod anthropic_cache_tests {
 }
 
 #[cfg(test)]
+mod anthropic_image_tests {
+    // v64: a stage that shows images sends OpenAI image_url parts; the anthropic
+    // body must carry them as image blocks.
+    use super::{anthropic_body_from_openai, sniff_image};
+
+    #[test]
+    fn image_url_parts_become_image_blocks() {
+        let body = serde_json::json!({
+            "model": "claude-haiku-5-5",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "Quote item 15."},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+                {"type": "image_url", "image_url": {"url": "https://archive.org/download/x/page/n79_w1400.jpg"}}
+            ]}]
+        });
+        let out = anthropic_body_from_openai(&body, true);
+        let c = out["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(c.len(), 3);
+        assert_eq!(c[0]["type"], "text");
+        assert_eq!(c[0]["text"], "Quote item 15.");
+        assert_eq!(
+            c[1]["source"],
+            serde_json::json!({"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="})
+        );
+        assert_eq!(c[2]["type"], "image");
+        assert_eq!(c[2]["source"]["type"], "url");
+        assert_eq!(c[2]["source"]["url"], "https://archive.org/download/x/page/n79_w1400.jpg");
+        assert_eq!(c[2]["cache_control"]["type"], "ephemeral", "the breakpoint lands on the last block: {c:?}");
+    }
+
+    #[test]
+    fn string_content_is_unchanged_by_parts_handling() {
+        let body = serde_json::json!({"model": "m", "messages": [{"role": "user", "content": "plain"}]});
+        let out = anthropic_body_from_openai(&body, true);
+        assert_eq!(out["messages"][0]["content"][0]["text"], "plain");
+        assert!(out["messages"][0]["content"][0].get("source").is_none());
+    }
+
+    #[test]
+    fn sniffs_media_type_from_magic_bytes() {
+        assert_eq!(sniff_image(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
+        assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\n"), Some("image/png"));
+        assert_eq!(sniff_image(b"GIF89a"), Some("image/gif"));
+        assert_eq!(sniff_image(b"RIFF\x00\x00\x00\x00WEBPVP8 "), Some("image/webp"));
+        assert_eq!(sniff_image(b"<!DOCTYPE html>"), None, "a 404 page is not an image");
+    }
+}
+
+#[cfg(test)]
 mod dsml_tests {
     // #362: DeepSeek V4 DSML tool-call markup leaking as assistant text.
     use super::translate_dsml_tool_calls;
@@ -2217,7 +2266,9 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
     // character"). One choke point beats per-format guards.
     let body_sane = sanitize_phantom_tool_history(body_orig);
     let body_owned = if is_anthropic {
-        anthropic_body_from_openai(&body_sane, tools_disabled)
+        let mut b = anthropic_body_from_openai(&body_sane, tools_disabled);
+        inline_remote_images(&mut b);
+        b
     } else {
         let mut b = body_sane.clone();
         if let serde_json::Value::Object(ref mut m) = b {
@@ -3106,11 +3157,15 @@ fn anthropic_body_from_openai(
                 continue;
             }
 
-            // Plain user/assistant text. Content stays a string.
-            let content = m
-                .get("content")
-                .cloned()
-                .unwrap_or_else(|| serde_json::Value::String(String::new()));
+            // Plain user/assistant text. Content stays a string; content parts (a
+            // stage that shows images, v64) are translated part by part.
+            let content = match m.get("content") {
+                Some(serde_json::Value::Array(parts)) => {
+                    serde_json::Value::Array(parts.iter().map(anthropic_part).collect())
+                }
+                Some(c) => c.clone(),
+                None => serde_json::Value::String(String::new()),
+            };
             messages.push(serde_json::json!({ "role": role, "content": content }));
         }
     }
@@ -3161,6 +3216,100 @@ fn anthropic_body_from_openai(
     }
     add_cache_breakpoints(&mut out);
     out
+}
+
+/// One OpenAI content part as an Anthropic block. An image_url part becomes an
+/// image block: a base64 data: URI keeps its bytes, any other URL becomes a url
+/// source (inline_remote_images swaps it for base64 before sending). Text parts,
+/// and parts already in Anthropic's shape, pass through.
+fn anthropic_part(p: &serde_json::Value) -> serde_json::Value {
+    if p.get("type").and_then(|t| t.as_str()) != Some("image_url") {
+        return p.clone();
+    }
+    let url = p
+        .get("image_url")
+        .and_then(|u| u.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("");
+    if let Some((meta, data)) = url.strip_prefix("data:").and_then(|r| r.split_once(',')) {
+        if let Some(media_type) = meta.strip_suffix(";base64") {
+            return serde_json::json!({
+                "type": "image",
+                "source": { "type": "base64", "media_type": media_type, "data": data },
+            });
+        }
+    }
+    serde_json::json!({ "type": "image", "source": { "type": "url", "url": url } })
+}
+
+/// Anthropic downloads url image sources itself and times out on slow hosts
+/// (archive.org page images, 2026-10-10: "The request timed out while trying to
+/// download the file"), so the worker downloads each one and sends it as base64.
+/// A failed download leaves the url source for Anthropic to try, with a warning.
+fn inline_remote_images(body: &mut serde_json::Value) {
+    let Some(msgs) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
+        return;
+    };
+    let mut client: Option<reqwest::blocking::Client> = None;
+    for m in msgs.iter_mut() {
+        let Some(blocks) = m.get_mut("content").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
+        for b in blocks.iter_mut() {
+            if b.pointer("/source/type").and_then(|t| t.as_str()) != Some("url") {
+                continue;
+            }
+            let url = b.pointer("/source/url").and_then(|u| u.as_str()).unwrap_or("").to_owned();
+            let c = client.get_or_insert_with(|| {
+                reqwest::blocking::Client::builder()
+                    .timeout(std::time::Duration::from_secs(120))
+                    .build()
+                    .unwrap_or_else(|_| reqwest::blocking::Client::new())
+            });
+            match fetch_image(c, &url) {
+                Ok((media_type, bytes)) => {
+                    use base64::Engine as _;
+                    b["source"] = serde_json::json!({
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                    });
+                }
+                Err(e) => pgrx::warning!("stewards: image not inlined ({}): {}; sending the url", e, url),
+            }
+        }
+    }
+}
+
+/// Anthropic's limit is 5 MB per image.
+const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
+fn fetch_image(client: &reqwest::blocking::Client, url: &str) -> Result<(&'static str, Vec<u8>), String> {
+    let resp = client.get(url).send().map_err(|e| e.to_string())?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let bytes = resp.bytes().map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_IMAGE_BYTES {
+        return Err(format!("{} bytes is over the 5 MB image limit", bytes.len()));
+    }
+    let media_type = sniff_image(&bytes).ok_or("not a JPEG, PNG, GIF or WebP")?;
+    Ok((media_type, bytes.to_vec()))
+}
+
+/// The media type from the file's own magic bytes (a server's Content-Type is not trusted).
+fn sniff_image(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if b.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 /// Prompt caching: mark three points of the request (of the four Anthropic

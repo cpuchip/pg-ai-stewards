@@ -838,6 +838,16 @@ extension_sql_file!(
     requires = ["create_v62_round_one_budget"],
 );
 
+// v64-stage-images.sql: a work item whose input lists images (http(s) URLs or
+// base64 data: URIs) has them attached to its stage prompt as image_url parts on
+// every chat enqueue; the anthropic translator sends them as image blocks,
+// downloading URL images to base64 first. Oracle: virgin-smoke OK 133.
+extension_sql_file!(
+    "../v64-stage-images.sql",
+    name = "create_v64_stage_images",
+    requires = ["create_v63_spend_cap_timezone"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

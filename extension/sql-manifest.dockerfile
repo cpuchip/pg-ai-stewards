@@ -69,3 +69,4 @@ COPY v60-render-backslash.sql ./
 COPY v61-probe-anthropic-temperature.sql ./
 COPY v62-round-one-budget.sql ./
 COPY v63-spend-cap-timezone.sql ./
+COPY v64-stage-images.sql ./

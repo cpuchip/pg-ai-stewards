@@ -7808,4 +7808,71 @@ BEGIN
 END
 $vs132$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v63 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 133 (v64): a work item whose input lists images has them attached to its
+-- stage prompt on every chat enqueue. Red on v63: no attach trigger, content
+-- stays a string.
+-- ---------------------------------------------------------------------
+DO $vs133$
+DECLARE
+    v_intent uuid;
+    v_wid    uuid;
+    v_plain  uuid;
+    v_q      bigint;
+    v_c      jsonb;
+    v_raised boolean := false;
+    v_body   jsonb := jsonb_build_object('model', 'smoke-img-model', 'messages', jsonb_build_array(
+                 jsonb_build_object('role', 'system', 'content', 'You read pages.'),
+                 jsonb_build_object('role', 'user', 'content', 'Quote item 15.')));
+BEGIN
+    SELECT id INTO v_intent FROM stewards.intents WHERE slug = 'default';
+    INSERT INTO stewards.pipelines (family, description, stages, sabbath_enabled, atonement_enabled,
+        file_destination_template, file_content_jsonpath, maturity_ladder, auto_materialize_on_verified, metadata)
+    VALUES ('smoke-img', 'virgin smoke: stage images',
+      '[{"name":"read","next":null,"model":"smoke-img-model","agent_family":"smoke-img","auto_advance":false,"input_template":"{{input.text}}"}]'::jsonb,
+      false, false, NULL, NULL, '["raw","verified"]'::jsonb, false, '{}'::jsonb)
+    ON CONFLICT (family) DO UPDATE SET stages = EXCLUDED.stages;
+    v_wid := stewards.work_item_create('smoke-img', jsonb_build_object('text', 'x', 'images', jsonb_build_array(
+                 'https://example.org/page-77.jpg', 'data:image/png;base64,iVBORw0KGgo=')), 'smoke-wi-img', 'tester', NULL, v_intent);
+    UPDATE stewards.work_items SET session_ids = ARRAY['smoke-img-sess'] WHERE id = v_wid;
+    v_plain := stewards.work_item_create('smoke-img', jsonb_build_object('text', 'x'), 'smoke-wi-img-plain', 'tester', NULL, v_intent);
+    UPDATE stewards.work_items SET session_ids = ARRAY['smoke-img-plain-sess'] WHERE id = v_plain;
+    INSERT INTO stewards.sessions (id) VALUES ('smoke-img-sess'), ('smoke-img-plain-sess') ON CONFLICT DO NOTHING;
+
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-img-prov', jsonb_build_object('agent_family', 'smoke-img', 'session_id', 'smoke-img-sess', 'body', v_body), 'pending')
+    RETURNING id INTO v_q;
+    SELECT payload #> '{body,messages,1,content}' INTO v_c FROM stewards.work_queue WHERE id = v_q;
+    ASSERT jsonb_typeof(v_c) = 'array' AND jsonb_array_length(v_c) = 3, format('133: the prompt becomes text plus two image parts; got %s', v_c);
+    ASSERT v_c -> 0 = jsonb_build_object('type', 'text', 'text', 'Quote item 15.'), format('133: the text part keeps the prompt; got %s', v_c -> 0);
+    ASSERT v_c #>> '{1,image_url,url}' = 'https://example.org/page-77.jpg' AND v_c #>> '{2,image_url,url}' LIKE 'data:image/png;base64,%',
+        format('133: image parts in order; got %s', v_c);
+    ASSERT (SELECT payload #>> '{body,messages,0,content}' FROM stewards.work_queue WHERE id = v_q) = 'You read pages.',
+        '133: the system message is untouched';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-img-prov', jsonb_build_object('agent_family', 'smoke-img', 'session_id', 'smoke-img-plain-sess', 'body', v_body), 'pending')
+    RETURNING id INTO v_q;
+    ASSERT (SELECT jsonb_typeof(payload #> '{body,messages,1,content}') FROM stewards.work_queue WHERE id = v_q) = 'string',
+        '133: a work item without images keeps a string prompt';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+
+    UPDATE stewards.work_items SET input = input || '{"images": ["ftp://example.org/x.jpg"]}'::jsonb WHERE id = v_wid;
+    BEGIN
+        INSERT INTO stewards.work_queue (kind, provider, payload, status)
+        VALUES ('chat', 'smoke-img-prov', jsonb_build_object('agent_family', 'smoke-img', 'session_id', 'smoke-img-sess', 'body', v_body), 'pending');
+    EXCEPTION WHEN invalid_parameter_value THEN
+        v_raised := true;
+    END;
+    ASSERT v_raised, '133: an image that is neither an http(s) URL nor a data:image URI fails the enqueue';
+
+    DELETE FROM stewards.compose_budget_log WHERE session_id IN ('smoke-img-sess', 'smoke-img-plain-sess');
+    DELETE FROM stewards.work_items WHERE id IN (v_wid, v_plain);
+    DELETE FROM stewards.sessions WHERE id IN ('smoke-img-sess', 'smoke-img-plain-sess');
+    DELETE FROM stewards.pipelines WHERE family = 'smoke-img';
+    RAISE NOTICE 'OK 133: a work item that lists images has them attached to its stage prompt; one without keeps a string; a bad image fails by name (v64)';
+END
+$vs133$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v64 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images) is sound =='
