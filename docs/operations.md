@@ -80,6 +80,39 @@ migrate **refreshes them from the repo**. Therefore:
 - `tests/e2e-turn-loop.sh` — a real dispatch round-trips end to end.
 
 ## What a backup actually is, when you do want one
-The data, not the schema: `pg_dump -U stewards --data-only --schema=stewards stewards > data.sql`
-(or `pg_dumpall` for the whole cluster). Restore into a freshly-chained DB. You only need this for a
-genuinely destructive migration or to move data between volumes — not for routine code upgrades.
+You only need one for a genuinely destructive migration or to move data between volumes; a routine
+code upgrade re-applies the chain and keeps the volume. Take a physical copy of the running server:
+
+```
+docker exec <pg-container> pg_basebackup -U stewards -D - -Ft -X fetch | gzip > stewards-base.tar.gz
+```
+
+That is the data directory as one tar, with the WAL it needs (`-X fetch`), `backup_label` and
+`backup_manifest`.
+
+**Why not pg_dump.** pg_dump leaves out the data of every table an extension owns unless the extension
+registers it with `pg_extension_config_dump`, and pg_ai_stewards registers none. A data-only dump of a
+working instance (129 extension-owned tables in `stewards`, 2,767 rows in `work_items`) came out as 8 KB
+holding a single `COPY`. `pg_dumpall` runs pg_dump per database and has the same gap. (The companion
+pack registers its own tables, so its rows do survive a dump.)
+
+Restore into a new volume with the same image, or one with the same Postgres major:
+
+```
+docker volume create stewards-restore
+docker run --rm -v stewards-restore:/var/lib/postgresql -v "$PWD":/b:ro <image> bash -c '
+  mkdir -p "$PGDATA" && cd "$PGDATA" && tar -xzf /b/stewards-base.tar.gz &&
+  chown -R postgres:postgres /var/lib/postgresql && chmod 700 "$PGDATA"'
+docker run -d --name stewards-restore -v stewards-restore:/var/lib/postgresql <image>
+```
+
+In the PG 18 images the volume mounts at `/var/lib/postgresql` and `PGDATA` is
+`/var/lib/postgresql/18/docker`. On first start the server replays the bundled WAL and logs "consistent
+recovery state reached". To put the copy into use, point the compose service's volume at it, or copy
+it over the original volume while the service is stopped. Checked on 2026-10-10: a 247 MB backup of a
+working instance restored this way and came up with its data (2,697 work items, 15,863 world entities).
+
+Registering the core tables with `pg_extension_config_dump` would make pg_dump carry them too, but the
+chain seeds configuration rows into some of those tables, and a dump restored into a freshly chained
+database would insert those rows a second time. That needs the list of seeded rows and a per-table
+filter first; until then, back up physically.
