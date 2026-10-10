@@ -261,6 +261,7 @@ pub extern "C-unwind" fn stewards_dispatcher_main(arg: pg_sys::Datum) {
     })
     .execute();
     if let Err(e) = reaper_result {
+        abort_failed_transaction();
         pgrx::log!("stewards: startup reaper failed: {} (bgworker survived)", e);
     }
     }
@@ -419,6 +420,7 @@ fn complete_waiting_tool_dispatches() {
             // Silent on zero — runs every tick, would flood the log.
         }
         Err(e) => {
+            abort_failed_transaction();
             pgrx::log!("stewards: tool_dispatch completion pass errored: {} (bgworker survived)", e);
         }
     }
@@ -474,6 +476,7 @@ fn check_watchman_schedule() {
             // every 60 seconds — that floods the postmaster log.
         }
         Err(e) => {
+            abort_failed_transaction();
             pgrx::log!("stewards: scheduler check errored: {} (bgworker survived)", e);
         }
     }
@@ -516,6 +519,7 @@ fn check_steward_tick() {
             // Silent on zero — runs every 30s, would flood the log.
         }
         Err(e) => {
+            abort_failed_transaction();
             pgrx::log!("stewards: steward_tick errored: {} (bgworker survived)", e);
         }
     }
@@ -637,9 +641,20 @@ fn run_periodic_reaper() {
             // Silent on zero — runs every 60s, would flood the log.
         }
         Err(e) => {
+            abort_failed_transaction();
             pgrx::log!("stewards: periodic reaper errored: {} (bgworker survived)", e);
         }
     }
+}
+
+/// A Postgres error or a panic caught around BackgroundWorker::transaction
+/// leaves that transaction open (CommitTransactionCommand never ran), so the
+/// worker's next StartTransactionCommand fails with "unexpected state STARTED",
+/// outside any catch, and the worker exits (seen on a v66 roll, 2026-10-10,
+/// while the image ran ahead of its SQL). Call this after the PgTryBuilder has
+/// returned the error; it does nothing when no transaction is open.
+pub(crate) fn abort_failed_transaction() {
+    unsafe { pg_sys::AbortCurrentTransaction() };
 }
 
 /// v66: one SPI step of the batch cycle in its own transaction. A Postgres
@@ -662,6 +677,7 @@ where
     match result {
         Ok(v) => Some(v),
         Err(e) => {
+            abort_failed_transaction();
             pgrx::log!("stewards: batch {}: {} (bgworker survived)", label, e);
             None
         }
@@ -674,6 +690,19 @@ where
 /// passed, and polls submitted batches, writing each result through
 /// write_outcome. HTTP runs between transactions, never inside one.
 fn run_batch_cycle() {
+    // An image ahead of its SQL (the minutes between a roll and migrate.sh
+    // apply) has no batch functions to call yet.
+    let installed = batch_spi("installed", |c| {
+        Ok(c.select("SELECT to_regprocedure('stewards.batch_open(text,integer)') IS NOT NULL", Some(1), &[])?
+            .into_iter()
+            .next()
+            .and_then(|r| r.get::<bool>(1).ok().flatten())
+            .unwrap_or(false))
+    });
+    if installed != Some(true) {
+        return;
+    }
+
     let stuck = batch_spi("sweep", |c| {
         Ok(c.update("SELECT stewards.batch_sweep_stuck()", Some(1), &[])?
             .into_iter()
@@ -1047,6 +1076,7 @@ fn apply_batch_result(batch: i64, external_id: &str, id: i64, line: &serde_json:
                 Ok(true) => "written",
                 Ok(false) => "skipped",
                 Err(e) => {
+                    abort_failed_transaction();
                     let msg = format!("batch result could not be written: {}", e);
                     pgrx::log!("stewards: work_item id={} {}", id, msg);
                     batch_spi("unwritable", |c| {

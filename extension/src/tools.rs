@@ -430,7 +430,10 @@ fn gate_tool_confirm(
                 "WITHHELD pending human confirmation: {} (gate returned no row)", name)
         })
         .to_string()),
-        Err(e) => Err(format!("tool_confirm_gate({}): {}", name, e)),
+        Err(e) => {
+            crate::bgworker::abort_failed_transaction();
+            Err(format!("tool_confirm_gate({}): {}", name, e))
+        }
     }
 }
 
@@ -661,7 +664,10 @@ fn exec_sql_fn_tool(
     match result {
         Ok(Some(s)) => Ok(s),
         Ok(None) => Ok("null".to_string()),
-        Err(e) => Err(format!("sql_fn {}.{}: {}", schema, fn_name, e)),
+        Err(e) => {
+            crate::bgworker::abort_failed_transaction();
+            Err(format!("sql_fn {}.{}: {}", schema, fn_name, e))
+        }
     }
 }
 
