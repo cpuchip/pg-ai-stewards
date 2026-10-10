@@ -1394,6 +1394,17 @@ fn write_outcome(
                         if let Some(b) = batch {
                             notes.push_str(&format!(" batch={b}"));
                         }
+                        // v67: the max_tokens the request carried and where it came from, so an empty answer
+                        // that stopped at length reads from cost_events.
+                        let sent_mt = payload.pointer("/body/max_tokens").and_then(|v| v.as_i64());
+                        let mt_source = payload.get("max_tokens_source").and_then(|v| v.as_str());
+                        match (sent_mt, mt_source) {
+                            (Some(n), src) => notes.push_str(&format!(" max_tokens={n} max_tokens_source={}", src.unwrap_or("body"))),
+                            (None, _) if payload.get("api_format").and_then(|v| v.as_str()) == Some("anthropic") => {
+                                notes.push_str(&format!(" max_tokens={ANTHROPIC_DEFAULT_MAX_TOKENS} max_tokens_source=default"))
+                            }
+                            (None, _) => {}
+                        }
 
                         let cost_result = client.update(
                             "SELECT stewards.record_cost_event( \
@@ -2379,6 +2390,15 @@ mod batch_tests {
         assert!(p.get("tools").is_none());
         assert_eq!(p["output_config"]["effort"], "low");
         assert_eq!(p["model"], "claude-haiku-5-5");
+    }
+
+    #[test]
+    fn anthropic_max_tokens_default_and_kept() {
+        let none = serde_json::json!({"model": "m", "messages": [{"role": "user", "content": "x"}]});
+        assert_eq!(super::anthropic_body_from_openai(&none, true)["max_tokens"], super::ANTHROPIC_DEFAULT_MAX_TOKENS);
+        assert_eq!(super::ANTHROPIC_DEFAULT_MAX_TOKENS, 16384);
+        let set = serde_json::json!({"model": "m", "max_tokens": 32768, "messages": [{"role": "user", "content": "x"}]});
+        assert_eq!(super::anthropic_body_from_openai(&set, true)["max_tokens"], 32768);
     }
 
     #[test]
@@ -3697,13 +3717,18 @@ fn sanitize_phantom_tool_history(body: &serde_json::Value) -> serde_json::Value 
 
 /// AN.2 + AT.1: translate an OpenAI chat body into an Anthropic /messages body.
 ///   - system message(s) -> top-level `system` (Anthropic disallows system in messages)
-///   - max_tokens is REQUIRED by Anthropic -> default 4096 if absent
+///   - max_tokens is REQUIRED by Anthropic -> ANTHROPIC_DEFAULT_MAX_TOKENS if absent
 ///   - assistant turns carrying tool_calls -> assistant content with tool_use blocks
 ///   - role:tool results -> grouped into ONE user message of tool_result blocks
 ///     (consecutive tool messages merge; Anthropic wants tool_results in a user turn)
 ///   - tool defs: OpenAI {type:function,function:{name,description,parameters}} ->
 ///     Anthropic {name,description,input_schema}; stripped when tools_disabled
 ///   - stream:true (ES.6)
+/// v67: the max_tokens an anthropic request carries when its body has none (chat_post_internal fills
+/// most bodies first: carried from the session, or from model_capability.max_output_tokens). 4096 before
+/// v67, which a Claude 5.5 model could spend entirely on thinking.
+const ANTHROPIC_DEFAULT_MAX_TOKENS: i64 = 16384;
+
 fn anthropic_body_from_openai(
     body_orig: &serde_json::Value,
     tools_disabled: bool,
@@ -3712,7 +3737,7 @@ fn anthropic_body_from_openai(
     let max_tokens = body_orig
         .get("max_tokens")
         .and_then(|v| v.as_i64())
-        .unwrap_or(4096);
+        .unwrap_or(ANTHROPIC_DEFAULT_MAX_TOKENS);
 
     let mut system = String::new();
     let mut messages: Vec<serde_json::Value> = Vec::new();

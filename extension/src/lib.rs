@@ -870,6 +870,16 @@ extension_sql_file!(
     requires = ["create_v65_agent_anthropic_options"],
 );
 
+// v67-max-tokens.sql: chat_post_internal gives every round a max_tokens (the
+// body's own, the session's previous round's, or model_capability.max_output_tokens
+// capped at 32768 for anthropic format) and records its source; the anthropic
+// translator's fallback rises from 4096 to 16384. Oracle: virgin-smoke OK 136.
+extension_sql_file!(
+    "../v67-max-tokens.sql",
+    name = "create_v67_max_tokens",
+    requires = ["create_v66_batch_dispatch"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
