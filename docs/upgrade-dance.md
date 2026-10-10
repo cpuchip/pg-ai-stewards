@@ -100,6 +100,13 @@ transparently into the container via `docker exec`. `upgrade-dance.sh`
 does this automatically for every phase that needs it (falling back to a
 real host `psql` when one is present).
 
+One limit applies to any caller that passes values on the command line, shim or not: Linux caps a
+single argument at 128 KB (MAX_ARG_STRLEN, 131,072 bytes), so a `-v NAME=VALUE` or `-c CMD` longer
+than that fails with "Argument list too long" before psql runs. A driver that sent a chapter of a
+book plus its context as `-v inp=...` hit it at about 130 KB. Send large values on stdin instead,
+for example inside the SQL text as a dollar-quoted literal (`$q1$...$q1$`, with a tag the value
+does not contain), or with `-f FILE`.
+
 The shim's header comment carries the full MSYS-path-mangling story and a
 named, deliberate deviation from this project's SHIPWRIGHT P1 brief — read
 it before touching the file. Short version: Git Bash silently rewrites a
