@@ -68,3 +68,4 @@ COPY v59-intent-on-first-call.sql ./
 COPY v60-render-backslash.sql ./
 COPY v61-probe-anthropic-temperature.sql ./
 COPY v62-round-one-budget.sql ./
+COPY v63-spend-cap-timezone.sql ./
