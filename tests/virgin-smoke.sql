@@ -7762,4 +7762,50 @@ BEGIN
 END
 $vs131$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v62 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 132 (v63): a daily cap counts its day in the row's time zone. Red on
+-- v62: provider_spend_caps has no tz column.
+-- ---------------------------------------------------------------------
+DO $vs132$
+DECLARE
+    v_mid_chi timestamptz := date_trunc('day', now() AT TIME ZONE 'America/Chicago') AT TIME ZONE 'America/Chicago';
+    v_mid_utc timestamptz := date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC';
+    v_raised  boolean := false;
+BEGIN
+    ASSERT (SELECT column_default FROM information_schema.columns
+             WHERE table_schema = 'stewards' AND table_name = 'provider_spend_caps' AND column_name = 'tz') LIKE '%UTC%',
+        '132: provider_spend_caps.tz exists and defaults to UTC';
+    INSERT INTO stewards.provider_spend_caps (provider, cap_micro, since, enforced, refill_cadence)
+    VALUES ('smoke-tz', 1000, now() - interval '3 days', true, 'daily');
+    ASSERT (SELECT tz FROM stewards.provider_spend_caps WHERE provider = 'smoke-tz') = 'UTC', '132: a new row gets UTC';
+    ASSERT stewards.provider_cap_window_start(now() - interval '3 days', 'daily') = v_mid_utc,
+        '132: the two-argument window is still a UTC day';
+
+    UPDATE stewards.provider_spend_caps SET tz = 'America/Chicago' WHERE provider = 'smoke-tz';
+    ASSERT stewards.provider_cap_window_start(now() - interval '3 days', 'daily', 'America/Chicago') = v_mid_chi,
+        format('132: the window starts at midnight in Chicago (%s)', v_mid_chi);
+
+    -- one event a minute before Chicago's midnight and one a minute after: only the second counts
+    INSERT INTO stewards.cost_events (attempt_seq, at, provider, model, micro_dollars, pricing_effective_at)
+    VALUES (1, v_mid_chi - interval '1 minute', 'smoke-tz', 'smoke-tz-model', 700, now()),
+           (1, v_mid_chi + interval '1 minute', 'smoke-tz', 'smoke-tz-model', 600, now());
+    ASSERT stewards.provider_spend_since('smoke-tz') = 600,
+        format('132: spend counts from Chicago''s midnight; got %s', stewards.provider_spend_since('smoke-tz'));
+    ASSERT NOT stewards.provider_cap_exceeded('smoke-tz'), '132: 600 of 1000 is under the cap';
+    UPDATE stewards.provider_spend_caps SET cap_micro = 600 WHERE provider = 'smoke-tz';
+    ASSERT stewards.provider_cap_exceeded('smoke-tz'), '132: 600 of 600 has reached the cap';
+
+    BEGIN
+        UPDATE stewards.provider_spend_caps SET tz = 'Mars/Olympus_Mons' WHERE provider = 'smoke-tz';
+    EXCEPTION WHEN invalid_parameter_value THEN
+        v_raised := true;
+    END;
+    ASSERT v_raised, '132: an unknown time zone is refused on write';
+
+    DELETE FROM stewards.cost_events WHERE provider = 'smoke-tz';
+    DELETE FROM stewards.provider_spend_caps WHERE provider = 'smoke-tz';
+    RAISE NOTICE 'OK 132: a daily cap counts its day in the row''s time zone; UTC stays the default; an unknown zone is refused (v63)';
+END
+$vs132$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v63 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone) is sound =='

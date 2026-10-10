@@ -828,6 +828,16 @@ extension_sql_file!(
     requires = ["create_v61_probe_anthropic_temperature"],
 );
 
+// v63-spend-cap-timezone.sql: a 'daily' cap counted its day from midnight UTC,
+// so an operator budgeting by local days saw it roll over mid-evening.
+// provider_spend_caps.tz (default 'UTC') names the zone the day is counted in;
+// an unknown name is refused on write. Oracle: virgin-smoke OK 132.
+extension_sql_file!(
+    "../v63-spend-cap-timezone.sql",
+    name = "create_v63_spend_cap_timezone",
+    requires = ["create_v62_round_one_budget"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
