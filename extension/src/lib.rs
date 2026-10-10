@@ -848,6 +848,17 @@ extension_sql_file!(
     requires = ["create_v63_spend_cap_timezone"],
 );
 
+// v65-agent-anthropic-options.sql: agents.anthropic_options (output_config and
+// thinking only, by CHECK) is copied into every chat the agent makes by a
+// work_queue trigger; the anthropic translator puts the two keys on the request,
+// and cost_events.notes records them with the thinking tokens. Oracle:
+// virgin-smoke OK 134.
+extension_sql_file!(
+    "../v65-agent-anthropic-options.sql",
+    name = "create_v65_agent_anthropic_options",
+    requires = ["create_v64_stage_images"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
