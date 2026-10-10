@@ -8088,4 +8088,59 @@ BEGIN
 END
 $vs135$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v66 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 136 (v67): every chat round carries a max_tokens. A session's next
+-- round carries the previous round's; an anthropic-format model with no
+-- prior round gets least(max_output_tokens, 32768); the body's own wins;
+-- an openai-format model with neither is left to its provider. Red on v66:
+-- no max_output_tokens column, and chat_post_internal sets no max_tokens.
+-- ---------------------------------------------------------------------
+DO $vs136$
+DECLARE
+    v_q   bigint;
+    v_mt  text;
+    v_src text;
+BEGIN
+    INSERT INTO stewards.model_capability (provider, model, api_format, max_output_tokens)
+    VALUES ('smoke-mt-anth', 'smoke-mt-claude', 'anthropic', 128000),
+           ('smoke-mt-anth', 'smoke-mt-small', 'anthropic', 8000);
+
+    -- carried: the session's previous round had 5000
+    INSERT INTO stewards.sessions (id, kind) VALUES ('mt-carry', 'agent'), ('mt-model', 'agent'), ('mt-small', 'agent'),
+                                                    ('mt-open', 'agent'), ('mt-own', 'agent');
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'flexllama', jsonb_build_object('session_id', 'mt-carry', 'body', jsonb_build_object('max_tokens', 5000)), 'done');
+    v_q := stewards.chat_post_internal('work-item-chat', 'reason', 'mt-carry', 'flexllama');
+    SELECT payload #>> '{body,max_tokens}', payload->>'max_tokens_source' INTO v_mt, v_src FROM stewards.work_queue WHERE id = v_q;
+    ASSERT v_mt = '5000' AND v_src = 'carried', format('136: the next round carries 5000; got %s from %s', v_mt, v_src);
+
+    -- model: an anthropic-format model, no prior round
+    v_q := stewards.chat_post_internal('work-item-chat', 'smoke-mt-claude', 'mt-model', 'smoke-mt-anth');
+    SELECT payload #>> '{body,max_tokens}', payload->>'max_tokens_source' INTO v_mt, v_src FROM stewards.work_queue WHERE id = v_q;
+    ASSERT v_mt = '32768' AND v_src = 'model', format('136: 128000 is capped at 32768; got %s from %s', v_mt, v_src);
+    v_q := stewards.chat_post_internal('work-item-chat', 'smoke-mt-small', 'mt-small', 'smoke-mt-anth');
+    SELECT payload #>> '{body,max_tokens}' INTO v_mt FROM stewards.work_queue WHERE id = v_q;
+    ASSERT v_mt = '8000', format('136: a smaller model maximum is kept; got %s', v_mt);
+
+    -- own: a _sampling override sets it and wins over the model
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-mt-anth', jsonb_build_object('session_id', 'mt-own', '_sampling', jsonb_build_object('max_tokens', 64000), 'body', '{}'::jsonb), 'done');
+    v_q := stewards.chat_post_internal('work-item-chat', 'smoke-mt-claude', 'mt-own', 'smoke-mt-anth');
+    SELECT payload #>> '{body,max_tokens}', payload->>'max_tokens_source' INTO v_mt, v_src FROM stewards.work_queue WHERE id = v_q;
+    ASSERT v_mt = '64000' AND v_src = 'body', format('136: the body''s own max_tokens wins; got %s from %s', v_mt, v_src);
+
+    -- open: an openai-format model with neither is left alone
+    v_q := stewards.chat_post_internal('work-item-chat', 'reason', 'mt-open', 'flexllama');
+    SELECT payload #>> '{body,max_tokens}', payload->>'max_tokens_source' INTO v_mt, v_src FROM stewards.work_queue WHERE id = v_q;
+    ASSERT v_mt IS NULL AND v_src IS NULL, format('136: an openai model with no source gets none; got %s from %s', v_mt, v_src);
+
+    DELETE FROM stewards.work_queue WHERE payload->>'session_id' IN ('mt-carry', 'mt-model', 'mt-small', 'mt-open', 'mt-own');
+    DELETE FROM stewards.compose_budget_log WHERE session_id IN ('mt-carry', 'mt-model', 'mt-small', 'mt-open', 'mt-own');
+    DELETE FROM stewards.messages WHERE session_id IN ('mt-carry', 'mt-model', 'mt-small', 'mt-open', 'mt-own');
+    DELETE FROM stewards.sessions WHERE id IN ('mt-carry', 'mt-model', 'mt-small', 'mt-open', 'mt-own');
+    DELETE FROM stewards.model_capability WHERE provider = 'smoke-mt-anth';
+    RAISE NOTICE 'OK 136: every chat round carries a max_tokens: carried from the session, else the model maximum capped at 32768, the body''s own first, none for an openai model without one (v67)';
+END
+$vs136$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v67 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round) is sound =='
