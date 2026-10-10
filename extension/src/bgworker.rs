@@ -652,9 +652,15 @@ fn run_periodic_reaper() {
 /// worker's next StartTransactionCommand fails with "unexpected state STARTED",
 /// outside any catch, and the worker exits (seen on a v66 roll, 2026-10-10,
 /// while the image ran ahead of its SQL). Call this after the PgTryBuilder has
-/// returned the error; it does nothing when no transaction is open.
+/// returned the error (the error state is flushed by then). When the error was
+/// an Err value the closure returned, BackgroundWorker::transaction committed and
+/// no transaction is open, so this does nothing.
 pub(crate) fn abort_failed_transaction() {
-    unsafe { pg_sys::AbortCurrentTransaction() };
+    unsafe {
+        if pg_sys::IsTransactionOrTransactionBlock() {
+            pg_sys::AbortCurrentTransaction();
+        }
+    }
 }
 
 /// v66: one SPI step of the batch cycle in its own transaction. A Postgres
@@ -699,9 +705,16 @@ fn run_batch_cycle() {
             .and_then(|r| r.get::<bool>(1).ok().flatten())
             .unwrap_or(false))
     });
+    thread_local! {
+        static SAID_MISSING: std::cell::Cell<bool> = std::cell::Cell::new(false);
+    }
     if installed != Some(true) {
+        if !SAID_MISSING.with(|s| s.replace(true)) {
+            pgrx::log!("stewards: batch cycle skipped: batch SQL not installed (v66); it starts once migrate.sh applies it");
+        }
         return;
     }
+    SAID_MISSING.with(|s| s.set(false));
 
     let stuck = batch_spi("sweep", |c| {
         Ok(c.update("SELECT stewards.batch_sweep_stuck()", Some(1), &[])?
