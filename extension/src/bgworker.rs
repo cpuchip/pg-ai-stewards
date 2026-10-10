@@ -1798,6 +1798,78 @@ mod anthropic_cache_tests {
 }
 
 #[cfg(test)]
+mod anthropic_image_tests {
+    // v64: a stage that shows images sends OpenAI image_url parts; the anthropic
+    // body must carry them as image blocks.
+    use super::{anthropic_body_from_openai, sniff_image};
+
+    #[test]
+    fn image_url_parts_become_image_blocks() {
+        let body = serde_json::json!({
+            "model": "claude-haiku-5-5",
+            "messages": [{"role": "user", "content": [
+                {"type": "text", "text": "Quote item 15."},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+                {"type": "image_url", "image_url": {"url": "https://archive.org/download/x/page/n79_w1400.jpg"}}
+            ]}]
+        });
+        let out = anthropic_body_from_openai(&body, true);
+        let c = out["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(c.len(), 3);
+        assert_eq!(c[0]["type"], "text");
+        assert_eq!(c[0]["text"], "Quote item 15.");
+        assert_eq!(
+            c[1]["source"],
+            serde_json::json!({"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgo="})
+        );
+        assert_eq!(c[2]["type"], "image");
+        assert_eq!(c[2]["source"]["type"], "url");
+        assert_eq!(c[2]["source"]["url"], "https://archive.org/download/x/page/n79_w1400.jpg");
+        assert_eq!(c[2]["cache_control"]["type"], "ephemeral", "the breakpoint lands on the last block: {c:?}");
+    }
+
+    #[test]
+    fn string_content_is_unchanged_by_parts_handling() {
+        let body = serde_json::json!({"model": "m", "messages": [{"role": "user", "content": "plain"}]});
+        let out = anthropic_body_from_openai(&body, true);
+        assert_eq!(out["messages"][0]["content"][0]["text"], "plain");
+        assert!(out["messages"][0]["content"][0].get("source").is_none());
+    }
+
+    #[test]
+    fn only_public_addresses_pass() {
+        use super::is_public_ip;
+        for ip in ["127.0.0.1", "10.1.2.3", "172.20.0.4", "192.168.1.1", "169.254.169.254", "100.110.60.2",
+                   "100.64.0.1", "0.0.0.0", "255.255.255.255", "224.0.0.1", "::1", "::", "fc00::1", "fd12::1",
+                   "fe80::1", "::ffff:10.0.0.1", "::ffff:127.0.0.1", "2001:db8::1"] {
+            assert!(!is_public_ip(ip.parse().unwrap()), "{ip} must be refused");
+        }
+        for ip in ["8.8.8.8", "207.241.224.2", "100.63.255.255", "100.128.0.1", "2606:4700::1111"] {
+            assert!(is_public_ip(ip.parse().unwrap()), "{ip} is public");
+        }
+    }
+
+    #[test]
+    fn non_http_and_internal_literals_are_refused_before_any_request() {
+        use super::fetch_image;
+        for url in ["ftp://example.org/x.jpg", "file:///etc/passwd", "http://127.0.0.1:5432/x.png",
+                    "http://[::1]/x.png", "http://169.254.169.254/latest/meta-data/", "http://100.110.60.2:8090/"] {
+            let e = fetch_image(url).expect_err(url);
+            assert_eq!(e.0, "refused", "{url}: {e:?}");
+        }
+    }
+
+    #[test]
+    fn sniffs_media_type_from_magic_bytes() {
+        assert_eq!(sniff_image(&[0xFF, 0xD8, 0xFF, 0xE0]), Some("image/jpeg"));
+        assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\n"), Some("image/png"));
+        assert_eq!(sniff_image(b"GIF89a"), Some("image/gif"));
+        assert_eq!(sniff_image(b"RIFF\x00\x00\x00\x00WEBPVP8 "), Some("image/webp"));
+        assert_eq!(sniff_image(b"<!DOCTYPE html>"), None, "a 404 page is not an image");
+    }
+}
+
+#[cfg(test)]
 mod dsml_tests {
     // #362: DeepSeek V4 DSML tool-call markup leaking as assistant text.
     use super::translate_dsml_tool_calls;
@@ -2217,7 +2289,9 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
     // character"). One choke point beats per-format guards.
     let body_sane = sanitize_phantom_tool_history(body_orig);
     let body_owned = if is_anthropic {
-        anthropic_body_from_openai(&body_sane, tools_disabled)
+        let mut b = anthropic_body_from_openai(&body_sane, tools_disabled);
+        inline_remote_images(&mut b);
+        b
     } else {
         let mut b = body_sane.clone();
         if let serde_json::Value::Object(ref mut m) = b {
@@ -3106,11 +3180,15 @@ fn anthropic_body_from_openai(
                 continue;
             }
 
-            // Plain user/assistant text. Content stays a string.
-            let content = m
-                .get("content")
-                .cloned()
-                .unwrap_or_else(|| serde_json::Value::String(String::new()));
+            // Plain user/assistant text. Content stays a string; content parts (a
+            // stage that shows images, v64) are translated part by part.
+            let content = match m.get("content") {
+                Some(serde_json::Value::Array(parts)) => {
+                    serde_json::Value::Array(parts.iter().map(anthropic_part).collect())
+                }
+                Some(c) => c.clone(),
+                None => serde_json::Value::String(String::new()),
+            };
             messages.push(serde_json::json!({ "role": role, "content": content }));
         }
     }
@@ -3161,6 +3239,206 @@ fn anthropic_body_from_openai(
     }
     add_cache_breakpoints(&mut out);
     out
+}
+
+/// One OpenAI content part as an Anthropic block. An image_url part becomes an
+/// image block: a base64 data: URI keeps its bytes, any other URL becomes a url
+/// source (inline_remote_images swaps it for base64 before sending). Text parts,
+/// and parts already in Anthropic's shape, pass through.
+fn anthropic_part(p: &serde_json::Value) -> serde_json::Value {
+    if p.get("type").and_then(|t| t.as_str()) != Some("image_url") {
+        return p.clone();
+    }
+    let url = p
+        .get("image_url")
+        .and_then(|u| u.get("url"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("");
+    if let Some((meta, data)) = url.strip_prefix("data:").and_then(|r| r.split_once(',')) {
+        if let Some(media_type) = meta.strip_suffix(";base64") {
+            return serde_json::json!({
+                "type": "image",
+                "source": { "type": "base64", "media_type": media_type, "data": data },
+            });
+        }
+    }
+    serde_json::json!({ "type": "image", "source": { "type": "url", "url": url } })
+}
+
+/// Anthropic downloads url image sources itself and times out on slow hosts
+/// (archive.org page images, 2026-10-10: "The request timed out while trying to
+/// download the file"), so the worker downloads each one and sends it as base64.
+/// The download is the worker reaching out on an input's say-so, so it is fenced:
+/// http(s) only; the host must resolve to public addresses only, the connection
+/// is pinned to the address that was checked, and every redirect hop is checked
+/// again; the read stops at the size limit; a short timeout; at most
+/// MAX_IMAGES_PER_MESSAGE per message. An image that is refused or fails becomes
+/// a text note naming the kind of failure (never the URL or an address), so an
+/// internal URL never reaches the provider; the details go to the log.
+fn inline_remote_images(body: &mut serde_json::Value) {
+    let Some(msgs) = body.get_mut("messages").and_then(|m| m.as_array_mut()) else {
+        return;
+    };
+    for m in msgs.iter_mut() {
+        let Some(blocks) = m.get_mut("content").and_then(|c| c.as_array_mut()) else {
+            continue;
+        };
+        let mut images = 0;
+        for b in blocks.iter_mut() {
+            if b.get("type").and_then(|t| t.as_str()) != Some("image") {
+                continue;
+            }
+            images += 1;
+            if b.pointer("/source/type").and_then(|t| t.as_str()) != Some("url") {
+                continue;
+            }
+            let url = b.pointer("/source/url").and_then(|u| u.as_str()).unwrap_or("").to_owned();
+            let fetched = if images > MAX_IMAGES_PER_MESSAGE {
+                Err(("refused", format!("more than {} images in one message", MAX_IMAGES_PER_MESSAGE)))
+            } else {
+                fetch_image(&url)
+            };
+            match fetched {
+                Ok((media_type, bytes)) => {
+                    use base64::Engine as _;
+                    b["source"] = serde_json::json!({
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                    });
+                }
+                Err((kind, detail)) => {
+                    pgrx::warning!("stewards: image not sent ({}: {}): {}", kind, detail, url);
+                    *b = serde_json::json!({ "type": "text", "text": format!("[image not sent: {}]", kind) });
+                }
+            }
+        }
+    }
+}
+
+/// Anthropic's limit is 5 MB per image.
+const MAX_IMAGE_BYTES: u64 = 5 * 1024 * 1024;
+/// A dispatcher thread waits on these downloads, so they are few and quick.
+const MAX_IMAGES_PER_MESSAGE: usize = 8;
+const IMAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
+const MAX_IMAGE_REDIRECTS: usize = 3;
+
+/// (the kind the model is told: refused | unavailable | too large | not an image, the detail for the log)
+type ImageFetchError = (&'static str, String);
+
+fn fetch_image(url: &str) -> Result<(&'static str, Vec<u8>), ImageFetchError> {
+    let mut url = reqwest::Url::parse(url).map_err(|e| ("refused", format!("not a URL: {e}")))?;
+    for _hop in 0..=MAX_IMAGE_REDIRECTS {
+        let (host, addr) = vet_image_url(&url)?;
+        let client = reqwest::blocking::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(IMAGE_TIMEOUT)
+            .resolve(&host, addr)
+            .build()
+            .map_err(|e| ("unavailable", e.to_string()))?;
+        let resp = client.get(url.clone()).send().map_err(|e| ("unavailable", e.to_string()))?;
+        if resp.status().is_redirection() {
+            let location = resp
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or(("unavailable", format!("HTTP {} with no Location", resp.status())))?;
+            url = url.join(location).map_err(|e| ("refused", format!("bad redirect target: {e}")))?;
+            continue;
+        }
+        if !resp.status().is_success() {
+            return Err(("unavailable", format!("HTTP {}", resp.status())));
+        }
+        if resp.content_length().is_some_and(|n| n > MAX_IMAGE_BYTES) {
+            return Err(("too large", format!("Content-Length over {MAX_IMAGE_BYTES} bytes")));
+        }
+        let mut bytes = Vec::new();
+        use std::io::Read as _;
+        resp.take(MAX_IMAGE_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| ("unavailable", e.to_string()))?;
+        if bytes.len() as u64 > MAX_IMAGE_BYTES {
+            return Err(("too large", format!("body over {MAX_IMAGE_BYTES} bytes")));
+        }
+        let media_type = sniff_image(&bytes).ok_or(("not an image", "not a JPEG, PNG, GIF or WebP".to_string()))?;
+        return Ok((media_type, bytes));
+    }
+    Err(("unavailable", format!("more than {MAX_IMAGE_REDIRECTS} redirects")))
+}
+
+/// The host and the one address the download may connect to: http(s) only, and
+/// every address the host resolves to must be public (one private answer refuses
+/// the host, so a name that mixes public and internal records cannot be raced).
+fn vet_image_url(url: &reqwest::Url) -> Result<(String, std::net::SocketAddr), ImageFetchError> {
+    if url.scheme() != "http" && url.scheme() != "https" {
+        return Err(("refused", format!("scheme {} is not http(s)", url.scheme())));
+    }
+    let host = url.host_str().ok_or(("refused", "no host".to_string()))?.to_owned();
+    let port = url.port_or_known_default().unwrap_or(443);
+    use std::net::ToSocketAddrs as _;
+    let bare = host.trim_start_matches('[').trim_end_matches(']');
+    let addrs: Vec<std::net::SocketAddr> = (bare, port)
+        .to_socket_addrs()
+        .map_err(|e| ("unavailable", format!("cannot resolve {host}: {e}")))?
+        .collect();
+    let first = *addrs.first().ok_or(("unavailable", format!("{host} resolves to nothing")))?;
+    if let Some(bad) = addrs.iter().find(|a| !is_public_ip(a.ip())) {
+        return Err(("refused", format!("{host} resolves to {} (not a public address)", bad.ip())));
+    }
+    Ok((host, first))
+}
+
+/// A globally routable unicast address. Refused: loopback, private (RFC 1918),
+/// link-local (169.254/16 holds cloud metadata), CGNAT 100.64/10 (the NetBird
+/// mesh range), 0/8, 192.0.0/24, benchmarking 198.18/15, 240/4 and broadcast,
+/// documentation, multicast, unspecified; for IPv6, ::1, ::, multicast,
+/// unique-local fc00::/7, link-local fe80::/10 and 2001:db8::/32. An IPv4-mapped
+/// IPv6 address is judged as its IPv4.
+fn is_public_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            let o = v4.octets();
+            !(v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                || v4.is_documentation()
+                || o[0] == 0
+                || (o[0] == 100 && (o[1] & 0xC0) == 64)
+                || (o[0] == 192 && o[1] == 0 && o[2] == 0)
+                || (o[0] == 198 && (o[1] & 0xFE) == 18)
+                || o[0] >= 240)
+        }
+        std::net::IpAddr::V6(v6) => {
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public_ip(std::net::IpAddr::V4(v4));
+            }
+            let s = v6.segments();
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] & 0xffc0) == 0xfe80
+                || (s[0] == 0x2001 && s[1] == 0x0db8))
+        }
+    }
+}
+
+/// The media type from the file's own magic bytes (a server's Content-Type is not trusted).
+fn sniff_image(b: &[u8]) -> Option<&'static str> {
+    if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some("image/jpeg")
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some("image/png")
+    } else if b.starts_with(b"GIF8") {
+        Some("image/gif")
+    } else if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        Some("image/webp")
+    } else {
+        None
+    }
 }
 
 /// Prompt caching: mark three points of the request (of the four Anthropic
