@@ -71,3 +71,4 @@ COPY v62-round-one-budget.sql ./
 COPY v63-spend-cap-timezone.sql ./
 COPY v64-stage-images.sql ./
 COPY v65-agent-anthropic-options.sql ./
+COPY v66-batch-dispatch.sql ./

@@ -53,6 +53,27 @@ changes apply. To force a one-time full re-apply instead (e.g. to pull live hand
 repo definitions), delete the ledger rows first: `DELETE FROM stewards.schema_migrations;` then run
 `apply`.
 
+## Roll order when the bgworker calls new SQL
+A release can change both halves at once: Rust that calls a SQL function, and the chain file that
+defines it. Between the container restart and `migrate.sh`, one half is new and the other old, so
+pick the order by what the SQL contains:
+
+- **plpgsql or sql functions, tables, triggers only:** apply the SQL first (`migrate.sh` from the new
+  checkout against the running old container), then recreate the container on the new image. The
+  old binary never calls the new functions, so nothing changes until the new binary starts.
+- **New C functions (a new `#[pg_extern]`):** recreate on the new image first, then apply the SQL. A
+  `CREATE FUNCTION` that binds a C symbol fails against the old `.so`.
+
+In both orders the binary has to tolerate the other half missing: a worker that finds its SQL absent
+logs that once and skips, and a SQL error a worker catches must never end a dispatcher.
+`tests/bgworker-survives.sh <image>` checks both for the batch cycle.
+
+v66 (batch dispatch) is the first release this applies to. Its SQL is plpgsql only, so on a running
+instance apply it first. Its batch cycle also checks that `stewards.batch_open` exists before it
+runs, so the reverse order is safe as well. On 2026-10-10 the reverse order, on a build that had
+neither that check nor the transaction fix, ended dispatcher #0 twice in the seconds between the
+image starting and the migration landing.
+
 ## Config is code — the drift killer
 Seeds (agents, personas, models, pipelines, prompts, tool grants) are `ON CONFLICT DO UPDATE`, so a
 migrate **refreshes them from the repo**. Therefore:
@@ -78,6 +99,8 @@ migrate **refreshes them from the repo**. Therefore:
   `scripts/upgrade-dance.sh`, whose `scratch-proof` phase is the closest thing to what that ghost
   reference described: virgin-boot + smoke + a real `migrate.sh` round-trip on a throwaway container.)
 - `tests/e2e-turn-loop.sh` — a real dispatch round-trips end to end.
+- `tests/bgworker-survives.sh <image>`: a SQL error the leader catches does not end a dispatcher,
+  and missing batch SQL is skipped (a scratch container with the bgworker loaded; no provider calls).
 
 ## What a backup actually is, when you do want one
 You only need one for a genuinely destructive migration or to move data between volumes; a routine
