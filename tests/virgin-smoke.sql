@@ -7886,4 +7886,50 @@ BEGIN
 END
 $vs133$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v64 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 134 (v65): an agent's anthropic_options ride every chat it makes, and only
+-- output_config and thinking are allowed. Red on v64: no column, no trigger.
+-- ---------------------------------------------------------------------
+DO $vs134$
+DECLARE
+    v_q      bigint;
+    v_raised boolean := false;
+    v_body   jsonb := jsonb_build_object('model', 'smoke-opt-model', 'messages', jsonb_build_array(
+                 jsonb_build_object('role', 'user', 'content', 'x')));
+BEGIN
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature, anthropic_options)
+    VALUES ('smoke-opt', '*', 'virgin smoke: anthropic options', 'primary', 'You are a smoke agent.', NULL,
+            '{"output_config": {"effort": "low"}, "thinking": {"type": "disabled"}}'::jsonb);
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature)
+    VALUES ('smoke-opt-plain', '*', 'virgin smoke: no options', 'primary', 'You are a smoke agent.', NULL);
+
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-opt-prov', jsonb_build_object('agent_family', 'smoke-opt', 'session_id', 'smoke-opt-sess', 'body', v_body), 'pending')
+    RETURNING id INTO v_q;
+    ASSERT (SELECT payload #> '{body,anthropic_options}' FROM stewards.work_queue WHERE id = v_q)
+           = '{"output_config": {"effort": "low"}, "thinking": {"type": "disabled"}}'::jsonb,
+        format('134: the agent''s options ride the chat; got %s', (SELECT payload #> '{body,anthropic_options}' FROM stewards.work_queue WHERE id = v_q));
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+
+    INSERT INTO stewards.work_queue (kind, provider, payload, status)
+    VALUES ('chat', 'smoke-opt-prov', jsonb_build_object('agent_family', 'smoke-opt-plain', 'session_id', 'smoke-opt-sess', 'body', v_body), 'pending')
+    RETURNING id INTO v_q;
+    ASSERT (SELECT payload #> '{body,anthropic_options}' FROM stewards.work_queue WHERE id = v_q) IS NULL,
+        '134: an agent without options adds nothing';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+
+    BEGIN
+        UPDATE stewards.agents SET anthropic_options = '{"output_config": {"effort": "low"}, "model": "other"}'::jsonb
+         WHERE family = 'smoke-opt';
+    EXCEPTION WHEN check_violation THEN
+        v_raised := true;
+    END;
+    ASSERT v_raised, '134: a key other than output_config and thinking is refused';
+
+    DELETE FROM stewards.compose_budget_log WHERE session_id = 'smoke-opt-sess';
+    DELETE FROM stewards.agents WHERE family IN ('smoke-opt', 'smoke-opt-plain');
+    RAISE NOTICE 'OK 134: an agent''s anthropic_options ride its chats; none without; other keys refused (v65)';
+END
+$vs134$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v65 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options) is sound =='

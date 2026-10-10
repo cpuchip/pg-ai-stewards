@@ -859,6 +859,19 @@ fn process_one_pending() -> bool {
                         let wi_opt: Option<&str> = payload
                             .get("_work_item_id")
                             .and_then(|v| v.as_str());
+                        // v65: the effort/thinking settings the request carried and the thinking tokens the
+                        // provider reported, so cost comparisons read from cost_events, not from logs.
+                        let mut notes = format!("work_id={} response_model={}", id, model);
+                        let opts = payload.pointer("/body/anthropic_options");
+                        if let Some(e) = opts.and_then(|o| o.pointer("/output_config/effort")).and_then(|v| v.as_str()) {
+                            notes.push_str(&format!(" effort={e}"));
+                        }
+                        if let Some(t) = opts.and_then(|o| o.pointer("/thinking/type")).and_then(|v| v.as_str()) {
+                            notes.push_str(&format!(" thinking={t}"));
+                        }
+                        if let Some(r) = reasoning_tokens {
+                            notes.push_str(&format!(" thinking_tokens={r}"));
+                        }
 
                         let cost_result = client.update(
                             "SELECT stewards.record_cost_event( \
@@ -879,10 +892,7 @@ fn process_one_pending() -> bool {
                                 cache_write_tok.into(),
                                 session_id.clone().into(),
                                 cache_read_tok.into(),
-                                format!(
-                                    "work_id={} response_model={}",
-                                    id, model
-                                ).into(),
+                                notes.into(),
                                 // ES.3.s5: gateway-reported upstream cost.
                                 (*upstream_cost_micro).into(),
                             ],
@@ -1829,6 +1839,25 @@ mod anthropic_image_tests {
     }
 
     #[test]
+    fn anthropic_options_pass_only_effort_and_thinking() {
+        // v65: agents.anthropic_options reaches the request as output_config and thinking, nothing else.
+        let body = serde_json::json!({
+            "model": "claude-haiku-5-5",
+            "messages": [{"role": "user", "content": "x"}],
+            "anthropic_options": {
+                "output_config": {"effort": "low"},
+                "thinking": {"type": "disabled"},
+                "model": "smuggled"
+            }
+        });
+        let out = anthropic_body_from_openai(&body, true);
+        assert_eq!(out["output_config"], serde_json::json!({"effort": "low"}));
+        assert_eq!(out["thinking"], serde_json::json!({"type": "disabled"}));
+        assert_eq!(out["model"], "claude-haiku-5-5", "the options cannot replace the model");
+        assert!(out.get("anthropic_options").is_none());
+    }
+
+    #[test]
     fn string_content_is_unchanged_by_parts_handling() {
         let body = serde_json::json!({"model": "m", "messages": [{"role": "user", "content": "plain"}]});
         let out = anthropic_body_from_openai(&body, true);
@@ -2295,6 +2324,8 @@ fn chat(provider_name: &str, payload: &serde_json::Value) -> Result<WorkOutcome,
     } else {
         let mut b = body_sane.clone();
         if let serde_json::Value::Object(ref mut m) = b {
+            // v65: Anthropic request settings mean nothing to an OpenAI-format provider.
+            m.remove("anthropic_options");
             if tools_disabled {
                 m.remove("tools");
             }
@@ -3213,6 +3244,15 @@ fn anthropic_body_from_openai(
     // 5.5 models reject the field outright.
     if let Some(temp) = body_orig.get("temperature").filter(|t| !t.is_null()) {
         out["temperature"] = temp.clone();
+    }
+    // v65: the agent's effort and thinking settings (agents.anthropic_options, copied in by the queue
+    // trigger). Only these two keys pass; a model that rejects a value answers 400 and the row fails.
+    if let Some(opts) = body_orig.get("anthropic_options").and_then(|v| v.as_object()) {
+        for key in ["output_config", "thinking"] {
+            if let Some(v) = opts.get(key) {
+                out[key] = v.clone();
+            }
+        }
     }
     // AT.1: translate tool definitions unless disabled.
     if !tools_disabled {

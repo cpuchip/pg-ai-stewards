@@ -121,6 +121,7 @@ COPY v61-probe-anthropic-temperature.sql ./
 COPY v62-round-one-budget.sql ./
 COPY v63-spend-cap-timezone.sql ./
 COPY v64-stage-images.sql ./
+COPY v65-agent-anthropic-options.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
