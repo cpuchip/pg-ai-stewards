@@ -880,6 +880,16 @@ extension_sql_file!(
     requires = ["create_v66_batch_dispatch"],
 );
 
+// v69-web-tools-untrusted.sql: is_web_tool names every fetch-md tool (fetch_urls,
+// extract_links, fetch_url_raw, fetch_html beside fetch_url), so the untrusted
+// web-content wrap and the prompt-injection scan apply to all of them. Found
+// 2026-10-16 on an instance at c3890d3. The file's own DO block is the check.
+extension_sql_file!(
+    "../v69-web-tools-untrusted.sql",
+    name = "create_v69_web_tools_untrusted",
+    requires = ["create_v67_max_tokens"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
