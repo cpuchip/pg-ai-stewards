@@ -73,3 +73,5 @@ COPY v64-stage-images.sql ./
 COPY v65-agent-anthropic-options.sql ./
 COPY v66-batch-dispatch.sql ./
 COPY v67-max-tokens.sql ./
+COPY v69-web-tools-untrusted.sql ./
+COPY v70-inline-handles-off.sql ./

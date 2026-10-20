@@ -890,6 +890,17 @@ extension_sql_file!(
     requires = ["create_v67_max_tokens"],
 );
 
+// v70-inline-handles-off.sql: the [ctx:handle] label leaves the message. A model
+// on a long session learned to answer with nothing but its own label (2026-10-17);
+// config context_inline_handles (none by default) governs the inline prefix, and
+// the pressure notice lists each handle with its role and an excerpt instead.
+// Oracle: virgin-smoke OK 137; extension/verify-70-inline-handles.sql on a live record.
+extension_sql_file!(
+    "../v70-inline-handles-off.sql",
+    name = "create_v70_inline_handles_off",
+    requires = ["create_v69_web_tools_untrusted"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
