@@ -8235,7 +8235,8 @@ $vs137$;
 -- OK 138 (v71): tool rounds count per turn. A session with a second user
 -- message starts that turn's count at zero: the first turn at its hard cap is
 -- forced to answer, the next turn keeps its tools; and the soft-cap notice,
--- given once in the first turn, is given again in the next. On v67 the second
+-- given once in the first turn, is given again in the next, and only once
+-- within a turn however many rounds pass the soft cap. On v67 the second
 -- turn inherited the first turn's rounds and was forced to answer with
 -- tool_choice none (so no notice came in turns 2 or 3 either). A session with
 -- no user message counts every round, as before (OK 56).
@@ -8251,10 +8252,18 @@ DECLARE
     v_forced text;
     v_turn2  text;
     v_note   int;
+    v_q4     bigint;
+    v_r      int;
+    v_ids    bigint[] := '{}';
+    v_keep   int;
 BEGIN
     SELECT a.steps INTO v_steps FROM stewards.agents a
      WHERE a.family = 'work-item-chat' ORDER BY length(a.model_match) DESC LIMIT 1;
     ASSERT COALESCE(v_steps, 0) >= 6, 'v71: work-item-chat has a real tool budget (>=6)';
+    -- a budget with room between the soft and hard caps (restored below)
+    v_keep := v_steps;
+    UPDATE stewards.agents SET steps = 20 WHERE family = 'work-item-chat';
+    v_steps := 20;
     v_hard := GREATEST(v_steps - 2, 2);
     v_soft := GREATEST((v_steps * 0.7)::int, 1);
 
@@ -8285,10 +8294,25 @@ BEGIN
      WHERE id IN (v_id3, v_id4) AND (payload->>'_soft_cap_notified')::boolean;
     ASSERT v_note = 2, format('v71: the soft-cap notice is given once per turn (turns 2 and 3), got %s', v_note);
 
-    DELETE FROM stewards.work_queue WHERE id IN (v_id1, v_id2, v_id3, v_id4);
+    -- within one turn, four rounds from the soft cap toward the hard cap: one notice, not one every other round
+    INSERT INTO stewards.messages(session_id, role, content) VALUES ('pt-smoke-71', 'user', 'q4');
+    INSERT INTO stewards.messages(session_id, role, content, finish_reason)
+      SELECT 'pt-smoke-71', 'assistant', 't4-' || g, 'tool_calls' FROM generate_series(1, v_soft - 1) g;
+    v_q4 := (SELECT max(id) FROM stewards.messages WHERE session_id = 'pt-smoke-71' AND role = 'user');
+    FOR v_r IN 1..LEAST(4, v_hard - v_soft) LOOP
+        INSERT INTO stewards.messages(session_id, role, content, finish_reason)
+        VALUES ('pt-smoke-71', 'assistant', 't4-more-' || v_r, 'tool_calls');
+        v_ids := v_ids || stewards.chat_post_internal('work-item-chat', 'reason', 'pt-smoke-71', 'flexllama');
+    END LOOP;
+    SELECT count(*) INTO v_note FROM stewards.messages
+     WHERE session_id = 'pt-smoke-71' AND role = 'system' AND id > v_q4;
+    ASSERT v_note = 1, format('v71: one soft-cap notice per turn, not one every other round (got %s in %s rounds)', v_note, cardinality(v_ids));
+
+    UPDATE stewards.agents SET steps = v_keep WHERE family = 'work-item-chat';
+    DELETE FROM stewards.work_queue WHERE id IN (v_id1, v_id2, v_id3, v_id4) OR id = ANY(v_ids);
     DELETE FROM stewards.messages WHERE session_id = 'pt-smoke-71';
     DELETE FROM stewards.sessions WHERE id = 'pt-smoke-71';
-    RAISE NOTICE 'OK 138: tool rounds count per turn; a new user turn keeps its tools and gets its own soft-cap notice; one turn at its cap is still forced to answer (v71)';
+    RAISE NOTICE 'OK 138: tool rounds count per turn; a new user turn keeps its tools and gets its own soft-cap notice; one turn at its cap is still forced to answer; one notice per turn (v71)';
 END $vs138$;
 
 \echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v71 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn) is sound =='

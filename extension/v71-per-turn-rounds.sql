@@ -15,6 +15,9 @@
 -- Now every count starts after the session's latest user message, and the
 -- markers are read only when they were written under that same message
 -- (_cap_turn). A session with no user message counts every round, as before.
+-- Within a turn the markers are carried forward once written: v67 dropped them
+-- on every round that did not set them, so the soft-cap notice came every
+-- other round between the soft and hard caps.
 -- The body is v67's with only those sites changed.
 -- Oracle: virgin-smoke OK 138; extension/verify-71-per-turn-rounds.sql on a live record.
 -- =====================================================================
@@ -210,9 +213,17 @@ BEGIN
     IF v_inject_soft_notice THEN
         v_payload := v_payload || jsonb_build_object('_soft_cap_notified', true, '_soft_cap_injected_at_round', v_rounds_so_far,
                                                      '_cap_turn', v_turn);
+    ELSIF v_already_soft_notified THEN
+        -- v71: this turn's notice was given in an earlier round; carry its markers, or the strip below drops them
+        -- and the next round gives the notice again (v67 gave it every other round between the soft and hard caps)
+        v_payload := v_payload || jsonb_build_object('_soft_cap_notified', true,
+                                                     '_soft_cap_injected_at_round', v_inherited_markers -> '_soft_cap_injected_at_round',
+                                                     '_cap_turn', v_turn);
     END IF;
     IF v_is_rest THEN
         v_payload := v_payload || jsonb_build_object('_rested_at_round', v_rounds_so_far, '_cap_turn', v_turn);
+    ELSIF v_last_rested >= 0 THEN
+        v_payload := v_payload || jsonb_build_object('_rested_at_round', v_last_rested, '_cap_turn', v_turn);
     END IF;
 
     IF v_inherited_markers IS NOT NULL THEN
