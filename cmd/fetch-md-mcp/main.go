@@ -46,6 +46,7 @@ func main() {
 		userAgent  = flag.String("user-agent", defaultUserAgent, "HTTP User-Agent header")
 		timeoutSec = flag.Int("timeout", 30, "Per-request HTTP timeout in seconds")
 		maxBytes   = flag.Int64("max-bytes", 5*1024*1024, "Max response body bytes (0 = unlimited)")
+		chromeURL  = chromeURLFlag(flag.CommandLine)
 	)
 	flag.Parse()
 
@@ -63,7 +64,8 @@ func main() {
 		MaxBytes:   *maxBytes,
 		// Politeness floor (robots.txt + per-domain rate limit) for
 		// calls that set enforce_robots=true — see politeness.go.
-		Gate: newPoliteGate(client, *userAgent),
+		Gate:      newPoliteGate(client, *userAgent),
+		ChromeURL: *chromeURL,
 	}
 
 	srv := mcp.NewServer(&mcp.Implementation{
@@ -73,8 +75,8 @@ func main() {
 
 	registerFetchTools(srv, cfg)
 
-	log.Printf("server starting on stdio (mcp protocol); ua=%q timeout=%ds max-bytes=%d",
-		*userAgent, *timeoutSec, *maxBytes)
+	log.Printf("server starting on stdio (mcp protocol); ua=%q timeout=%ds max-bytes=%d remote-chrome=%t",
+		*userAgent, *timeoutSec, *maxBytes, *chromeURL != "")
 	if err := srv.Run(ctx, &mcp.StdioTransport{}); err != nil {
 		log.Fatalf("server.Run: %v", err)
 	}
