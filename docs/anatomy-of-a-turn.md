@@ -116,8 +116,12 @@ decides a rendering:
   70% the cold tiers, at 85% hot tiers truncate, at 95% it is crisis
   rendering. Each stage can scale its own pressure (a synthesize stage runs
   tighter than a gather stage).
-- The agent can talk back to its own context: messages carry `[ctx:xxxx]`
-  handles, and context tools let the agent **pin** (exempt from shedding),
+- The agent can talk back to its own context: every message has a `[ctx:xxxx]`
+  handle, listed with its role and an excerpt in the CONTEXT PRESSURE notice
+  and returned by `context_search` (the handle is not printed on the message
+  itself by default: a model on a long session learned to answer with nothing
+  but its own label; `context_inline_handles` in `stewards.config` restores
+  the inline form), and context tools let the agent **pin** (exempt from shedding),
   **mute** (collapse to a tombstone), or **compress** (force to engrams) any
   of them. A `remember`/`forget` pair maintains durable self-notes that
   survive sessions and render into the system prompt under a budget cap

@@ -8143,4 +8143,93 @@ BEGIN
 END
 $vs136$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v67 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round) is sound =='
+-- OK 137 (v70): the [ctx:handle] label is off the message by default. An
+-- agent family with context tools on composes a session whose older
+-- assistant and tool rows are addressable: none of them starts with a label,
+-- and the tail notice lists each foldable handle with its role and how the
+-- message begins. context_inline_handles = 'all' restores the pre-v70 render
+-- (the old assistant row is labeled; the tail is not); 'non-assistant' labels
+-- the old tool row and never the assistant. The defect this pins: a model on
+-- a long session read its own labeled turns and answered with only a label.
+DO $vs137$
+DECLARE
+    v_msgs    jsonb;
+    v_notice  text;
+    v_asst    text;
+    v_tool    text;
+    v_tail    text;
+    v_ah      text;
+    v_th      text;
+    v_n       int;
+    i         int;
+BEGIN
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature, context_tools_enabled)
+    VALUES ('smoke-ctx', '*', 'virgin smoke: inline handles off', 'primary', 'You are a smoke agent.', NULL, true);
+    INSERT INTO stewards.sessions (id, kind) VALUES ('smoke-ctx-sess', 'agent');
+    -- nine rows older than the 8-message tail: three user questions, three long
+    -- assistant answers, three long tool results (long enough to be foldable)
+    FOR i IN 1..3 LOOP
+        INSERT INTO stewards.messages (session_id, role, content, created_at)
+        VALUES ('smoke-ctx-sess', 'user', 'question ' || i, now() - (100 - i * 3) * interval '1 minute');
+        INSERT INTO stewards.messages (session_id, role, content, created_at)
+        VALUES ('smoke-ctx-sess', 'assistant',
+                repeat('An answer the assistant gave earlier in this session, long enough to be foldable. ', 4) || '#' || i,
+                now() - (99 - i * 3) * interval '1 minute');
+        INSERT INTO stewards.messages (session_id, role, content, tool_call_id, created_at)
+        VALUES ('smoke-ctx-sess', 'tool',
+                repeat('A tool result from earlier in this session, long enough to be foldable. ', 4) || '#' || i,
+                'call-' || i, now() - (98 - i * 3) * interval '1 minute');
+    END LOOP;
+    -- the 8-message tail, rendered raw whatever the setting
+    FOR i IN 1..8 LOOP
+        INSERT INTO stewards.messages (session_id, role, content, created_at)
+        VALUES ('smoke-ctx-sess', CASE WHEN i % 2 = 1 THEN 'user' ELSE 'assistant' END, 'tail ' || i,
+                now() - (20 - i) * interval '1 minute');
+    END LOOP;
+    SELECT stewards.context_handle(id) INTO v_ah FROM stewards.messages
+     WHERE session_id = 'smoke-ctx-sess' AND role = 'assistant' AND content LIKE '%#1';
+    SELECT stewards.context_handle(id) INTO v_th FROM stewards.messages
+     WHERE session_id = 'smoke-ctx-sess' AND role = 'tool' AND content LIKE '%#1';
+
+    -- default: no label on any history row; the notice names the handles
+    v_msgs := stewards.compose_messages('smoke-ctx', 'reason', 'smoke-ctx-sess');
+    SELECT count(*) INTO v_n FROM jsonb_array_elements(v_msgs) e
+     WHERE e ->> 'role' IN ('user', 'assistant', 'tool') AND e ->> 'content' LIKE '[ctx:%';
+    ASSERT v_n = 0, format('137: with inline handles off no history row starts with a label; %s did', v_n);
+    ASSERT stewards.config_get_text('context_inline_handles') = 'none', '137: the seeded default is none';
+    SELECT e ->> 'content' INTO v_notice FROM jsonb_array_elements(v_msgs) e
+     WHERE e ->> 'content' LIKE '[STEWARD NOTICE%' LIMIT 1;
+    ASSERT v_notice LIKE '%Foldable now%', '137: the tail notice carries the foldable list: ' || coalesce(v_notice, '<none>');
+    ASSERT v_notice LIKE '%[ctx:' || v_ah || '] assistant %"An answer the assistant gave earlier%',
+        '137: the notice lists the assistant handle with its role and an excerpt: ' || v_notice;
+    ASSERT v_notice LIKE '%[ctx:' || v_th || '] tool %"A tool result from earlier%',
+        '137: the notice lists the tool handle with its role and an excerpt: ' || v_notice;
+
+    -- all: the pre-v70 render; the old assistant row is labeled, the tail is not
+    UPDATE stewards.config SET value = '"all"'::jsonb WHERE key = 'context_inline_handles';
+    v_msgs := stewards.compose_messages('smoke-ctx', 'reason', 'smoke-ctx-sess');
+    SELECT e ->> 'content' INTO v_asst FROM jsonb_array_elements(v_msgs) e WHERE e ->> 'role' = 'assistant' AND e ->> 'content' LIKE '%#1';
+    SELECT e ->> 'content' INTO v_tool FROM jsonb_array_elements(v_msgs) e WHERE e ->> 'role' = 'tool' AND e ->> 'content' LIKE '%#1';
+    SELECT e ->> 'content' INTO v_tail FROM jsonb_array_elements(v_msgs) e WHERE e ->> 'content' = 'tail 8';
+    ASSERT v_asst LIKE '[ctx:' || v_ah || '] %', '137: all labels the old assistant row; got ' || left(v_asst, 40);
+    ASSERT v_tool LIKE '[ctx:' || v_th || '] %', '137: all labels the old tool row; got ' || left(v_tool, 40);
+    ASSERT v_tail = 'tail 8', '137: the tail is never labeled; got ' || coalesce(v_tail, '<missing>');
+
+    -- non-assistant: the tool row is labeled, the assistant row is not
+    UPDATE stewards.config SET value = '"non-assistant"'::jsonb WHERE key = 'context_inline_handles';
+    v_msgs := stewards.compose_messages('smoke-ctx', 'reason', 'smoke-ctx-sess');
+    SELECT e ->> 'content' INTO v_asst FROM jsonb_array_elements(v_msgs) e WHERE e ->> 'role' = 'assistant' AND e ->> 'content' LIKE '%#1';
+    SELECT e ->> 'content' INTO v_tool FROM jsonb_array_elements(v_msgs) e WHERE e ->> 'role' = 'tool' AND e ->> 'content' LIKE '%#1';
+    ASSERT v_asst NOT LIKE '[ctx:%', '137: non-assistant leaves the assistant row unlabeled; got ' || left(v_asst, 40);
+    ASSERT v_tool LIKE '[ctx:' || v_th || '] %', '137: non-assistant labels the old tool row; got ' || left(v_tool, 40);
+
+    UPDATE stewards.config SET value = '"none"'::jsonb WHERE key = 'context_inline_handles';
+    DELETE FROM stewards.messages WHERE session_id = 'smoke-ctx-sess';
+    DELETE FROM stewards.compose_budget_log WHERE session_id = 'smoke-ctx-sess';
+    DELETE FROM stewards.sessions WHERE id = 'smoke-ctx-sess';
+    DELETE FROM stewards.agents WHERE family = 'smoke-ctx';
+    RAISE NOTICE 'OK 137: the [ctx:handle] label is off the message by default and the notice lists each handle with its role and an excerpt; all restores the old render; non-assistant labels tool rows only (v70)';
+END
+$vs137$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v70 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message) is sound =='
