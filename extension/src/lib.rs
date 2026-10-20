@@ -901,6 +901,17 @@ extension_sql_file!(
     requires = ["create_v69_web_tools_untrusted"],
 );
 
+// v71-per-turn-rounds.sql: a chat's tool rounds count from the session's latest
+// user message, so a long-running chat session keeps its tools on every turn
+// instead of being forced to answer once its lifetime count passes the cap; the
+// soft-notice and rest markers apply per turn too.
+// Oracle: virgin-smoke OK 138; extension/verify-71-per-turn-rounds.sql on a live record.
+extension_sql_file!(
+    "../v71-per-turn-rounds.sql",
+    name = "create_v71_per_turn_rounds",
+    requires = ["create_v70_inline_handles_off"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
