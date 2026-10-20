@@ -29,6 +29,10 @@ type fetchConfig struct {
 	// Gate is the politeness floor (robots.txt + per-domain rate limit),
 	// engaged per call via enforce_robots — see politeness.go.
 	Gate *politeGate
+	// ChromeURL, when set, is the DevTools endpoint of a running headless
+	// Chromium (http://host:9222 or ws://...): js:true renders there, each
+	// fetch in its own browser context, instead of launching a local browser.
+	ChromeURL string
 }
 
 // politeGateCheck runs the politeness floor when a tool call asked for it.
