@@ -126,6 +126,7 @@ COPY v66-batch-dispatch.sql ./
 COPY v67-max-tokens.sql ./
 COPY v69-web-tools-untrusted.sql ./
 COPY v70-inline-handles-off.sql ./
+COPY v71-per-turn-rounds.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/
