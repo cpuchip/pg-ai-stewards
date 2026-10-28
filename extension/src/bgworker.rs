@@ -2482,7 +2482,9 @@ mod anthropic_image_tests {
                 {"type": "image_url", "image_url": {"url": "https://archive.org/download/x/page/n79_w1400.jpg"}}
             ]}]
         });
-        let out = anthropic_body_from_openai(&body, true);
+        // tools on (false): since v68 a single-round request (tools off, no assistant turn) gets no tail mark, and
+        // this test is about the parts; it ran red from v68 to v72 because these tests were only type-checked
+        let out = anthropic_body_from_openai(&body, false);
         let c = out["messages"][0]["content"].as_array().unwrap();
         assert_eq!(c.len(), 3);
         assert_eq!(c[0]["type"], "text");
@@ -2519,7 +2521,7 @@ mod anthropic_image_tests {
     #[test]
     fn string_content_is_unchanged_by_parts_handling() {
         let body = serde_json::json!({"model": "m", "messages": [{"role": "user", "content": "plain"}]});
-        let out = anthropic_body_from_openai(&body, true);
+        let out = anthropic_body_from_openai(&body, false);     // not single-round: see the test above
         assert_eq!(out["messages"][0]["content"][0]["text"], "plain");
         assert!(out["messages"][0]["content"][0].get("source").is_none());
     }
