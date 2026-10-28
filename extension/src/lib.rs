@@ -912,6 +912,17 @@ extension_sql_file!(
     requires = ["create_v70_inline_handles_off"],
 );
 
+// v72-cache-ttl.sql: agents.anthropic_options.cache_ttl ({"prefix","tail"}, 5m or 1h)
+// sets the prompt-cache lifetimes the anthropic translator marks (a 5m prefix
+// before a 1h tail refused by CHECK); config anthropic_cache_ttl is the instance
+// default; cost_events.cache_write_1h_tokens prices the 1-hour writes at
+// model_pricing.cache_write_1h_micro_per_mtok. Oracle: virgin-smoke OK 139.
+extension_sql_file!(
+    "../v72-cache-ttl.sql",
+    name = "create_v72_cache_ttl",
+    requires = ["create_v71_per_turn_rounds"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

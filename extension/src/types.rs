@@ -47,6 +47,9 @@ pub(crate) enum WorkOutcome {
         // OpenCode Zen do. Recorded to cost_events so cache discount
         // (cache_read ~10% of input rate) is applied accurately.
         cache_creation_tokens: Option<i32>,
+        // v72: the part of cache_creation_tokens written with the 1-hour TTL (Anthropic's
+        // usage.cache_creation.ephemeral_1h_input_tokens). None when the provider gives no split.
+        cache_creation_1h_tokens: Option<i32>,
         cache_read_tokens: Option<i32>,
         // ES.3.s5 — gateway-reported upstream inference cost, in
         // micro-dollars (usage.cost_details.upstream_inference_cost ×
