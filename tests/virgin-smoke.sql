@@ -8315,4 +8315,106 @@ BEGIN
     RAISE NOTICE 'OK 138: tool rounds count per turn; a new user turn keeps its tools and gets its own soft-cap notice; one turn at its cap is still forced to answer; one notice per turn (v71)';
 END $vs138$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v71 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 139 (v72): an agent's cache_ttl rides its chats (or the instance
+-- default does, when the agent has none and the default is valid); a 5m
+-- prefix before a 1h tail, an unknown lifetime and an unknown key are
+-- refused; 1-hour cache writes are priced at their own rate, or at the 5m
+-- rate with a no_1h_rate note; the older cost signatures still take every
+-- call they took (no "function is not unique"). Red on v71: no cache_ttl
+-- key allowed, no cache_write_1h columns, no 7- or 12-argument forms.
+-- ---------------------------------------------------------------------
+DO $vs139$
+DECLARE
+    v_q      bigint;
+    v_n      int := 0;
+    v_bad    jsonb;
+    v_micro  bigint;
+    v_id     bigint;
+    v_row    stewards.cost_events;
+    v_body   jsonb := jsonb_build_object('model', 'smoke-ttl-model', 'messages', jsonb_build_array(
+                 jsonb_build_object('role', 'user', 'content', 'x')));
+    -- the chat's options as the queue trigger leaves them
+    ride     text := $q$
+        INSERT INTO stewards.work_queue (kind, provider, payload, status)
+        VALUES ('chat', 'smoke-ttl-prov', jsonb_build_object('agent_family', $1, 'session_id', 'smoke-ttl-sess',
+                'body', $2), 'pending') RETURNING id$q$;
+BEGIN
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature, anthropic_options)
+    VALUES ('smoke-ttl', '*', 'virgin smoke: cache ttl', 'primary', 'You are a smoke agent.', NULL,
+            '{"output_config": {"effort": "low"}, "cache_ttl": {"prefix": "1h", "tail": "5m"}}'::jsonb);
+    INSERT INTO stewards.agents (family, model_match, description, mode, prompt, temperature)
+    VALUES ('smoke-ttl-plain', '*', 'virgin smoke: no options', 'primary', 'You are a smoke agent.', NULL);
+
+    EXECUTE ride INTO v_q USING 'smoke-ttl', v_body;
+    ASSERT (SELECT payload #> '{body,anthropic_options,cache_ttl}' FROM stewards.work_queue WHERE id = v_q)
+           = '{"prefix": "1h", "tail": "5m"}'::jsonb, '139: the agent''s cache_ttl rides the chat';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+
+    EXECUTE ride INTO v_q USING 'smoke-ttl-plain', v_body;
+    ASSERT (SELECT payload #> '{body,anthropic_options}' FROM stewards.work_queue WHERE id = v_q) IS NULL,
+        '139: no options and no default add nothing';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+
+    PERFORM stewards.config_set('anthropic_cache_ttl', '{"prefix": "1h"}'::jsonb, 'virgin smoke 139');
+    EXECUTE ride INTO v_q USING 'smoke-ttl-plain', v_body;
+    ASSERT (SELECT payload #> '{body,anthropic_options}' FROM stewards.work_queue WHERE id = v_q)
+           = '{"cache_ttl": {"prefix": "1h"}}'::jsonb, '139: the instance default fills an agent with none';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+    EXECUTE ride INTO v_q USING 'smoke-ttl', v_body;
+    ASSERT (SELECT payload #> '{body,anthropic_options,cache_ttl}' FROM stewards.work_queue WHERE id = v_q)
+           = '{"prefix": "1h", "tail": "5m"}'::jsonb, '139: the agent''s own cache_ttl wins over the default';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+    PERFORM stewards.config_set('anthropic_cache_ttl', '{"prefix": "5m", "tail": "1h"}'::jsonb, 'virgin smoke 139');
+    EXECUTE ride INTO v_q USING 'smoke-ttl-plain', v_body;
+    ASSERT (SELECT payload #> '{body,anthropic_options}' FROM stewards.work_queue WHERE id = v_q) IS NULL,
+        '139: a default the API would refuse is passed over';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+    DELETE FROM stewards.config WHERE key = 'anthropic_cache_ttl';
+
+    FOREACH v_bad IN ARRAY ARRAY['{"prefix": "5m", "tail": "1h"}', '{"tail": "1h"}', '{"prefix": "2h"}',
+                                  '{"prefix": "1h", "middle": "5m"}', '"1h"']::jsonb[] LOOP
+        BEGIN
+            UPDATE stewards.agents SET anthropic_options = jsonb_build_object('cache_ttl', v_bad) WHERE family = 'smoke-ttl';
+        EXCEPTION WHEN check_violation THEN
+            v_n := v_n + 1;
+        END;
+    END LOOP;
+    ASSERT v_n = 5, format('139: every refused cache_ttl refused; %s of 5', v_n);
+    UPDATE stewards.agents SET anthropic_options = '{"cache_ttl": {"prefix": "1h", "tail": "1h"}}' WHERE family = 'smoke-ttl';
+
+    -- pricing: 5m write $1.25/M, 1h write $2/M; a second model with no 1h rate
+    INSERT INTO stewards.model_pricing (provider, model, input_micro_per_mtok, output_micro_per_mtok,
+                                        cache_write_micro_per_mtok, cache_write_1h_micro_per_mtok, effective_at)
+    VALUES ('smoke-ttl-prov', 'smoke-ttl-model', 1000000, 5000000, 1250000, 2000000, now() - interval '1 day'),
+           ('smoke-ttl-prov', 'smoke-ttl-no1h', 1000000, 5000000, 1250000, NULL, now() - interval '1 day');
+    SELECT micro_dollars INTO v_micro FROM stewards.compute_cost('smoke-ttl-prov', 'smoke-ttl-model', 0, 0, 1000000, 0, 1000000);
+    ASSERT v_micro = 3250000, format('139: 1M 5m + 1M 1h writes = 1.25 + 2.00 dollars; got %s', v_micro);
+    SELECT micro_dollars INTO v_micro FROM stewards.compute_cost('smoke-ttl-prov', 'smoke-ttl-no1h', 0, 0, 0, 0, 1000000);
+    ASSERT v_micro = 1250000, format('139: no 1h rate prices them at the 5m rate; got %s', v_micro);
+
+    v_id := stewards.record_cost_event(NULL, 1, 'smoke-ttl-prov', 'smoke-ttl-model', 0, 0, 100, 24000, 0,
+                                       'smoke-ttl-sess', 'x', NULL);
+    SELECT * INTO v_row FROM stewards.cost_events WHERE id = v_id;
+    ASSERT v_row.cache_write_tokens = 100 AND v_row.cache_write_1h_tokens = 24000 AND v_row.micro_dollars = 48125
+           AND v_row.notes = 'x', format('139: the 12-argument form records both shares; got %s', to_jsonb(v_row));
+    v_id := stewards.record_cost_event(NULL, 1, 'smoke-ttl-prov', 'smoke-ttl-no1h', 0, 0, 0, 24000, 0,
+                                       'smoke-ttl-sess', 'x', NULL);
+    ASSERT (SELECT notes FROM stewards.cost_events WHERE id = v_id) = 'x | no_1h_rate(smoke-ttl-prov/smoke-ttl-no1h)',
+        '139: a 1h write with no 1h rate is noted';
+    -- the older forms, as every existing caller uses them: 6 and 11 arguments resolve, no 1h share
+    SELECT micro_dollars INTO v_micro FROM stewards.compute_cost('smoke-ttl-prov', 'smoke-ttl-model', 1000000, 0);
+    ASSERT v_micro = 1000000, '139: compute_cost with 4 arguments still resolves';
+    v_id := stewards.record_cost_event(NULL, 1, 'smoke-ttl-prov', 'smoke-ttl-model', 0, 0, 100, 0, 'smoke-ttl-sess');
+    ASSERT (SELECT cache_write_1h_tokens FROM stewards.cost_events WHERE id = v_id) = 0,
+        '139: record_cost_event with 9 arguments still resolves and records no 1h share';
+
+    DELETE FROM stewards.cost_events WHERE session_id = 'smoke-ttl-sess';
+    DELETE FROM stewards.model_pricing WHERE provider = 'smoke-ttl-prov';
+    DELETE FROM stewards.compose_budget_log WHERE session_id = 'smoke-ttl-sess';
+    DELETE FROM stewards.agents WHERE family IN ('smoke-ttl', 'smoke-ttl-plain');
+    RAISE NOTICE 'OK 139: cache_ttl rides its chats (or the valid default); refused shapes refused; 1-hour writes priced apart; older cost forms unchanged (v72)';
+END
+$vs139$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v72 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes) is sound =='

@@ -1307,6 +1307,7 @@ fn write_outcome(
                     reasoning_tokens,
                     reasoning_in_completion,
                     cache_creation_tokens,
+                    cache_creation_1h_tokens,
                     cache_read_tokens,
                     upstream_cost_micro,
                 }) => {
@@ -1371,10 +1372,13 @@ fn write_outcome(
                     // Errors logged, never propagated.
                     let in_tok = tokens_in.unwrap_or(0);
                     let out_tok = tokens_out.unwrap_or(0);
-                    let cache_write_tok = cache_creation_tokens.unwrap_or(0);
+                    // v72: cache_write_tokens is the 5-minute share and cache_write_1h_tokens the 1-hour one, each
+                    // priced at its own rate; a provider without the split reports the total, all of it 5-minute.
+                    let cache_write_1h_tok = cache_creation_1h_tokens.unwrap_or(0).max(0);
+                    let cache_write_tok = (cache_creation_tokens.unwrap_or(0) - cache_write_1h_tok).max(0);
                     let cache_read_tok = cache_read_tokens.unwrap_or(0);
 
-                    if in_tok > 0 || out_tok > 0 || cache_write_tok > 0 || cache_read_tok > 0 {
+                    if in_tok > 0 || out_tok > 0 || cache_write_tok > 0 || cache_write_1h_tok > 0 || cache_read_tok > 0 {
                         let wi_opt: Option<&str> = payload
                             .get("_work_item_id")
                             .and_then(|v| v.as_str());
@@ -1387,6 +1391,11 @@ fn write_outcome(
                         }
                         if let Some(t) = opts.and_then(|o| o.pointer("/thinking/type")).and_then(|v| v.as_str()) {
                             notes.push_str(&format!(" thinking={t}"));
+                        }
+                        // v72: the cache lifetimes the request was sent with, when the agent or the instance set them
+                        if opts.and_then(|o| o.get("cache_ttl")).is_some() {
+                            let (ttl, _) = CacheTtl::from_options(opts);
+                            notes.push_str(&format!(" cache_ttl={}/{}", CacheTtl::label(ttl.prefix), CacheTtl::label(ttl.tail)));
                         }
                         if let Some(r) = reasoning_tokens {
                             notes.push_str(&format!(" thinking_tokens={r}"));
@@ -1414,7 +1423,7 @@ fn write_outcome(
                                     THEN (SELECT count(*)::int + 1 FROM stewards.cost_events WHERE session_id = $7) \
                                   ELSE (SELECT count(*)::int + 1 FROM stewards.cost_events WHERE work_item_id = $1::uuid) \
                                 END, \
-                                $2, $3, $4, $5, $6, $8, $7, $9, $10)",
+                                $2, $3, $4, $5, $6, $11, $8, $7, $9, $10)",
                             Some(1),
                             &[
                                 wi_opt.into(),
@@ -1428,6 +1437,8 @@ fn write_outcome(
                                 notes.into(),
                                 // ES.3.s5: gateway-reported upstream cost.
                                 (*upstream_cost_micro).into(),
+                                // v72: the 1-hour share, the 12-argument form's p_cache_write_1h_tokens
+                                cache_write_1h_tok.into(),
                             ],
                         );
                         if let Err(e) = cost_result {
@@ -2482,7 +2493,9 @@ mod anthropic_image_tests {
                 {"type": "image_url", "image_url": {"url": "https://archive.org/download/x/page/n79_w1400.jpg"}}
             ]}]
         });
-        let out = anthropic_body_from_openai(&body, true);
+        // tools on (false): since v68 a single-round request (tools off, no assistant turn) gets no tail mark, and
+        // this test is about the parts; it ran red from v68 to v72 because these tests were only type-checked
+        let out = anthropic_body_from_openai(&body, false);
         let c = out["messages"][0]["content"].as_array().unwrap();
         assert_eq!(c.len(), 3);
         assert_eq!(c[0]["type"], "text");
@@ -2519,7 +2532,7 @@ mod anthropic_image_tests {
     #[test]
     fn string_content_is_unchanged_by_parts_handling() {
         let body = serde_json::json!({"model": "m", "messages": [{"role": "user", "content": "plain"}]});
-        let out = anthropic_body_from_openai(&body, true);
+        let out = anthropic_body_from_openai(&body, false);     // not single-round: see the test above
         assert_eq!(out["messages"][0]["content"][0]["text"], "plain");
         assert!(out["messages"][0]["content"][0].get("source").is_none());
     }
@@ -3187,6 +3200,12 @@ fn outcome_from_completion(
         .and_then(|u| u.get("cache_read_input_tokens"))
         .and_then(|v| v.as_i64())
         .map(|v| v as i32);
+    // v72: the 1-hour share of cache_creation_tokens, when the provider reports the split (Anthropic's
+    // usage.cache_creation, mapped by anthropic_completion); None elsewhere, and the whole write is the 5-minute kind.
+    let cache_creation_1h_tokens = usage
+        .and_then(|u| u.get("cache_creation_1h_input_tokens"))
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
 
     // ES.3.s5 — gateway-reported upstream inference cost. OpenCode Zen
     // streams usage.cost_details.upstream_inference_cost (float dollars)
@@ -3261,6 +3280,7 @@ fn outcome_from_completion(
         reasoning_tokens,
         reasoning_in_completion,
         cache_creation_tokens,
+        cache_creation_1h_tokens,
         cache_read_tokens,
         upstream_cost_micro,
     })
@@ -3959,7 +3979,14 @@ fn anthropic_body_from_openai(
     // v68: a tools-off request with no reply in it yet is the whole conversation (a stage's single call,
     // which compose may follow with a short notice); nothing will ever read its tail back from the cache.
     let single_round = is_single_round(tools_disabled, &out);
-    add_cache_breakpoints(&mut out, single_round);
+    let (ttl, normalized) = CacheTtl::from_options(body_orig.get("anthropic_options"));
+    #[cfg(not(test))]
+    if normalized {
+        pgrx::log!("stewards: cache_ttl prefix 5m with tail 1h is refused by the API; sending 5m throughout");
+    }
+    #[cfg(test)]
+    let _ = normalized;
+    add_cache_breakpoints(&mut out, single_round, ttl);
     out
 }
 
@@ -4169,8 +4196,12 @@ fn sniff_image(b: &[u8]) -> Option<&'static str> {
 /// content block of the final message (a tool loop's history grows by
 /// appending, so this turn's end is the next turn's cached prefix). A prefix
 /// shorter than the model's minimum cacheable length is simply not cached.
-/// The default 5-minute TTL is used; the 1-hour TTL ("ttl": "1h") bills
-/// writes at 2x input instead of 1.25x and is left off.
+/// v72: each mark's lifetime comes from the agent's anthropic_options.cache_ttl
+/// ({"prefix": "5m"|"1h", "tail": "5m"|"1h"}, see CacheTtl): the prefix marks are
+/// the tool, system and cache-break ones, the tail mark is the last message's.
+/// Absent, every mark is the bare 5-minute one, as before v72. A 1-hour write
+/// bills at 2x input instead of 1.25x and pays for gaps of 5 to 60 minutes
+/// between requests that share the prefix.
 /// v68: a line a stage template puts between the text its calls share (an exercise set, a chapter) and
 /// the text each call adds (one record). The anthropic translator splits the message there and marks the
 /// shared part for the prompt cache, so calls on the same set read it back instead of writing it again;
@@ -4202,12 +4233,60 @@ fn strip_cache_break_in(msgs: &mut [serde_json::Value]) {
     }
 }
 
+/// v72: a prompt-cache lifetime.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Ttl {
+    FiveMinutes,
+    OneHour,
+}
+
+/// v72: the lifetimes of the prefix marks and the tail mark, from body.anthropic_options.cache_ttl (put there
+/// from the agent's row or the instance default by attach_agent_anthropic_options; read here, never sent).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CacheTtl {
+    prefix: Ttl,
+    tail: Ttl,
+}
+
+impl CacheTtl {
+    /// Missing keys and values other than "1h" are 5 minutes. The API refuses a shorter mark before a longer one,
+    /// so a 5-minute prefix with a 1-hour tail comes back as 5 minutes throughout, with `true` so the caller can say
+    /// so (the agents CHECK refuses that pair; a body built elsewhere can still carry it).
+    fn from_options(opts: Option<&serde_json::Value>) -> (Self, bool) {
+        let ttl = opts.and_then(|o| o.get("cache_ttl"));
+        let pick = |k: &str| match ttl.and_then(|t| t.get(k)).and_then(|v| v.as_str()) {
+            Some("1h") => Ttl::OneHour,
+            _ => Ttl::FiveMinutes,
+        };
+        let (prefix, tail) = (pick("prefix"), pick("tail"));
+        if prefix == Ttl::FiveMinutes && tail == Ttl::OneHour {
+            return (Self { prefix, tail: Ttl::FiveMinutes }, true);
+        }
+        (Self { prefix, tail }, false)
+    }
+
+    fn label(t: Ttl) -> &'static str {
+        match t {
+            Ttl::FiveMinutes => "5m",
+            Ttl::OneHour => "1h",
+        }
+    }
+
+    /// The bare object for 5 minutes, exactly as before v72; "ttl": "1h" for an hour.
+    fn mark(t: Ttl) -> serde_json::Value {
+        match t {
+            Ttl::FiveMinutes => serde_json::json!({ "type": "ephemeral" }),
+            Ttl::OneHour => serde_json::json!({ "type": "ephemeral", "ttl": "1h" }),
+        }
+    }
+}
+
 fn is_single_round(tools_disabled: bool, out: &serde_json::Value) -> bool {
     tools_disabled && !out["messages"].as_array().map_or(false, |m| m.iter().any(|x| x["role"] == "assistant"))
 }
 
-fn add_cache_breakpoints(out: &mut serde_json::Value, single_round: bool) {
-    let eph = serde_json::json!({ "type": "ephemeral" });
+fn add_cache_breakpoints(out: &mut serde_json::Value, single_round: bool, ttl: CacheTtl) {
+    let eph = CacheTtl::mark(ttl.prefix);
     if let Some(last) = out
         .get_mut("tools")
         .and_then(|v| v.as_array_mut())
@@ -4240,6 +4319,7 @@ fn add_cache_breakpoints(out: &mut serde_json::Value, single_round: bool) {
     // The tail mark lets the next round read this prefix back (and lets this request read the last round's);
     // a request that is the whole conversation has neither, so it would only pay the cache write.
     if !single_round {
+        let eph = CacheTtl::mark(ttl.tail);
         let last = &mut msgs[n - 1];
         match last.get("content").cloned() {
             Some(serde_json::Value::String(t)) if !t.is_empty() => {
@@ -4301,7 +4381,7 @@ fn split_at_cache_break(m: &mut serde_json::Value, eph: &serde_json::Value) {
 ///                       max_tokens->length, tool_use->tool_calls)
 ///   input_tokens     -> usage.prompt_tokens
 ///   output_tokens    -> usage.completion_tokens
-fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::Value, String> {
+fn parse_anthropic_sse<R: std::io::Read>(resp: R) -> Result<serde_json::Value, String> {
     use std::io::BufRead;
 
     let reader = std::io::BufReader::new(resp);
@@ -4312,6 +4392,7 @@ fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::
     let mut input_tokens: Option<i64> = None;
     let mut output_tokens: Option<i64> = None;
     let mut cache_creation: Option<i64> = None;
+    let mut cache_creation_1h: Option<i64> = None;
     let mut cache_read: Option<i64> = None;
     // usage.output_tokens_details.thinking_tokens on the closing message_delta.
     // Claude 5.5 models think by default (Haiku adaptively), and these tokens
@@ -4359,6 +4440,10 @@ fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::
                             .get("cache_creation_input_tokens")
                             .and_then(|v| v.as_i64())
                             .or(cache_creation);
+                        cache_creation_1h = u
+                            .pointer("/cache_creation/ephemeral_1h_input_tokens")
+                            .and_then(|v| v.as_i64())
+                            .or(cache_creation_1h);
                         cache_read = u
                             .get("cache_read_input_tokens")
                             .and_then(|v| v.as_i64())
@@ -4441,6 +4526,7 @@ fn parse_anthropic_sse(resp: reqwest::blocking::Response) -> Result<serde_json::
         input_tokens,
         output_tokens,
         cache_creation,
+        cache_creation_1h,
         cache_read,
         thinking_tokens,
     ))
@@ -4459,6 +4545,7 @@ fn anthropic_completion(
     input_tokens: Option<i64>,
     output_tokens: Option<i64>,
     cache_creation: Option<i64>,
+    cache_creation_1h: Option<i64>,
     cache_read: Option<i64>,
     thinking_tokens: Option<i64>,
 ) -> serde_json::Value {
@@ -4516,6 +4603,10 @@ fn anthropic_completion(
             serde_json::json!(c),
         );
     }
+    // v72: the 1-hour share of the cache writes (usage.cache_creation.ephemeral_1h_input_tokens), inside the total
+    if let Some(c) = cache_creation_1h {
+        usage.insert("cache_creation_1h_input_tokens".to_string(), serde_json::json!(c));
+    }
     if let Some(c) = cache_read {
         usage.insert("cache_read_input_tokens".to_string(), serde_json::json!(c));
     }
@@ -4571,7 +4662,125 @@ fn completion_from_anthropic_message(msg: &serde_json::Value) -> serde_json::Val
         n("/input_tokens"),
         n("/output_tokens"),
         n("/cache_creation_input_tokens"),
+        n("/cache_creation/ephemeral_1h_input_tokens"),
         n("/cache_read_input_tokens"),
         n("/output_tokens_details/thinking_tokens"),
     )
+}
+
+#[cfg(test)]
+fn cache_ttl_tests_fixture() -> serde_json::Value {
+    serde_json::json!({
+        "model": "claude-opus-5-5",
+        "max_tokens": 1000,
+        "messages": [
+            {"role": "system", "content": "You are a careful reader."},
+            {"role": "user", "content": "The briefing, shared by every turn.\n<<<cache-break>>>\nThe message in front of you."},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "channel_search", "arguments": "{\"q\":\"mirror\"}"}}]},
+            {"role": "tool", "tool_call_id": "c1", "content": "{\"count\": 10}"}
+        ],
+        "tools": [
+            {"type": "function", "function": {"name": "channel_search", "description": "Search.", "parameters": {"type": "object"}}},
+            {"type": "function", "function": {"name": "say", "description": "Post.", "parameters": {"type": "object"}}}
+        ]
+    })
+}
+
+#[cfg(test)]
+mod cache_ttl_tests {
+    // v72: agents.anthropic_options.cache_ttl {prefix, tail} sets each cache mark's lifetime. The prefix marks (last
+    // tool, system, the cache-break head) and the tail mark (the last message) are set apart; absent, the body is
+    // byte for byte what it was before v72.
+    use super::{anthropic_body_from_openai, cache_ttl_tests_fixture, completion_from_anthropic_message};
+
+    fn with_ttl(ttl: serde_json::Value) -> serde_json::Value {
+        let mut b = cache_ttl_tests_fixture();
+        b["anthropic_options"] = serde_json::json!({"output_config": {"effort": "medium"}, "cache_ttl": ttl});
+        anthropic_body_from_openai(&b, false)
+    }
+
+    // the four marks in render order: last tool, system, the cache-break head, the tail
+    fn marks(out: &serde_json::Value) -> Vec<serde_json::Value> {
+        let tool = out["tools"].as_array().unwrap().last().unwrap()["cache_control"].clone();
+        let system = out["system"][0]["cache_control"].clone();
+        let head = out["messages"][0]["content"][0]["cache_control"].clone();
+        let last = out["messages"].as_array().unwrap().last().unwrap();
+        let tail = last["content"].as_array().unwrap().last().unwrap()["cache_control"].clone();
+        vec![tool, system, head, tail]
+    }
+
+    #[test]
+    fn default_body_is_unchanged() {
+        // captured from 0c56876 (before v72) for this fixture
+        let expected: serde_json::Value = serde_json::from_str(r#"{"max_tokens":1000,"messages":[{"content":[{"cache_control":{"type":"ephemeral"},"text":"The briefing, shared by every turn.\n","type":"text"},{"text":"The message in front of you.","type":"text"}],"role":"user"},{"content":[{"id":"c1","input":{"q":"mirror"},"name":"channel_search","type":"tool_use"}],"role":"assistant"},{"content":[{"cache_control":{"type":"ephemeral"},"content":"{\"count\": 10}","tool_use_id":"c1","type":"tool_result"}],"role":"user"}],"model":"claude-opus-5-5","stream":true,"system":[{"cache_control":{"type":"ephemeral"},"text":"You are a careful reader.","type":"text"}],"tools":[{"description":"Search.","input_schema":{"type":"object"},"name":"channel_search"},{"cache_control":{"type":"ephemeral"},"description":"Post.","input_schema":{"type":"object"},"name":"say"}]}"#).unwrap();
+        assert_eq!(anthropic_body_from_openai(&cache_ttl_tests_fixture(), false), expected);
+    }
+
+    #[test]
+    fn one_hour_prefix_and_five_minute_tail() {
+        let out = with_ttl(serde_json::json!({"prefix": "1h", "tail": "5m"}));
+        let h = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+        let m = serde_json::json!({"type": "ephemeral"});
+        assert_eq!(marks(&out), vec![h.clone(), h.clone(), h, m]);
+        assert!(!out.to_string().contains("cache_ttl"), "cache_ttl never reaches the request: {out}");
+        assert_eq!(out["output_config"], serde_json::json!({"effort": "medium"}));
+    }
+
+    #[test]
+    fn one_hour_both() {
+        let out = with_ttl(serde_json::json!({"prefix": "1h", "tail": "1h"}));
+        let h = serde_json::json!({"type": "ephemeral", "ttl": "1h"});
+        assert_eq!(marks(&out), vec![h.clone(), h.clone(), h.clone(), h]);
+    }
+
+    #[test]
+    fn a_shorter_prefix_before_a_longer_tail_is_normalized() {
+        // the API refuses a 5m mark before a 1h one; the tail falls back to 5m
+        for ttl in [serde_json::json!({"prefix": "5m", "tail": "1h"}), serde_json::json!({"tail": "1h"})] {
+            let out = with_ttl(ttl.clone());
+            assert!(!out.to_string().contains("\"ttl\""), "{ttl} normalizes to 5m everywhere: {out}");
+        }
+    }
+
+    #[test]
+    fn batch_usage_carries_the_one_hour_share() {
+        let msg = serde_json::json!({
+            "id": "m", "type": "message", "role": "assistant", "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 4, "output_tokens": 9, "cache_creation_input_tokens": 24100,
+                      "cache_read_input_tokens": 0,
+                      "cache_creation": {"ephemeral_5m_input_tokens": 100, "ephemeral_1h_input_tokens": 24000}}
+        });
+        let c = completion_from_anthropic_message(&msg);
+        assert_eq!(c["usage"]["cache_creation_input_tokens"], 24100);
+        assert_eq!(c["usage"]["cache_creation_1h_input_tokens"], 24000);
+        let old = serde_json::json!({"content": [], "usage": {"input_tokens": 1, "output_tokens": 1,
+                                     "cache_creation_input_tokens": 50}});
+        assert!(completion_from_anthropic_message(&old)["usage"].get("cache_creation_1h_input_tokens").is_none());
+    }
+
+    // the streamed path, end to end: message_start's usage split reaches the outcome the cost row is written from
+    fn streamed(usage: &str) -> (Option<i32>, Option<i32>, Option<i32>) {
+        let sse = format!(
+            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"model\":\"claude-opus-5-5\",\"usage\":{usage}}}}}\n\n\
+             event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"ok\"}}}}\n\n\
+             event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"output_tokens\":9}}}}\n\n"
+        );
+        let parsed = super::parse_anthropic_sse(sse.as_bytes()).unwrap();
+        match super::outcome_from_completion(parsed, "claude-opus-5-5", "s".into(), "f".into(), "claude-opus-5-5".into()) {
+            Ok(crate::types::WorkOutcome::Chatted { cache_creation_tokens, cache_creation_1h_tokens, cache_read_tokens, .. }) => {
+                (cache_creation_tokens, cache_creation_1h_tokens, cache_read_tokens)
+            }
+            other => panic!("not a chat outcome: {:?}", other.is_ok()),
+        }
+    }
+
+    #[test]
+    fn streamed_usage_splits_the_one_hour_share() {
+        let split = r#"{"input_tokens":4,"cache_creation_input_tokens":24100,"cache_read_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":24000}}"#;
+        assert_eq!(streamed(split), (Some(24100), Some(24000), Some(7)));
+        let plain = r#"{"input_tokens":4,"cache_creation_input_tokens":50,"cache_read_input_tokens":0}"#;
+        assert_eq!(streamed(plain), (Some(50), None, Some(0)));
+    }
 }
