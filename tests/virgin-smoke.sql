@@ -8634,4 +8634,93 @@ BEGIN
     RAISE NOTICE 'OK 141: the soft-cap notice is v04''s text unless set; stretch ends the stretch, not the task; a template is filled; the agent''s wording wins over the instance''s through chat_post_internal (v74)';
 END $vs141$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v74 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults, v74 = soft-cap notice wording) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 142 (v75): one thing, one entity. A name resolves to the same entity
+-- every time (exact name, then alias, then most relationships, then oldest);
+-- lore_entity lists namesakes; world_entity_merge folds duplicates
+-- (relationships moved, repeats and self-links dropped, names kept as
+-- aliases, sources joined, what was folded recorded), and the tool says which
+-- namesakes are left; world_entity_delete refuses an ambiguous name and takes
+-- a kind; the two tools ship inactive. Red on v74: no world_entity_lookup,
+-- world_entity_merge, world_entity_delete.
+-- ---------------------------------------------------------------------
+DO $vs142$
+DECLARE
+    v_w     bigint;
+    v_a1    bigint;
+    v_a2    bigint;
+    v_a3    bigint;
+    v_ta    bigint;
+    v_void  bigint;
+    v_paper bigint;
+    v_r     jsonb;
+    v_rels  text[];
+    v_n     int;
+BEGIN
+    PERFORM stewards.world_upsert('smoke-v75', 'Smoke v75', 'virgin smoke: merging');
+    SELECT world_id INTO v_w FROM stewards.worlds WHERE slug = 'smoke-v75';
+    v_a1 := stewards.world_entity_upsert('smoke-v75', 'idea', 'Amaterasu particle', 'as idea', '{}', '[{"by": "a1"}]');
+    v_a2 := stewards.world_entity_upsert('smoke-v75', 'event', 'Amaterasu particle', 'as event', '{}', '[{"by": "a2"}]');
+    v_a3 := stewards.world_entity_upsert('smoke-v75', 'object', 'Amaterasu particle', 'as object', '{"OMG2"}', '[{"by": "a3"}]');
+    v_ta := stewards.world_entity_upsert('smoke-v75', 'project', 'Telescope Array');
+    v_void := stewards.world_entity_upsert('smoke-v75', 'place', 'Local Void');
+    v_paper := stewards.world_entity_upsert('smoke-v75', 'paper', 'TA paper');
+    INSERT INTO stewards.world_edges (world_id, src_entity, dst_entity, rel_type) VALUES
+        (v_w, v_a2, v_ta, 'detected_by'), (v_w, v_a1, v_ta, 'detected_by'), (v_w, v_a3, v_void, 'points_toward'),
+        (v_w, v_a1, v_a2, 'same_as'), (v_w, v_paper, v_a2, 'reports'), (v_w, v_paper, v_a1, 'reports');
+
+    -- the lookup: twins tied on relationships (3 each) resolve to the oldest; one more decides it, every time
+    ASSERT stewards.world_entity_lookup(v_w, 'Amaterasu particle') = v_a1, '142: a tie resolves to the oldest twin';
+    -- world_edge_upsert lands on that same twin (v11's lookup met them in index order: the event first)
+    PERFORM stewards.world_edge_upsert('smoke-v75', 'TA paper', 'Amaterasu particle', 'cites');
+    ASSERT EXISTS (SELECT 1 FROM stewards.world_edges WHERE src_entity = v_paper AND dst_entity = v_a1 AND rel_type = 'cites'),
+        '142: world_edge_upsert lands on the twin the lookup names';
+    INSERT INTO stewards.world_edges (world_id, src_entity, dst_entity, rel_type) VALUES (v_w, v_a2, v_void, 'seen_toward'), (v_w, v_a2, v_paper, 'discussed_in');
+    ASSERT stewards.world_entity_lookup(v_w, 'Amaterasu particle') = v_a2
+           AND stewards.world_entity_lookup(v_w, 'Amaterasu particle') = v_a2, '142: the twin with the most relationships, every time';
+    ASSERT stewards.world_entity_lookup(v_w, 'OMG2') = v_a3, '142: an alias resolves';
+    v_r := stewards.lore_entity_tool('{"world_slug": "smoke-v75", "name": "Amaterasu particle"}');
+    ASSERT v_r #> '{entity,namesakes}' = '["idea", "object"]'::jsonb, format('142: lore_entity lists namesakes (got %s)', v_r -> 'entity');
+
+    -- the tool: ambiguous keep refused; one kind at a time says what is left; then all at once
+    v_r := stewards.world_entity_merge_tool('{"world_slug": "smoke-v75", "name": "Amaterasu particle"}');
+    ASSERT v_r ? 'error' AND jsonb_array_length(v_r -> 'namesakes') = 3, '142: an ambiguous keep is refused with the namesakes';
+    v_r := stewards.world_entity_merge_tool('{"world_slug": "smoke-v75", "name": "Amaterasu particle", "kind": "event", "from_kind": "object"}');
+    ASSERT v_r -> 'still_here' = '["idea"]'::jsonb, format('142: one kind folded, the rest named (got %s)', v_r);
+    v_r := stewards.world_entity_merge_tool('{"world_slug": "smoke-v75", "name": "Amaterasu particle", "kind": "event"}');
+    ASSERT v_r -> 'still_here' = 'null'::jsonb AND jsonb_array_length(v_r -> 'folded_in') = 1, format('142: the rest folded (got %s)', v_r);
+    SELECT count(*) INTO v_n FROM stewards.world_entities WHERE world_id = v_w AND name = 'Amaterasu particle';
+    ASSERT v_n = 1, '142: one entity left';
+    SELECT array_agg(rel_type ORDER BY rel_type) INTO v_rels FROM stewards.world_edges WHERE src_entity = v_a2 OR dst_entity = v_a2;
+    ASSERT v_rels = '{cites,detected_by,discussed_in,points_toward,reports,seen_toward}', format('142: relationships moved, repeats and self-links dropped (got %s)', v_rels);
+    ASSERT (SELECT aliases FROM stewards.world_entities WHERE entity_id = v_a2) = '{OMG2}', '142: aliases carried over';
+    ASSERT (SELECT jsonb_array_length(source_refs) FROM stewards.world_entities WHERE entity_id = v_a2) = 3, '142: sources joined';
+    ASSERT (SELECT jsonb_array_length(metadata -> 'merged') FROM stewards.world_entities WHERE entity_id = v_a2) = 2, '142: what was folded is recorded';
+    ASSERT (SELECT summary FROM stewards.world_entities WHERE entity_id = v_a2) = 'as event', '142: the kept summary stays unless one is given';
+
+    -- another name for the same thing becomes an alias
+    PERFORM stewards.world_entity_upsert('smoke-v75', 'event', 'TA Amaterasu event');
+    v_r := stewards.world_entity_merge_tool('{"world_slug": "smoke-v75", "name": "Amaterasu particle", "from": "TA Amaterasu event", "summary": "the 244 EeV event"}');
+    ASSERT (SELECT aliases FROM stewards.world_entities WHERE entity_id = v_a2) = '{OMG2,"TA Amaterasu event"}'
+           AND (SELECT summary FROM stewards.world_entities WHERE entity_id = v_a2) = 'the 244 EeV event',
+        '142: a second name folds in as an alias, and a given summary replaces the kept one';
+    ASSERT stewards.world_entity_merge_tool('{"world_slug": "smoke-v75", "name": "Telescope Array"}') ? 'error', '142: nothing to fold is refused';
+
+    -- delete: ambiguous refused, by kind removes one
+    PERFORM stewards.world_entity_upsert('smoke-v75', 'agent', 'Thunk');
+    PERFORM stewards.world_entity_upsert('smoke-v75', 'idea', 'Thunk');
+    ASSERT stewards.world_entity_delete_tool('{"world_slug": "smoke-v75", "name": "Thunk"}') ? 'error', '142: an ambiguous delete is refused';
+    v_r := stewards.world_entity_delete_tool('{"world_slug": "smoke-v75", "name": "Thunk", "kind": "idea"}');
+    ASSERT (v_r ->> 'removed')::int = 1 AND (SELECT kind FROM stewards.world_entities WHERE world_id = v_w AND name = 'Thunk') = 'agent',
+        '142: a delete by kind removes that one';
+    ASSERT NOT EXISTS (SELECT 1 FROM stewards.world_entity_namesakes('smoke-v75')), '142: no namesakes left';
+
+    -- the tools ship inactive
+    ASSERT (SELECT bool_and(NOT active) FROM stewards.tool_defs WHERE name IN ('lore_merge', 'lore_forget'))
+           AND (SELECT count(*) FROM stewards.tool_defs WHERE name IN ('lore_merge', 'lore_forget')) = 2, '142: lore_merge and lore_forget ship inactive';
+
+    DELETE FROM stewards.worlds WHERE slug = 'smoke-v75';
+    RAISE NOTICE 'OK 142: a name resolves to the same entity every time; duplicates fold into one (relationships moved, names kept as aliases, what is left named); a delete takes a kind; the tools ship inactive (v75)';
+END $vs142$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v75 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults, v74 = soft-cap notice wording, v75 = entity merge) is sound =='

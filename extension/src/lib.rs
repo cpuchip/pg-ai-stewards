@@ -945,6 +945,17 @@ extension_sql_file!(
     requires = ["create_v73_instance_defaults"],
 );
 
+// v75-lore-merge.sql: one thing, one entity. world_entity_lookup resolves a name
+// the same way every time (edge_upsert, lore_entity, lore_neighbors use it);
+// world_entity_merge folds duplicates (relationships moved, names kept as aliases);
+// world_entity_delete takes a kind; the lore_merge and lore_forget tools ship
+// inactive. No schema change. Oracle: virgin-smoke OK 142.
+extension_sql_file!(
+    "../v75-lore-merge.sql",
+    name = "create_v75_lore_merge",
+    requires = ["create_v74_soft_cap_notice"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
