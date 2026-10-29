@@ -956,6 +956,16 @@ extension_sql_file!(
     requires = ["create_v74_soft_cap_notice"],
 );
 
+// v76-permission-default.sql: tool_permission's fallback is a setting:
+// agent_family_defaults.tool_default, else config tool_permission_default, else
+// allow (unchanged when unset). Explicit agent_tool_perms rules still win.
+// Oracle: virgin-smoke OK 143.
+extension_sql_file!(
+    "../v76-permission-default.sql",
+    name = "create_v76_permission_default",
+    requires = ["create_v75_lore_merge"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
