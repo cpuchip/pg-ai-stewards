@@ -77,3 +77,4 @@ COPY v69-web-tools-untrusted.sql ./
 COPY v70-inline-handles-off.sql ./
 COPY v71-per-turn-rounds.sql ./
 COPY v72-cache-ttl.sql ./
+COPY v73-instance-defaults.sql ./

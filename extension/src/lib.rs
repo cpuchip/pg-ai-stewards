@@ -923,6 +923,18 @@ extension_sql_file!(
     requires = ["create_v71_per_turn_rounds"],
 );
 
+// v73-instance-defaults.sql: defaults an instance should not have to override.
+// config role_default answers a core role with no alias member (and an unmapped
+// role is refused by name in dispatch_chat_turn); the watchman starts off on an
+// install that never ran a pass; model_capability.accepts_temperature drops a
+// chat's temperature for a model that refuses one; config chat_default_family
+// replaces work-item-chat as chat_agent_family's fallback. Oracle: virgin-smoke OK 140.
+extension_sql_file!(
+    "../v73-instance-defaults.sql",
+    name = "create_v73_instance_defaults",
+    requires = ["create_v72_cache_ttl"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

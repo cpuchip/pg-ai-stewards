@@ -8417,4 +8417,154 @@ BEGIN
 END
 $vs139$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v72 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 140 (v73): defaults an instance should not have to override. A core
+-- role with no qualifying member takes config role_default (under the same
+-- checks; unset, nothing changes), and dispatch_chat_turn refuses an
+-- unmapped core role by name; the watchman starts off on an install that has
+-- never run a pass, once, and a running one is left alone, while the
+-- model-unconfigured bell still rings; a chat for a model marked
+-- accepts_temperature = false leaves the queue without a temperature; config
+-- chat_default_family replaces work-item-chat as the chat fallback. Red on
+-- v72: no core_roles, role_default, watchman_default_off, accepts_temperature.
+-- ---------------------------------------------------------------------
+DO $vs140$
+DECLARE
+    v_ex    jsonb;
+    v_p     text;
+    v_m     text;
+    v_n     int;
+    v_msg   text;
+    v_q     bigint;
+    v_dp    jsonb := stewards.config_get('default_provider');
+    v_dm    jsonb := stewards.config_get('default_model');
+    v_wp    text;
+    v_wm    text;
+    v_off   boolean;
+    v_on    boolean;
+    v_chat  text := $q$
+        INSERT INTO stewards.work_queue (kind, provider, payload, status)
+        VALUES ('chat', 'smoke-v73-prov', jsonb_build_object('session_id', 'smoke-v73-sess', 'body',
+                jsonb_build_object('model', $1::text, 'temperature', 0.7, 'messages', jsonb_build_array(
+                    jsonb_build_object('role', 'user', 'content', 'x')))), 'pending') RETURNING id$q$;
+BEGIN
+    -- §1 role_default: every ingest member excluded, so the role has none that qualifies
+    SELECT coalesce(jsonb_agg(jsonb_build_object('provider', provider, 'model', provider_model)), '[]'::jsonb)
+      INTO v_ex FROM stewards.model_aliases WHERE alias = 'ingest';
+    DELETE FROM stewards.config WHERE key = 'role_default';
+    SELECT count(*) INTO v_n FROM stewards.pick_alias_member('ingest', false, v_ex);
+    ASSERT v_n = 0, '140: no member and no role_default gives no row, as before';
+    PERFORM stewards.config_set('role_default', '{"provider": "smoke-v73-prov", "model": "smoke-v73-model"}'::jsonb);
+    SELECT m.provider, m.model INTO v_p, v_m FROM stewards.pick_alias_member('ingest', false, v_ex) m;
+    ASSERT v_p = 'smoke-v73-prov' AND v_m = 'smoke-v73-model', '140: a core role with no member takes role_default';
+    SELECT count(*) INTO v_n FROM stewards.pick_alias_member('smoke-v73-not-a-role', false, '[]'::jsonb);
+    ASSERT v_n = 0, '140: role_default answers the core roles only';
+    SELECT count(*) INTO v_n FROM stewards.pick_alias_member('ingest', false,
+        v_ex || '[{"provider": "smoke-v73-prov", "model": "smoke-v73-model"}]'::jsonb);
+    ASSERT v_n = 0, '140: a role_default already tried is excluded like any member';
+    INSERT INTO stewards.model_capability (provider, model, usable) VALUES ('smoke-v73-prov', 'smoke-v73-model', false);
+    SELECT count(*) INTO v_n FROM stewards.pick_alias_member('ingest', false, v_ex);
+    ASSERT v_n = 0, '140: an unusable role_default is passed over';
+    DELETE FROM stewards.model_capability WHERE provider = 'smoke-v73-prov';
+
+    -- the dashboard path: critic with every member disabled
+    CREATE TEMP TABLE vs140_critic ON COMMIT DROP AS
+        SELECT provider, provider_model FROM stewards.model_aliases WHERE alias = 'critic' AND enabled;
+    UPDATE stewards.model_aliases SET enabled = false WHERE alias = 'critic';
+    DELETE FROM stewards.config WHERE key = 'role_default';
+    BEGIN
+        PERFORM stewards.dispatch_chat_turn('smoke-v73-chat-1', 'hi', 'work-item-chat', 'critic');
+        v_msg := 'no error';
+    EXCEPTION WHEN raise_exception THEN
+        v_msg := SQLERRM;
+    END;
+    ASSERT v_msg = 'role critic has no model: add a model_aliases row or set role_default',
+        format('140: an unmapped core role is refused by name (got: %s)', v_msg);
+    PERFORM stewards.config_set('role_default', '{"provider": "smoke-v73-prov", "model": "smoke-v73-model"}'::jsonb);
+    PERFORM stewards.dispatch_chat_turn('smoke-v73-chat-2', 'hi', 'work-item-chat', 'critic');
+    ASSERT (SELECT provider FROM stewards.work_queue WHERE kind = 'chat' AND payload ->> 'session_id' = 'smoke-v73-chat-2'
+             ORDER BY id DESC LIMIT 1) = 'smoke-v73-prov',
+        '140: with role_default set, the same chat is queued for it';
+    DELETE FROM stewards.work_queue WHERE kind = 'chat' AND payload ->> 'session_id' = 'smoke-v73-chat-2';
+    UPDATE stewards.model_aliases a SET enabled = true FROM vs140_critic c
+     WHERE a.alias = 'critic' AND a.provider = c.provider AND a.provider_model = c.provider_model;
+    DELETE FROM stewards.config WHERE key = 'role_default';
+
+    -- §2 the watchman: off on this virgin install, and the marker says the migration did it
+    ASSERT (SELECT column_default FROM information_schema.columns WHERE table_schema = 'stewards'
+             AND table_name = 'watchman_config' AND column_name = 'schedule_enabled') = 'false',
+        '140: schedule_enabled defaults to false';
+    ASSERT NOT (SELECT schedule_enabled FROM stewards.watchman_config WHERE id = 1),
+        '140: a virgin install starts with the watchman schedule off';
+    ASSERT stewards.config_get('v73_watchman_default') = 'true'::jsonb, '140: the migration recorded turning it off';
+    -- a watchman that has run is left on, and the marker holds it once recorded
+    DELETE FROM stewards.config WHERE key = 'v73_watchman_default';
+    UPDATE stewards.watchman_config SET schedule_enabled = true WHERE id = 1;
+    INSERT INTO stewards.watchman_passes (pass_id, provider, model, status) VALUES ('smoke-v73-pass', 'p', 'm', 'completed');
+    ASSERT NOT stewards.watchman_default_off() AND (SELECT schedule_enabled FROM stewards.watchman_config WHERE id = 1),
+        '140: a watchman with a pass on record is left on';
+    DELETE FROM stewards.watchman_passes WHERE pass_id = 'smoke-v73-pass';
+    ASSERT NOT stewards.watchman_default_off() AND (SELECT schedule_enabled FROM stewards.watchman_config WHERE id = 1),
+        '140: applied once: the recorded marker holds it';
+    -- a never-run install is turned off (earlier sections leave passes behind: emptied here, in a subtransaction
+    -- rolled back by the sentinel, so this section leaves them as it found them)
+    DELETE FROM stewards.config WHERE key = 'v73_watchman_default';
+    BEGIN
+        TRUNCATE stewards.watchman_passes CASCADE;
+        v_off := stewards.watchman_default_off();
+        v_on  := (SELECT schedule_enabled FROM stewards.watchman_config WHERE id = 1);
+        RAISE EXCEPTION 'vs140_rollback';
+    EXCEPTION WHEN raise_exception THEN
+        IF SQLERRM <> 'vs140_rollback' THEN RAISE; END IF;
+    END;
+    ASSERT v_off AND NOT v_on, '140: a never-run install is turned off';
+    PERFORM stewards.config_set('v73_watchman_default', 'true'::jsonb);
+    UPDATE stewards.watchman_config SET schedule_enabled = false WHERE id = 1;
+    -- the bell rings without a pass when nothing is configured, at most once a day
+    SELECT default_provider, default_model INTO v_wp, v_wm FROM stewards.watchman_config WHERE id = 1;
+    UPDATE stewards.watchman_config SET default_provider = NULL, default_model = NULL WHERE id = 1;
+    DELETE FROM stewards.config WHERE key IN ('default_provider', 'default_model');
+    DELETE FROM stewards.hinge_reviews WHERE kind = 'model-unconfigured' AND subject = 'watchman';
+    SELECT count(*) INTO v_n FROM stewards.watchman_passes;
+    PERFORM stewards.watchman_scheduler_fire();
+    ASSERT (SELECT count(*) FROM stewards.hinge_reviews WHERE kind = 'model-unconfigured' AND subject = 'watchman') = 1,
+        '140: with the schedule off and no model, the scheduler still rings the bell';
+    PERFORM stewards.watchman_scheduler_fire();
+    ASSERT (SELECT count(*) FROM stewards.hinge_reviews WHERE kind = 'model-unconfigured' AND subject = 'watchman') = 1,
+        '140: once, not every tick';
+    ASSERT (SELECT count(*) FROM stewards.watchman_passes) = v_n, '140: and no pass started';
+    DELETE FROM stewards.hinge_reviews WHERE kind = 'model-unconfigured' AND subject = 'watchman';
+    UPDATE stewards.watchman_config SET default_provider = v_wp, default_model = v_wm WHERE id = 1;
+    IF v_dp IS NOT NULL THEN PERFORM stewards.config_set('default_provider', v_dp); END IF;
+    IF v_dm IS NOT NULL THEN PERFORM stewards.config_set('default_model', v_dm); END IF;
+
+    -- §3 a model that refuses a temperature
+    INSERT INTO stewards.model_capability (provider, model, accepts_temperature) VALUES
+        ('smoke-v73-prov', 'smoke-v73-refuses', false), ('smoke-v73-prov', 'smoke-v73-accepts', true);
+    EXECUTE v_chat INTO v_q USING 'smoke-v73-refuses';
+    ASSERT NOT (SELECT payload -> 'body' ? 'temperature' FROM stewards.work_queue WHERE id = v_q),
+        '140: a chat for a model that refuses a temperature leaves without one';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+    EXECUTE v_chat INTO v_q USING 'smoke-v73-accepts';
+    ASSERT (SELECT payload #> '{body,temperature}' FROM stewards.work_queue WHERE id = v_q) = '0.7'::jsonb,
+        '140: a model that takes one keeps it';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+    EXECUTE v_chat INTO v_q USING 'smoke-v73-unknown';
+    ASSERT (SELECT payload #> '{body,temperature}' FROM stewards.work_queue WHERE id = v_q) = '0.7'::jsonb,
+        '140: a model with no capability row keeps it';
+    DELETE FROM stewards.work_queue WHERE id = v_q;
+    DELETE FROM stewards.model_capability WHERE provider = 'smoke-v73-prov';
+
+    -- §4 the chat fallback family
+    DELETE FROM stewards.config WHERE key = 'chat_default_family';
+    ASSERT stewards.chat_agent_family('smoke-v73-none') = 'work-item-chat', '140: unset, the fallback is work-item-chat';
+    PERFORM stewards.config_set('chat_default_family', '"smoke-v73-operator"'::jsonb);
+    ASSERT stewards.chat_agent_family('smoke-v73-none') = 'smoke-v73-operator', '140: chat_default_family replaces it';
+    INSERT INTO stewards.sessions (id, label, kind, agent_family) VALUES ('smoke-v73-fam', 'smoke', 'chat', 'loremaster');
+    ASSERT stewards.chat_agent_family('smoke-v73-fam') = 'loremaster', '140: a session''s own family still wins';
+    DELETE FROM stewards.config WHERE key = 'chat_default_family';
+
+    RAISE NOTICE 'OK 140: role_default answers an unmapped core role and an unmapped one is refused by name; the watchman starts off on a never-run install, once, and the model-unconfigured bell still rings; a model that refuses a temperature never gets one; chat_default_family is the chat fallback (v73)';
+END $vs140$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v73 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults) is sound =='
