@@ -8723,4 +8723,53 @@ BEGIN
     RAISE NOTICE 'OK 142: a name resolves to the same entity every time; duplicates fold into one (relationships moved, names kept as aliases, what is left named); a delete takes a kind; the tools ship inactive (v75)';
 END $vs142$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v75 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults, v74 = soft-cap notice wording, v75 = entity merge) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 143 (v76): a family's tool permission default is a setting. Unset,
+-- a family with no rule is allowed everything, as before; a family's own
+-- default (agent_family_defaults) or the instance's (config
+-- tool_permission_default) answers instead when set, the family's first; an
+-- explicit rule still wins over both; the offer (compose_tools) follows. Red
+-- on v75: no agent_family_defaults, and the fallback is always allow.
+-- ---------------------------------------------------------------------
+DO $vs143$
+DECLARE
+    v_all   int;
+    v_n     int;
+BEGIN
+    DELETE FROM stewards.config WHERE key = 'tool_permission_default';
+    ASSERT stewards.tool_permission('smoke-v76-fam', 'doc_search') = 'allow', '143: unset, a family with no rule is allowed, as before';
+    SELECT jsonb_array_length(stewards.compose_tools('smoke-v76-fam')) INTO v_all;
+    ASSERT v_all > 1, '143: and is offered every tool';
+
+    INSERT INTO stewards.agent_family_defaults (agent_family, tool_default) VALUES ('smoke-v76-fam', 'deny');
+    ASSERT stewards.tool_permission('smoke-v76-fam', 'doc_search') = 'deny', '143: the family''s default answers';
+    INSERT INTO stewards.agent_tool_perms (agent_family, tool_pattern, action, source) VALUES ('smoke-v76-fam', 'doc_search', 'allow', 'manual');
+    ASSERT stewards.tool_permission('smoke-v76-fam', 'doc_search') = 'allow', '143: an explicit rule wins over the default';
+    SELECT count(*) INTO v_n FROM jsonb_array_elements(stewards.compose_tools('smoke-v76-fam')) e
+     WHERE e -> 'function' ->> 'name' NOT IN ('doc_search');
+    ASSERT (SELECT count(*) FROM jsonb_array_elements(stewards.compose_tools('smoke-v76-fam')) e
+             WHERE e -> 'function' ->> 'name' = 'doc_search') = 1 AND v_n < v_all - 1,
+        format('143: the offer follows: doc_search offered, most else not (%s of %s others)', v_n, v_all - 1);
+
+    -- the instance's default, for a family with no row; a family's own row wins over it
+    PERFORM stewards.config_set('tool_permission_default', '"deny"'::jsonb);
+    ASSERT stewards.tool_permission('smoke-v76-other', 'doc_search') = 'deny', '143: config tool_permission_default answers a family with no row';
+    UPDATE stewards.agent_family_defaults SET tool_default = 'allow' WHERE agent_family = 'smoke-v76-fam';
+    ASSERT stewards.tool_permission('smoke-v76-fam', 'world_show') = 'allow', '143: a family''s own default wins over the instance''s';
+    PERFORM stewards.config_set('tool_permission_default', '"ask"'::jsonb);
+    ASSERT stewards.tool_permission('smoke-v76-other', 'doc_search') = 'ask', '143: ask is a default too';
+    PERFORM stewards.config_set('tool_permission_default', '"nonsense"'::jsonb);
+    ASSERT stewards.tool_permission('smoke-v76-other', 'doc_search') = 'allow', '143: a malformed config is passed over';
+    BEGIN
+        INSERT INTO stewards.agent_family_defaults (agent_family, tool_default) VALUES ('smoke-v76-bad', 'maybe');
+        RAISE EXCEPTION 'vs143: accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+
+    DELETE FROM stewards.config WHERE key = 'tool_permission_default';
+    DELETE FROM stewards.agent_family_defaults WHERE agent_family LIKE 'smoke-v76-%';
+    DELETE FROM stewards.agent_tool_perms WHERE agent_family LIKE 'smoke-v76-%';
+    RAISE NOTICE 'OK 143: unset, a family with no rule is allowed as before; a family''s default, else the instance''s, answers when set; an explicit rule wins; the offer follows (v76)';
+END $vs143$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v76 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults, v74 = soft-cap notice wording, v75 = entity merge, v76 = permission default) is sound =='
