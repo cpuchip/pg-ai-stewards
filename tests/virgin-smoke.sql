@@ -8567,4 +8567,71 @@ BEGIN
     RAISE NOTICE 'OK 140: role_default answers an unmapped core role and an unmapped one is refused by name; the watchman starts off on a never-run install, once, and the model-unconfigured bell still rings; a model that refuses a temperature never gets one; chat_default_family is the chat fallback (v73)';
 END $vs140$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v73 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 141 (v74): the soft-cap notice in the agent's or the instance's
+-- wording. Unset, it is v04's text byte for byte (the expression below is
+-- v04's, copied); 'classic' is the same; 'stretch' ends the stretch and says
+-- the task is not over; a template fills {rounds} {soft_cap} {hard_cap}
+-- {stage}; config soft_cap_notice sets the instance's wording, and an
+-- agent's own soft_cap_notice wins over it in chat_post_internal. Red on
+-- v73: no 5-argument build_soft_cap_notice, no agents.soft_cap_notice.
+-- ---------------------------------------------------------------------
+DO $vs141$
+DECLARE
+    v_v04    text := '[STEWARD NOTICE — soft cap reached]' || E'\n\n' ||
+        'You have used ' || 9::text || ' tool calls in the ' ||
+        COALESCE('chat', 'current') || ' stage. The soft cap for this stage is ' ||
+        7::text || '; the hard cap (where tools will be removed entirely) is ' ||
+        10::text || '.' || E'\n\n' ||
+        'If you can answer the binding question now from what you have already gathered, ' ||
+        'finalize your response. If you genuinely need another tool call, include a ' ||
+        'one-sentence justification in your next response so future review can audit ' ||
+        'the decision.' || E'\n\n' ||
+        'You retain full agency. The substrate is funding your mission, not micromanaging it.';
+    v_t      text;
+    v_keep   int;
+    v_soft   int;
+    v_note   text;
+BEGIN
+    DELETE FROM stewards.config WHERE key = 'soft_cap_notice';
+    ASSERT stewards.build_soft_cap_notice(9, 7, 10, 'chat') = v_v04, '141: unset, the notice is v04''s text byte for byte';
+    ASSERT stewards.build_soft_cap_notice(9, 7, 10, 'chat', NULL) = v_v04, '141: a NULL wording is the classic text';
+    ASSERT stewards.build_soft_cap_notice(9, 7, 10, 'chat', 'classic') = v_v04, '141: classic is the classic text';
+    v_t := stewards.build_soft_cap_notice(9, 7, 10, 'chat', 'stretch');
+    ASSERT v_t LIKE '%This notice is about the stretch, not your task.%' AND v_t NOT LIKE '%finalize your response%'
+           AND v_t LIKE '%9 tool calls in this stretch of the chat stage%', '141: stretch ends the stretch, not the task';
+    ASSERT stewards.build_soft_cap_notice(9, 7, 10, 'chat', '{rounds}/{soft_cap}/{hard_cap}/{stage}') = '9/7/10/chat',
+        '141: a template is filled';
+    PERFORM stewards.config_set('soft_cap_notice', '"stretch"'::jsonb);
+    ASSERT stewards.build_soft_cap_notice(9, 7, 10, 'chat') = v_t, '141: config soft_cap_notice sets the instance''s wording';
+
+    -- through chat_post_internal: the agent's own wording wins over the instance's
+    SELECT a.steps INTO v_keep FROM stewards.agents a WHERE a.family = 'work-item-chat' ORDER BY length(a.model_match) DESC LIMIT 1;
+    UPDATE stewards.agents SET steps = 20, soft_cap_notice = 'Stretch {rounds} of {hard_cap}: note it and stop.'
+     WHERE family = 'work-item-chat';
+    v_soft := GREATEST((20 * 0.7)::int, 1);
+    INSERT INTO stewards.sessions(id, kind) VALUES ('pt-smoke-74', 'agent');
+    INSERT INTO stewards.messages(session_id, role, content) VALUES ('pt-smoke-74', 'user', 'q1');
+    INSERT INTO stewards.messages(session_id, role, content, finish_reason)
+      SELECT 'pt-smoke-74', 'assistant', 'a-' || g, 'tool_calls' FROM generate_series(1, v_soft) g;
+    PERFORM stewards.chat_post_internal('work-item-chat', 'reason', 'pt-smoke-74', 'flexllama');
+    SELECT content INTO v_note FROM stewards.messages WHERE session_id = 'pt-smoke-74' AND role = 'system' ORDER BY id DESC LIMIT 1;
+    ASSERT v_note = 'Stretch ' || v_soft || ' of 18: note it and stop.',
+        format('141: the agent''s own wording reaches the session (got: %s)', v_note);
+    -- an agent with none takes the instance's (stretch, set above)
+    UPDATE stewards.agents SET soft_cap_notice = NULL WHERE family = 'work-item-chat';
+    INSERT INTO stewards.messages(session_id, role, content) VALUES ('pt-smoke-74', 'user', 'q2');
+    INSERT INTO stewards.messages(session_id, role, content, finish_reason)
+      SELECT 'pt-smoke-74', 'assistant', 'b-' || g, 'tool_calls' FROM generate_series(1, v_soft) g;
+    PERFORM stewards.chat_post_internal('work-item-chat', 'reason', 'pt-smoke-74', 'flexllama');
+    SELECT content INTO v_note FROM stewards.messages WHERE session_id = 'pt-smoke-74' AND role = 'system' ORDER BY id DESC LIMIT 1;
+    ASSERT v_note LIKE '%This notice is about the stretch, not your task.%', '141: an agent with no wording takes the instance''s';
+
+    UPDATE stewards.agents SET steps = v_keep WHERE family = 'work-item-chat';
+    DELETE FROM stewards.config WHERE key = 'soft_cap_notice';
+    DELETE FROM stewards.work_queue WHERE payload ->> 'session_id' = 'pt-smoke-74';
+
+    RAISE NOTICE 'OK 141: the soft-cap notice is v04''s text unless set; stretch ends the stretch, not the task; a template is filled; the agent''s wording wins over the instance''s through chat_post_internal (v74)';
+END $vs141$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v74 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults, v74 = soft-cap notice wording) is sound =='

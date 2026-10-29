@@ -935,6 +935,16 @@ extension_sql_file!(
     requires = ["create_v72_cache_ttl"],
 );
 
+// v74-soft-cap-notice.sql: the soft-cap notice's wording is a setting:
+// agents.soft_cap_notice, else config soft_cap_notice, else the classic text
+// (byte for byte); 'stretch' ends a stretch of steps, not the task, for a model
+// that a harness runs in several chains. Oracle: virgin-smoke OK 141.
+extension_sql_file!(
+    "../v74-soft-cap-notice.sql",
+    name = "create_v74_soft_cap_notice",
+    requires = ["create_v73_instance_defaults"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------
