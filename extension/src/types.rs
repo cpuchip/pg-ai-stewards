@@ -34,6 +34,10 @@ pub(crate) enum WorkOutcome {
         reasoning_details: Option<serde_json::Value>,
         finish_reason: Option<String>,
         tokens_in: Option<i32>,
+        // v77: the whole prompt the provider billed. Anthropic's input_tokens (tokens_in) leaves out the cache reads and
+        // writes, so there it is input + cache_creation + cache_read; elsewhere it is prompt_tokens, which already counts
+        // cached tokens. tokens_in keeps its meaning: the cost path prices it as the uncached share.
+        tokens_prompt: Option<i32>,
         tokens_out: Option<i32>,
         // OpenAI usage.completion_tokens_details.reasoning_tokens.
         // Billed separately from tokens_out by kimi/o1-style models;
