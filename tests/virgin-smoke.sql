@@ -8772,4 +8772,45 @@ BEGIN
     RAISE NOTICE 'OK 143: unset, a family with no rule is allowed as before; a family''s default, else the instance''s, answers when set; an explicit rule wins; the offer follows (v76)';
 END $vs143$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v76 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults, v74 = soft-cap notice wording, v75 = entity merge, v76 = permission default) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 144 (v77): messages.tokens_prompt carries the whole prompt a call
+-- billed, nullable with no default (a row from before v77 is unknown, not
+-- 0); session_status gains total_tokens_prompt, summing tokens_prompt and
+-- falling back to tokens_in on rows without it, appended after the old
+-- columns, which are unchanged. The parser side (Anthropic's cache shares
+-- summed, prompt_tokens elsewhere) is the bgworker tokens_prompt_tests.
+-- Red on v76: no tokens_prompt.
+-- ---------------------------------------------------------------------
+DO $vs144$
+DECLARE
+    v_row record;
+BEGIN
+    ASSERT (SELECT is_nullable = 'YES' AND column_default IS NULL AND data_type = 'integer'
+              FROM information_schema.columns
+             WHERE table_schema = 'stewards' AND table_name = 'messages' AND column_name = 'tokens_prompt'),
+           '144: messages.tokens_prompt is a nullable int with no default';
+    ASSERT (SELECT max(ordinal_position) FROM information_schema.columns
+             WHERE table_schema = 'stewards' AND table_name = 'session_status')
+         = (SELECT ordinal_position FROM information_schema.columns
+             WHERE table_schema = 'stewards' AND table_name = 'session_status' AND column_name = 'total_tokens_prompt'),
+           '144: total_tokens_prompt is appended after the old columns';
+
+    INSERT INTO stewards.sessions (id) VALUES ('smoke-v77');
+    INSERT INTO stewards.messages (session_id, role, content) VALUES ('smoke-v77', 'user', 'hi');
+    INSERT INTO stewards.messages (session_id, role, content, tokens_in, tokens_out, tokens_prompt)
+         VALUES ('smoke-v77', 'assistant', 'a cache hit', 4, 9, 100004);
+    INSERT INTO stewards.messages (session_id, role, content, tokens_in, tokens_out)
+         VALUES ('smoke-v77', 'assistant', 'a row from before v77', 2, 9);
+    ASSERT (SELECT tokens_prompt FROM stewards.messages WHERE session_id = 'smoke-v77' AND role = 'user') IS NULL,
+           '144: unset is NULL, not 0';
+    SELECT * INTO v_row FROM stewards.session_status WHERE session_id = 'smoke-v77';
+    ASSERT v_row.total_tokens_in = 6, format('144: total_tokens_in unchanged, got %s', v_row.total_tokens_in);
+    ASSERT v_row.total_tokens_prompt = 100006,
+           format('144: total_tokens_prompt sums tokens_prompt, else tokens_in, got %s', v_row.total_tokens_prompt);
+    ASSERT v_row.total_billable_out = 18, '144: the other rollups unchanged';
+
+    DELETE FROM stewards.sessions WHERE id = 'smoke-v77';
+    RAISE NOTICE 'OK 144: messages.tokens_prompt is the whole prompt, NULL when unknown; session_status totals it, falling back to tokens_in; the old columns unchanged (v77)';
+END $vs144$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v77 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults, v74 = soft-cap notice wording, v75 = entity merge, v76 = permission default, v77 = the whole prompt) is sound =='

@@ -966,6 +966,16 @@ extension_sql_file!(
     requires = ["create_v75_lore_merge"],
 );
 
+// v77-tokens-prompt.sql: messages.tokens_prompt, the whole prompt a call billed
+// (Anthropic: input + cache_creation + cache_read; elsewhere prompt_tokens), and
+// session_status.total_tokens_prompt. tokens_in and the cost path unchanged.
+// Oracle: bgworker tokens_prompt_tests, virgin-smoke OK 144.
+extension_sql_file!(
+    "../v77-tokens-prompt.sql",
+    name = "create_v77_tokens_prompt",
+    requires = ["create_v76_permission_default"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

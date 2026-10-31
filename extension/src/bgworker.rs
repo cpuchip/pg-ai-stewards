@@ -1303,6 +1303,7 @@ fn write_outcome(
                     reasoning_details,
                     finish_reason,
                     tokens_in,
+                    tokens_prompt,
                     tokens_out,
                     reasoning_tokens,
                     reasoning_in_completion,
@@ -1329,8 +1330,8 @@ fn write_outcome(
                              tool_calls, finish_reason, \
                              tokens_in, tokens_out, reasoning_tokens, \
                              reasoning_content, reasoning_details, \
-                             parent_work_id) \
-                         VALUES ($1, 'assistant', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+                             parent_work_id, tokens_prompt) \
+                         VALUES ($1, 'assistant', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
                         None,
                         &[
                             session_id.clone().into(),
@@ -1344,6 +1345,7 @@ fn write_outcome(
                             reasoning_content.clone().into(),
                             reasoning_details_jsonb.into(),
                             id.into(),
+                            (*tokens_prompt).into(),
                         ],
                     )?;
 
@@ -1851,6 +1853,7 @@ fn write_outcome(
                         "session_id": session_id,
                         "finish_reason": finish_reason,
                         "tokens_in": tokens_in,
+                        "tokens_prompt": tokens_prompt,
                         "tokens_out": tokens_out,
                         "reasoning_tokens": reasoning_tokens,
                         "billable_output":
@@ -3160,6 +3163,12 @@ fn outcome_from_completion(
         .and_then(|u| u.get("prompt_tokens"))
         .and_then(|v| v.as_i64())
         .map(|v| v as i32);
+    // v77: the whole prompt; anthropic_completion sums the shares into prompt_tokens_total, and every other format's
+    // prompt_tokens already counts cached tokens
+    let tokens_prompt = usage
+        .and_then(|u| u.get("prompt_tokens_total").or_else(|| u.get("prompt_tokens")))
+        .and_then(|v| v.as_i64())
+        .map(|v| v as i32);
     let tokens_out = usage
         .and_then(|u| u.get("completion_tokens"))
         .and_then(|v| v.as_i64())
@@ -3276,6 +3285,7 @@ fn outcome_from_completion(
         reasoning_details,
         finish_reason,
         tokens_in,
+        tokens_prompt,
         tokens_out,
         reasoning_tokens,
         reasoning_in_completion,
@@ -4610,6 +4620,13 @@ fn anthropic_completion(
     if let Some(c) = cache_read {
         usage.insert("cache_read_input_tokens".to_string(), serde_json::json!(c));
     }
+    // v77: the whole prompt. Anthropic's input_tokens is only the uncached share; a request is as large as all three
+    // (cache_creation already includes the 1-hour share). Our own key, set only here, so a gateway that passes the cache
+    // fields through beside an OpenAI prompt_tokens is never summed.
+    if input_tokens.is_some() || cache_creation.is_some() || cache_read.is_some() {
+        let total = input_tokens.unwrap_or(0) + cache_creation.unwrap_or(0) + cache_read.unwrap_or(0);
+        usage.insert("prompt_tokens_total".to_string(), serde_json::json!(total));
+    }
     if let Some(t) = thinking_tokens {
         usage.insert(
             "completion_tokens_details".to_string(),
@@ -4782,5 +4799,60 @@ mod cache_ttl_tests {
         assert_eq!(streamed(split), (Some(24100), Some(24000), Some(7)));
         let plain = r#"{"input_tokens":4,"cache_creation_input_tokens":50,"cache_read_input_tokens":0}"#;
         assert_eq!(streamed(plain), (Some(50), None, Some(0)));
+    }
+}
+
+#[cfg(test)]
+mod tokens_prompt_tests {
+    // v77: tokens_prompt is the whole prompt; tokens_in stays the uncached share the cost path prices
+    fn tokens(parsed: serde_json::Value) -> (Option<i32>, Option<i32>) {
+        match super::outcome_from_completion(parsed, "m", "s".into(), "f".into(), "m".into()) {
+            Ok(crate::types::WorkOutcome::Chatted { tokens_in, tokens_prompt, .. }) => (tokens_in, tokens_prompt),
+            other => panic!("not a chat outcome: {:?}", other.is_ok()),
+        }
+    }
+
+    fn streamed(usage: &str) -> serde_json::Value {
+        let sse = format!(
+            "event: message_start\ndata: {{\"type\":\"message_start\",\"message\":{{\"model\":\"claude-haiku-5-5\",\"usage\":{usage}}}}}\n\n\
+             event: content_block_delta\ndata: {{\"type\":\"content_block_delta\",\"index\":0,\"delta\":{{\"type\":\"text_delta\",\"text\":\"ok\"}}}}\n\n\
+             event: message_delta\ndata: {{\"type\":\"message_delta\",\"delta\":{{\"stop_reason\":\"end_turn\"}},\"usage\":{{\"output_tokens\":9}}}}\n\n"
+        );
+        super::parse_anthropic_sse(sse.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn anthropic_streamed_sums_the_cache_into_the_prompt() {
+        let hit = streamed(r#"{"input_tokens":4,"cache_creation_input_tokens":0,"cache_read_input_tokens":100000}"#);
+        assert_eq!(tokens(hit), (Some(4), Some(100004)));
+        let write = streamed(r#"{"input_tokens":2,"cache_creation_input_tokens":24100,"cache_read_input_tokens":7,"cache_creation":{"ephemeral_5m_input_tokens":100,"ephemeral_1h_input_tokens":24000}}"#);
+        assert_eq!(tokens(write), (Some(2), Some(24109)));
+    }
+
+    #[test]
+    fn anthropic_batch_sums_the_cache_into_the_prompt() {
+        let msg = serde_json::json!({
+            "id": "m", "type": "message", "role": "assistant", "model": "claude-haiku-5-5",
+            "content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn",
+            "usage": {"input_tokens": 4, "output_tokens": 9, "cache_creation_input_tokens": 0,
+                      "cache_read_input_tokens": 100000}
+        });
+        assert_eq!(tokens(super::completion_from_anthropic_message(&msg)), (Some(4), Some(100004)));
+    }
+
+    #[test]
+    fn openai_prompt_tokens_is_already_the_whole_prompt() {
+        let chat = |usage: serde_json::Value| serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            "usage": usage
+        });
+        assert_eq!(tokens(chat(serde_json::json!({"prompt_tokens": 100004, "completion_tokens": 9}))),
+                   (Some(100004), Some(100004)));
+        // a gateway passing Anthropic's cache fields beside prompt_tokens is not summed: whether its prompt_tokens
+        // already counts them is the gateway's to say
+        assert_eq!(tokens(chat(serde_json::json!({"prompt_tokens": 4, "completion_tokens": 9,
+                                                  "cache_read_input_tokens": 100000}))),
+                   (Some(4), Some(4)));
+        assert_eq!(tokens(chat(serde_json::json!({}))), (None, None));
     }
 }
