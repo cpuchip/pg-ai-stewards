@@ -976,6 +976,16 @@ extension_sql_file!(
     requires = ["create_v76_permission_default"],
 );
 
+// v78-long-context-card.sql: model_pricing.long_context_from_tokens and the long_*
+// card; compute_cost prices a request over the line entirely at the long card and
+// says so (long_context), record_cost_event notes long_context=1.
+// Oracle: virgin-smoke OK 145.
+extension_sql_file!(
+    "../v78-long-context-card.sql",
+    name = "create_v78_long_context_card",
+    requires = ["create_v77_tokens_prompt"],
+);
+
 // ---------------------------------------------------------------------------
 // Diagnostic SQL functions
 // ---------------------------------------------------------------------------

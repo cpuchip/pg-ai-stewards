@@ -133,6 +133,7 @@ COPY v74-soft-cap-notice.sql ./
 COPY v75-lore-merge.sql ./
 COPY v76-permission-default.sql ./
 COPY v77-tokens-prompt.sql ./
+COPY v78-long-context-card.sql ./
 # ===== END GENERATED =====
 
 # `cargo pgrx package` produces ./target/release/pg_ai_stewards-pg18/

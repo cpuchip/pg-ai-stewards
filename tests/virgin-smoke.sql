@@ -8813,4 +8813,80 @@ BEGIN
     RAISE NOTICE 'OK 144: messages.tokens_prompt is the whole prompt, NULL when unknown; session_status totals it, falling back to tokens_in; the old columns unchanged (v77)';
 END $vs144$;
 
-\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v77 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults, v74 = soft-cap notice wording, v75 = entity merge, v76 = permission default, v77 = the whole prompt) is sound =='
+-- ---------------------------------------------------------------------
+-- OK 145 (v78): a long-context card on model_pricing. A request whose
+-- prompt (input + cache writes + cache reads) is over
+-- long_context_from_tokens is priced entirely at the long card, output
+-- included; at the line it is the base card; cache reads and writes carry a
+-- request over; a NULL long cache rate falls back to the base rate of its
+-- kind; a model with no line prices as before; compute_cost says which card
+-- (long_context) and record_cost_event notes long_context=1; the 6-argument
+-- compute_cost keeps its two columns; a line without a long input and
+-- output rate is refused. Red on v77: no long_context_from_tokens.
+-- ---------------------------------------------------------------------
+DO $vs145$
+DECLARE
+    v_c   record;
+    v_id  bigint;
+    v_row record;
+BEGIN
+    -- the Haiku 5.5 card (micro-dollars per MTok), and the same base card with no line
+    INSERT INTO stewards.model_pricing (provider, model, input_micro_per_mtok, output_micro_per_mtok,
+           cache_write_micro_per_mtok, cache_write_1h_micro_per_mtok, cache_read_micro_per_mtok, effective_at,
+           long_context_from_tokens, long_input_micro_per_mtok, long_output_micro_per_mtok,
+           long_cache_write_micro_per_mtok, long_cache_write_1h_micro_per_mtok, long_cache_read_micro_per_mtok)
+    VALUES ('smoke-v78', 'tiered', 100000, 500000, 125000, 200000, 10000, now() - interval '1 minute',
+            100000, 500000, 2500000, 625000, 1000000, 50000),
+           ('smoke-v78', 'flat', 100000, 500000, 125000, 200000, 10000, now() - interval '1 minute',
+            NULL, NULL, NULL, NULL, NULL, NULL),
+           ('smoke-v78', 'nolongcache', 100000, 500000, 125000, 200000, 10000, now() - interval '1 minute',
+            100000, 500000, 2500000, NULL, NULL, NULL);
+
+    SELECT * INTO v_c FROM stewards.compute_cost('smoke-v78', 'tiered', 100000, 1000, 0, 0, 0);
+    ASSERT v_c.micro_dollars = 10500 AND NOT v_c.long_context,
+           format('145: a prompt of exactly 100000 is the base card, got %s', v_c.micro_dollars);
+    SELECT * INTO v_c FROM stewards.compute_cost('smoke-v78', 'tiered', 100001, 1000, 0, 0, 0);
+    ASSERT v_c.long_context, '145: one token over the line is the long card';
+    ASSERT v_c.micro_dollars = 52500,
+           format('145: every share at the long card, output included (50000 + 2500), got %s', v_c.micro_dollars);
+    SELECT * INTO v_c FROM stewards.compute_cost('smoke-v78', 'tiered', 4, 1000, 0, 100000, 0);
+    ASSERT v_c.long_context AND v_c.micro_dollars = 7502,
+           format('145: cache reads carry a request over (2 + 2500 + 5000), got %s', v_c.micro_dollars);
+    SELECT * INTO v_c FROM stewards.compute_cost('smoke-v78', 'tiered', 1, 0, 60000, 0, 40000);
+    ASSERT v_c.long_context AND v_c.micro_dollars = 77500,
+           format('145: both cache writes count and price at the long card (37500 + 40000), got %s', v_c.micro_dollars);
+    SELECT * INTO v_c FROM stewards.compute_cost('smoke-v78', 'nolongcache', 4, 0, 0, 100000, 0);
+    ASSERT v_c.long_context AND v_c.micro_dollars = 1002,
+           format('145: a NULL long cache rate falls back to the base rate (2 + 1000), got %s', v_c.micro_dollars);
+    SELECT * INTO v_c FROM stewards.compute_cost('smoke-v78', 'flat', 200000, 1000, 0, 0, 0);
+    ASSERT v_c.micro_dollars = 20500 AND NOT v_c.long_context, '145: no line, one card as before';
+    SELECT * INTO v_c FROM stewards.compute_cost('smoke-v78', 'unpriced', 200000, 1000, 0, 0, 0);
+    ASSERT v_c.micro_dollars = 0 AND v_c.pricing_effective_at = '-infinity' AND NOT v_c.long_context,
+           '145: no pricing row as before';
+    ASSERT (SELECT count(*) FROM jsonb_object_keys(
+              (SELECT to_jsonb(c) FROM stewards.compute_cost('smoke-v78', 'tiered', 100001, 1000) c))) = 2
+       AND (SELECT micro_dollars FROM stewards.compute_cost('smoke-v78', 'tiered', 100001, 1000)) = 52500,
+           '145: the 6-argument form keeps its two columns and takes the long card';
+
+    v_id := stewards.record_cost_event(NULL, 1, 'smoke-v78', 'tiered', 100001, 1000, 0, 0, 0, NULL, NULL, NULL);
+    SELECT micro_dollars, notes INTO v_row FROM stewards.cost_events WHERE id = v_id;
+    ASSERT v_row.micro_dollars = 52500 AND v_row.notes = 'long_context=1',
+           format('145: the cost row is long and says so, got %s %s', v_row.micro_dollars, v_row.notes);
+    v_id := stewards.record_cost_event(NULL, 1, 'smoke-v78', 'tiered', 100000, 1000, 0, 0, 0, NULL, NULL, NULL);
+    ASSERT (SELECT notes IS NULL AND micro_dollars = 10500 FROM stewards.cost_events WHERE id = v_id),
+           '145: a base-card row carries no note';
+    DELETE FROM stewards.cost_events WHERE provider = 'smoke-v78';
+
+    BEGIN
+        INSERT INTO stewards.model_pricing (provider, model, input_micro_per_mtok, output_micro_per_mtok,
+               effective_at, long_context_from_tokens)
+        VALUES ('smoke-v78', 'halfcard', 1, 1, now(), 100000);
+        RAISE EXCEPTION 'vs145: a line without a long card accepted';
+    EXCEPTION WHEN check_violation THEN NULL;
+    END;
+
+    DELETE FROM stewards.model_pricing WHERE provider = 'smoke-v78';
+    RAISE NOTICE 'OK 145: over the line every share is priced at the long card, output included; at the line the base card; cache shares carry a request over; NULL long cache rates fall back; no line prices as before; the cost row says long_context=1 (v78)';
+END $vs145$;
+
+\echo '== ALL VIRGIN-SMOKE ASSERTIONS PASSED — the authored chain (v00→v78 volumes; v00→v27 was 00→107, v28 = files-interface, v29 = normalize, v30 = workspaces, v31 = steward park, v32 = dispatch honesty, v33 = wargame w2, v34 = park honesty, v35 = graph-health lint, v36 = keeper constitution, v37/v38 = verdict/crawl regex markdown, v39 = pr-url gate, v40 = probe budget, v41/v42 = graph-lint exemptions + unmined, v43/v44/v45 = fact edges + dedup + recall, v46 = cache discipline, v47 = judge resume, v48 = window clamp, v49 = memory lanes, v50 = lane write path, v51 = write-path hardening, v52 = lane identity mode, v53 = posture guard hardening, v54 = posture chooses source, v55 = roster authority, v56 = project metrics, v57 = doc-split preamble fix, v58 = lane_check fleet-runnable, v59 = intent on first call, v60 = rendered input keeps its backslashes, v61 = probe omits temperature for Anthropic, v62 = round-one budget and tools-off compose, v63 = spend cap time zone, v64 = stage images, v65 = agent anthropic options, v66 = batch dispatch, v67 = max_tokens on every round, v69 = every fetch-md tool is a web tool, v70 = the [ctx:handle] label off the message, v71 = tool rounds count per turn, v72 = prompt-cache lifetimes, v73 = instance defaults, v74 = soft-cap notice wording, v75 = entity merge, v76 = permission default, v77 = the whole prompt, v78 = long-context card) is sound =='

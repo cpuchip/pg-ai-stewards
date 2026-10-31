@@ -79,6 +79,19 @@ INSERT INTO stewards.model_pricing (provider, model, input_micro_per_mtok, outpu
   ('lm_studio', 'qwen/qwen3.6-27b', 0, 0, now(), 'local — no per-token cost')
 ON CONFLICT (provider, model, effective_at) DO NOTHING;
 
+-- ── Anthropic direct (api_format 'anthropic') — a long-context card ──────────
+-- Claude Haiku 5.5 is priced by prompt length: the base card at 100,000 prompt
+-- tokens or under, five times every column above that, where the prompt counts
+-- input, cache writes and cache reads (Anthropic's pricing page, read
+-- 2026-10-31). Name the provider as your instance does; Opus 5.5 has no long card.
+INSERT INTO stewards.model_pricing (provider, model, input_micro_per_mtok, output_micro_per_mtok,
+       cache_write_micro_per_mtok, cache_write_1h_micro_per_mtok, cache_read_micro_per_mtok, effective_at,
+       long_context_from_tokens, long_input_micro_per_mtok, long_output_micro_per_mtok,
+       long_cache_write_micro_per_mtok, long_cache_write_1h_micro_per_mtok, long_cache_read_micro_per_mtok, notes) VALUES
+  ('anthropic', 'claude-haiku-5-5', 100000, 500000, 125000, 200000, 10000, now(),
+   100000, 500000, 2500000, 625000, 1000000, 50000, 'snapshot 2026-10-31; long card above 100K prompt tokens')
+ON CONFLICT (provider, model, effective_at) DO NOTHING;
+
 -- ── role aliases (the digesters dispatch by ROLE, not a concrete model) ───────
 -- The example digesters (book/playlist) and the doc-construction loops name a
 -- ROLE — ingest (big-context doer), reason (strong doer/synthesizer), critic
